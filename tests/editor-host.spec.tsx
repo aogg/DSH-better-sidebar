@@ -9,7 +9,7 @@
  * only, no editor chrome); file tabs keep the full chrome in both modes.
  */
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { createElement, useEffect, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
@@ -55,6 +55,15 @@ vi.mock('../src/client/api.ts', () => ({
 
 /** The `fs.read` answers of the load-path cases (queued per test). */
 const fsRead = vi.fn()
+
+// jsdom implements no scrollTo; the tree's reveal-scroll effect calls the
+// body's scrollTo as soon as a revealed row renders — the panel-open gesture
+// below hits exactly that path, so the prototype gets a counting stub (and
+// the gesture test asserts the centering scroll was actually attempted).
+const scrollTo = vi.fn()
+beforeAll(() => {
+  ;(Element.prototype as unknown as { scrollTo: () => void }).scrollTo = scrollTo
+})
 
 // The act() environment flag (React 18.2 reads it before flushing effects).
 import { setupReactAct } from './test-utils.ts'
@@ -567,6 +576,204 @@ describe('EditorHost (files window)', () => {
       expect(html).toContain('Search files by name…')
       expect(html).not.toContain('Pick a file from the tree panel')
       expect(html).not.toContain('File path (relative')
+    } finally {
+      unmount()
+    }
+  })
+})
+
+/**
+ * The panel-OPEN gesture of the header's tree toggle: on a file tab whose
+ * path lives inside the session cwd, opening the dock lands a reveal FIRST —
+ * `revealPaths` expands every ancestor and marks the file in the store's
+ * `revealed` set, so the freshly mounted tree shows the row highlighted (with
+ * the one-shot flash) and its reveal-scroll effect centers it. Path-less
+ * tabs, directory tabs and out-of-tree paths skip silently; closing and
+ * reopening replays the reveal (the reducer hands out a FRESH `revealed`
+ * array even for an unchanged set — that fresh identity is what restarts the
+ * row's flash animation).
+ */
+describe('EditorHost tree-open reveal', () => {
+  /** A live harness: tab, expanded and revealed re-read from the store on
+   *  every render (the real Sidebar re-renders the seat from the snapshot). */
+  function mountLiveHost(ctx: Context, store: ReturnType<typeof createSidebarStore>, findTab: () => SidebarTab): {
+    container: HTMLDivElement
+    rerender: () => void
+    unmount: () => void
+  } {
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    const render = (): void => {
+      const state = store.getSnapshot().state!
+      root.render(createElement(EditorHost, {
+        ctx,
+        store,
+        // The seat hands the session cwd in scope (the reveal's root).
+        scope: { sessionId: 'editor-home-session', cwd: '/tmp' },
+        tab: findTab(),
+        expanded: state.expanded,
+        revealed: state.revealed,
+        onToggleDir: () => {},
+        onReferenceFile: () => {},
+      }))
+    }
+    act(render)
+    return {
+      container,
+      rerender: () => { act(render) },
+      unmount: () => {
+        act(() => { root.unmount() })
+        container.remove()
+      },
+    }
+  }
+
+  /** Click the header's tree toggle (the only aria-pressed <button>). */
+  function clickToggle(container: HTMLDivElement): void {
+    act(() => {
+      container.querySelector('button[aria-pressed]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+  }
+
+  it('opening the panel on a file tab expands every ancestor and marks the file revealed', () => {
+    const { store, ctx } = setup()
+    store.setPrefs({ ...store.getPrefs(), editorExplorer: false })
+    ctx.betterSidebar.openTab({
+      type: 'editor', title: 'deep.ts', path: '/tmp/sub/deep.ts', id: 'editor:/tmp/sub/deep.ts',
+    })
+    const fileTab = (): SidebarTab =>
+      allLeaves(store.getSnapshot().state!.bottomSplits).flatMap(leaf => leaf.tabs)
+        .find(tab => tab.path === '/tmp/sub/deep.ts')!
+    const { container, unmount } = mountLiveHost(ctx, store, fileTab)
+    try {
+      // Closed by default (a file tab without meta.treeOpen).
+      expect(container.querySelector('button[aria-pressed]')?.getAttribute('aria-pressed')).toBe('false')
+      expect(store.getSnapshot().state!.revealed).toEqual([])
+      clickToggle(container)
+      // The whole ancestor chain between cwd (/tmp) and the file expanded,
+      // and the file itself is marked for highlight + scroll.
+      expect(store.getSnapshot().state!.expanded).toEqual(['/tmp/sub'])
+      expect(store.getSnapshot().state!.revealed).toEqual(['/tmp/sub/deep.ts'])
+      expect(fileTab().meta).toEqual({ treeOpen: true })
+    } finally {
+      unmount()
+    }
+  })
+
+  it('the freshly opened panel renders the revealed row with the flash class', async () => {
+    const { store, ctx } = setup()
+    store.setPrefs({ ...store.getPrefs(), editorExplorer: false })
+    ctx.betterSidebar.openTab({
+      type: 'editor', title: 'a.ts', path: '/tmp/a.ts', id: 'editor:/tmp/a.ts',
+    })
+    const fileTab = (): SidebarTab =>
+      allLeaves(store.getSnapshot().state!.bottomSplits).flatMap(leaf => leaf.tabs)
+        .find(tab => tab.path === '/tmp/a.ts')!
+    const { container, rerender, unmount } = mountLiveHost(ctx, store, fileTab)
+    try {
+      clickToggle(container)
+      rerender()
+      await waitForTreeRow(container, 'a.ts')
+      // A root-level file has NO ancestors: nothing was expanded…
+      expect(store.getSnapshot().state!.expanded).toEqual([])
+      // …but the row is revealed and carries the flash (first round = A),
+      // and the reveal-scroll effect actually tried to center it.
+      const row = container.querySelector('[data-dsh-revealed]')
+      expect(row).not.toBeNull()
+      expect(row!.className).toContain('explorerRowFlashA')
+      expect(scrollTo).toHaveBeenCalled()
+    } finally {
+      unmount()
+    }
+  })
+
+  it('a path-less tab never reveals (no file to locate)', () => {
+    const { store, ctx, homeTab } = setup()
+    store.setPrefs({ ...store.getPrefs(), editorExplorer: true })
+    const { container, unmount } = mountLiveHost(ctx, store, homeTab)
+    try {
+      // The home defaults OPEN; the click closes it and must not reveal.
+      clickToggle(container)
+      expect(store.getSnapshot().state!.revealed).toEqual([])
+      expect(homeTab().meta).toEqual({ treeOpen: false })
+    } finally {
+      unmount()
+    }
+  })
+
+  it('a directory tab renders no tree toggle (structurally nothing to reveal)', () => {
+    const { store, ctx } = setup()
+    ctx.betterSidebar!.openTab({
+      type: 'editor', title: 'src', path: '/work/src', id: 'editor:/work/src', meta: { dir: true },
+    }, { sessionId: 'editor-home-session' })
+    const dirTab = (): SidebarTab =>
+      allLeaves(store.getSnapshot().state!.bottomSplits).flatMap(leaf => leaf.tabs)
+        .find(tab => tab.path === '/work/src')!
+    const { container, unmount } = mountLiveHost(ctx, store, dirTab)
+    try {
+      // The folder window IS the tree surface: the toggle button (and with it
+      // the reveal gesture) does not exist there.
+      expect(container.querySelector('button[aria-pressed]')).toBeNull()
+      expect(store.getSnapshot().state!.revealed).toEqual([])
+    } finally {
+      unmount()
+    }
+  })
+
+  it('an out-of-tree path reveals nothing and expands no phantom ancestors', () => {
+    const { store, ctx } = setup()
+    store.setPrefs({ ...store.getPrefs(), editorExplorer: false })
+    // cwd is /tmp; this file lives OUTSIDE it. `ancestorDirs` anchors at the
+    // root's depth, so an unguarded reveal would expand /elsewhere/x — a
+    // directory the tree can never render.
+    ctx.betterSidebar.openTab({
+      type: 'editor', title: 'a.ts', path: '/elsewhere/x/a.ts', id: 'editor:/elsewhere/x/a.ts',
+    })
+    const fileTab = (): SidebarTab =>
+      allLeaves(store.getSnapshot().state!.bottomSplits).flatMap(leaf => leaf.tabs)
+        .find(tab => tab.path === '/elsewhere/x/a.ts')!
+    const { container, unmount } = mountLiveHost(ctx, store, fileTab)
+    try {
+      clickToggle(container)
+      expect(store.getSnapshot().state!.revealed).toEqual([])
+      expect(store.getSnapshot().state!.expanded).toEqual([])
+      // The PANEL itself still opens — only the reveal is skipped.
+      expect(fileTab().meta).toEqual({ treeOpen: true })
+    } finally {
+      unmount()
+    }
+  })
+
+  it('closing and reopening replays the reveal with a FRESH revealed reference', () => {
+    const { store, ctx } = setup()
+    store.setPrefs({ ...store.getPrefs(), editorExplorer: false })
+    ctx.betterSidebar.openTab({
+      type: 'editor', title: 'a.ts', path: '/tmp/a.ts', id: 'editor:/tmp/a.ts',
+    })
+    const fileTab = (): SidebarTab =>
+      allLeaves(store.getSnapshot().state!.bottomSplits).flatMap(leaf => leaf.tabs)
+        .find(tab => tab.path === '/tmp/a.ts')!
+    const { container, rerender, unmount } = mountLiveHost(ctx, store, fileTab)
+    try {
+      clickToggle(container)
+      rerender()
+      const first = store.getSnapshot().state!.revealed
+      expect(first).toEqual(['/tmp/a.ts'])
+      // Close (the dock unmounts), then open AGAIN.
+      clickToggle(container)
+      rerender()
+      expect(fileTab().meta).toEqual({ treeOpen: false })
+      clickToggle(container)
+      rerender()
+      const second = store.getSnapshot().state!.revealed
+      // Same contents, NEW array: the fresh identity is what replays the
+      // flash on an already-revealed file (revealPaths allocates on every
+      // call — this pins that contract, the replay depends on it).
+      expect(second).toEqual(first)
+      expect(second).not.toBe(first)
+      expect(fileTab().meta).toEqual({ treeOpen: true })
     } finally {
       unmount()
     }

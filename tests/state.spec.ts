@@ -4,6 +4,7 @@ import {
   insertLeafAt, makeDefaultState, moveTab, moveTabToEdge, openDiffTab,
   openTabInBottomPane, patchTab, resizeSplit,
   resizeSplitIn, revealPaths, sanitizeState, setBottomHeight,
+  pathWithinCwd,
   splitPane, tabOpenIn, toggleBottomPanel, toggleExpanded,
   type SidebarState, type SidebarTab, type SplitNode,
 } from '../src/client/state.ts'
@@ -817,6 +818,30 @@ describe('ancestorDirs (the levels a lazy tree must expand)', () => {
     // Without a root there is nothing to anchor against, so every leading
     // level is still reported (the caller only uses this when cwd is known).
     expect(ancestorDirs(undefined, [undefined as unknown as string, '/a/b/c.ts'])).toEqual(['/a', '/a/b'])
+  })
+})
+
+describe('pathWithinCwd (a reveal may only point inside the tree)', () => {
+  it('accepts files below the root in both path dialects', () => {
+    expect(pathWithinCwd('/w/src', '/w/src/sub/deep/a.ts')).toBe(true)
+    expect(pathWithinCwd('/w/src', '/w/src/a.ts')).toBe(true)
+    expect(pathWithinCwd('C:\\work', 'C:\\work\\src\\a.ts')).toBe(true)
+    expect(pathWithinCwd('\\\\server\\share', '\\\\server\\share\\sub\\a.ts')).toBe(true)
+  })
+
+  it('rejects siblings, out-of-tree and shallower paths, and empty inputs', () => {
+    // A sibling of the root shares no segment: /other vs /w.
+    expect(pathWithinCwd('/w', '/other/a.ts')).toBe(false)
+    // A prefix look-alike must not pass on a string-prefix check
+    // (/w2 is a DIFFERENT directory than /w).
+    expect(pathWithinCwd('/w', '/w2/a.ts')).toBe(false)
+    // The root itself and anything above it are not a file below it.
+    expect(pathWithinCwd('/w/src', '/w/src')).toBe(false)
+    expect(pathWithinCwd('/w/src/sub', '/w/src/a.ts')).toBe(false)
+    // No root (no conversation cwd) or an empty path: nothing to reveal into.
+    expect(pathWithinCwd(undefined, '/w/a.ts')).toBe(false)
+    expect(pathWithinCwd('', '/w/a.ts')).toBe(false)
+    expect(pathWithinCwd('/w', '')).toBe(false)
   })
 })
 

@@ -845,6 +845,31 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
   border-bottom-right-radius: 0;
 }
 
+/* VSCode-style reveal flash: on every fresh reveal the row lights up in the
+   business accent, holds a beat and settles back onto the plain reveal tint
+   above (the animation ends where the constant class already paints it, so
+   there is no pop when it finishes). TWO interchangeable classes carry the
+   SAME keyframes under different names — FileTree alternates the class on
+   each replay, and changing animation-name is what restarts a CSS animation
+   (re-applying the same name would not run it again). */
+@keyframes dsh-explorer-flash-a {
+  0%, 45% { background: var(--dsw-alias-state-business-primary); }
+  100% { background: var(--dsw-alias-state-business-tertiary); }
+}
+
+@keyframes dsh-explorer-flash-b {
+  0%, 45% { background: var(--dsw-alias-state-business-primary); }
+  100% { background: var(--dsw-alias-state-business-tertiary); }
+}
+
+.explorerRowFlashA {
+  animation: dsh-explorer-flash-a 0.9s ease-out;
+}
+
+.explorerRowFlashB {
+  animation: dsh-explorer-flash-b 0.9s ease-out;
+}
+
 .explorerDir {
   font: var(--dsw-font-xxs-strong-12);
 }
@@ -2386,6 +2411,8 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
   .bottomPanelHidden,
   .toggleButton,
   .tab,
+  .explorerRowFlashA,
+  .explorerRowFlashB,
   .tabBarPlus,
   .paneCard,
   .explorerRow,

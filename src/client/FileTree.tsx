@@ -231,6 +231,13 @@ interface FileRowProps {
   service: BetterSidebarService | undefined
   selected: boolean
   revealed: boolean
+  /**
+   * The one-shot reveal-flash class for THIS reveal round (undefined = no
+   * flash): FileTree alternates the class on every fresh reveal so the CSS
+   * animation restarts (a same-name replay would not run again). A primitive
+   * like the other row props, so memo() still bails out.
+   */
+  flash: string | undefined
   /** A drag hovers this row's PARENT directory (upload target). */
   dropTarget: boolean
   copied: boolean
@@ -247,7 +254,7 @@ interface FileRowProps {
 }
 
 const FileRow = memo(function FileRow(props: FileRowProps): ReactNode {
-  const { entry, depth, iconsVersion, service, selected, revealed, dropTarget, copied, gitTone, gitLetter, actions } = props
+  const { entry, depth, iconsVersion, service, selected, revealed, flash, dropTarget, copied, gitTone, gitLetter, actions } = props
   // Referenced so a registry change re-renders the row with its new icon.
   void iconsVersion
   const icon = service !== undefined ? service.fileIcon(entry.path, 14) : builtinFileIcon(entry.path, 14)
@@ -260,6 +267,7 @@ const FileRow = memo(function FileRow(props: FileRowProps): ReactNode {
         selected && css.explorerRowSelected,
         dropTarget && css.explorerRowDropTarget,
         revealed && css.explorerRowRevealed,
+        flash,
       )}
       data-dsh-revealed={revealed ? 'true' : undefined}
       data-dsh-selected={selected ? 'true' : undefined}
@@ -600,6 +608,13 @@ export function FileTree(props: {
   const generationRef = useRef(0)
   /** The row whose path was just copied ("copied" label replaces its button). */
   const [copiedPath, setCopiedPath] = useState<string | null>(null)
+  /**
+   * Bumped on every FRESH reveal (see the effect by the reveal scroll): the
+   * counter's parity picks between two interchangeable flash classes, so a
+   * replay changes the row's animation-name and the CSS animation restarts.
+   * 0 = this tree instance has not seen a reveal yet (no flash).
+   */
+  const [flashSeq, setFlashSeq] = useState(0)
   /** Open context menu: the row path (and whether it is a directory) plus the cursor position. */
   const [rowMenu, setRowMenu] = useState<{ path: string; isDir: boolean; x: number; y: number } | null>(null)
   // The plugin submenu can tower past the viewport; publish its flip geometry
@@ -992,6 +1007,20 @@ export function FileTree(props: {
     const max = Math.max(body.scrollHeight - body.clientHeight, 0)
     body.scrollTo({ top: Math.min(Math.max(target, 0), max), behavior: 'smooth' })
   }, [revealed, data])
+
+  // The reveal FLASH: `revealPaths` allocates a new `revealed` array on every
+  // call — even for a set that already contains the file — so each reveal
+  // round bumps the counter and the revealed row's flash class alternates
+  // (changing animation-name restarts the animation; replaying the same class
+  // would not). The tree dock unmounts while closed, so the panel-open
+  // gesture replays through this mount bump alone; a reveal into an OPEN
+  // tree ("show in folder"-style callers) replays through the identity
+  // change. Same hidden guard as the scroll above: nothing flashes while the
+  // search panel has parked the tree.
+  useEffect(() => {
+    if (revealed.length === 0 || propsRef.current.hidden === true) return
+    setFlashSeq(seq => seq + 1)
+  }, [revealed])
 
   /** Copy `text`; on success flip the row's copied label for a moment. */
   const copyPath = useCallback((text: string, path: string): void => {
@@ -1773,6 +1802,10 @@ export function FileTree(props: {
   const expandedSet = useMemo(() => new Set(expanded), [expanded])
   const revealedSet = useMemo(() => new Set(revealed), [revealed])
   expandedSetRef.current = expandedSet
+  /** This reveal round's flash class (parity-picked, see `flashSeq`). */
+  const flashClass = flashSeq === 0
+    ? undefined
+    : flashSeq % 2 === 1 ? css.explorerRowFlashA : css.explorerRowFlashB
 
   /** The tree's shared git status (the changes page reads the same snapshot);
    *  a parked tab unsubscribes from the poll. */
@@ -2057,6 +2090,7 @@ export function FileTree(props: {
               service={service}
               selected={selected.has(entry.path)}
               revealed={revealedSet.has(entry.path)}
+              flash={revealedSet.has(entry.path) ? flashClass : undefined}
               dropTarget={dropTarget === parentOf(entry.path)}
               gitTone={git?.tone}
               gitLetter={git?.letter}
