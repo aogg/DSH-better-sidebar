@@ -34,7 +34,8 @@ import { resolveSessionPath } from './session-path.ts'
 import { createWorkspaceFile, mkdirWorkspaceEntry, renameWorkspaceEntry, removeWorkspaceEntry, writeWorkspaceText, writeWorkspaceUpload } from './fs-operations.ts'
 import { ensureWorkspacePath } from './path-security.ts'
 import { searchFiles } from './fs-search.ts'
-import { compileExcludePatterns } from './exclude-patterns.ts'
+import { contentSearch } from './fs-content-search.ts'
+import { compileExcludePatterns, EXCLUDE_PATTERN_LIMIT, EXCLUDE_PATTERN_MAX_LENGTH } from './exclude-patterns.ts'
 import { decodeHtmlUrl } from './html-route.ts'
 import { isTrustedApiRequest } from './trust-fence.ts'
 import { registerBundleRoute } from './bundle-route.ts'
@@ -180,6 +181,27 @@ function selectedRepoOf(payload: unknown): string | undefined {
   const record = payload as { repoRoot?: unknown }
   if (record.repoRoot === undefined) return undefined
   return requireAbsolute(requireString(payload, 'repoRoot'))
+}
+
+/**
+ * One content-search wire list (`include` / `exclude`): strings only, each
+ * trimmed, capped like the pattern compiler the host classifies them with —
+ * past {@link EXCLUDE_PATTERN_LIMIT} entries the rest is dropped, an entry
+ * longer than {@link EXCLUDE_PATTERN_MAX_LENGTH} (or empty) is dropped.
+ * Silent degradation, not a 400: a malformed entry must never break the
+ * search, exactly like a malformed exclude pattern never breaks the tree.
+ */
+function sidebarEntryListOf(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  for (const item of raw) {
+    if (out.length >= EXCLUDE_PATTERN_LIMIT) break
+    if (typeof item !== 'string') continue
+    const entry = item.trim()
+    if (entry === '' || entry.length > EXCLUDE_PATTERN_MAX_LENGTH) continue
+    out.push(entry)
+  }
+  return out
 }
 
 /** One required 1-based line number of a `git blame -L` request. */
@@ -739,6 +761,26 @@ function buildApi(
       const record = payload as { exclude?: unknown }
       const query = requireString(payload, 'query')
       return searchFiles(cwd, query, { exclude: compileExcludePatterns(record.exclude, cwd) })
+    },
+    // The tree panel's text-CONTENT search. Same session-cwd rooting and
+    // budgets as `fs.search`; the include/exclude entries are raw strings
+    // classified host-side (existing dir → subtree scope/drop, existing file
+    // → single-file scope/drop, otherwise an exclude-patterns glob). The
+    // explorerExclude pref rides `prefExclude` and stacks on top of the
+    // user's `exclude` list, so the content search stays in lockstep with
+    // the tree listing and the name search.
+    'fs.contentSearch': async (payload) => {
+      const { cwd } = await cwdOf(payload)
+      const record = payload as { include?: unknown; exclude?: unknown; prefExclude?: unknown }
+      const query = requireString(payload, 'query')
+      if (query.length > EXCLUDE_PATTERN_MAX_LENGTH) {
+        throw new SidebarError('bad-request', `"query" must not exceed ${EXCLUDE_PATTERN_MAX_LENGTH} characters`)
+      }
+      return contentSearch(cwd, query, {
+        include: sidebarEntryListOf(record.include),
+        exclude: sidebarEntryListOf(record.exclude),
+        prefExclude: compileExcludePatterns(record.prefExclude, cwd),
+      })
     },
     'fs.read': async (payload) => {
       const { cwd } = await cwdOf(payload)

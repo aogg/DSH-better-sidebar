@@ -1,9 +1,13 @@
 /**
  * The files window's tree surface: a global file-name search box on top
- * (300ms debounce; an in-flight search is aborted by the next keystroke)
- * over the shared controlled FileTree. The results panel and the tree are
- * BOTH mounted: the query only parks one of them (`hidden`), so clearing the
- * search is free — the tree keeps its level cache and the live directory
+ * (300ms debounce; an in-flight search is aborted by the next keystroke),
+ * with a permanent content-search entry row under it — expanding reveals a
+ * keyword input (Enter runs, no debounce) plus include/exclude chip lists,
+ * and the two searches share ONE results region (whichever query is live
+ * owns it; starting one clears the other; clearing both restores the tree)
+ * — all over the shared controlled FileTree. The results panel and the tree
+ * are BOTH mounted: the query only parks one of them (`hidden`), so clearing
+ * the search is free — the tree keeps its level cache and the live directory
  * watcher (the old conditional render dropped both and refetched the whole
  * visible set on every query change). Owns its refresh tick: the icon next to
  * the search input clears the tree cache, and the sort menu beside it owns the
@@ -19,15 +23,15 @@
  * drop over the file window uploads here and never reaches DSH's chat
  * intake.
  */
-import { useEffect, useMemo, useRef, useState, type InputHTMLAttributes } from 'react'
+import { useEffect, useMemo, useRef, useState, type Dispatch, type InputHTMLAttributes, type SetStateAction } from 'react'
 import clsx from 'clsx'
-import { IconChevronsUpDownOutlineRegular, IconFolderOpenRegular, IconRefreshOutlineRegular, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconChevronDownOutlineRegular, IconChevronsUpDownOutlineRegular, IconFolderOpenRegular, IconRefreshOutlineRegular, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import { api } from './api.ts'
 import type { BetterSidebarService } from './service.ts'
 import { ancestorDirs } from './state.ts'
 import { FileTree } from './FileTree.tsx'
 import { DEFAULT_FILE_TREE_SORT, type FileTreeSort } from './file-tree-sort.ts'
-import { IconUploadOutline16 } from './icons.tsx'
+import { IconContentSearchOutline16, IconUploadOutline16 } from './icons.tsx'
 import type { OpenInApp } from './open-in-app.ts'
 import type { OpenWithTarget } from './open-with.ts'
 import { t } from './locales.ts'
@@ -185,8 +189,30 @@ export function TreePanel(props: {
 
   const folderInputProps = { webkitdirectory: '' } as InputHTMLAttributes<HTMLInputElement>
 
+  // ── 文本内容搜索 (content search) ────────────────────────────────────
+  /** Whether the content-search section is expanded (collapsed by default). */
+  const [contentOpen, setContentOpen] = useState(false)
+  /** The committed content query (Enter commits; '' = no content search). */
+  const [contentQuery, setContentQuery] = useState('')
+  /** The content query input draft (uncommitted until Enter). */
+  const [contentDraft, setContentDraft] = useState('')
+  /** Include/exclude entries as chips, plus their input drafts. */
+  const [contentInclude, setContentInclude] = useState<string[]>([])
+  const [contentExclude, setContentExclude] = useState<string[]>([])
+  const [includeDraft, setIncludeDraft] = useState('')
+  const [excludeDraft, setExcludeDraft] = useState('')
+  const [contentResults, setContentResults] = useState<{ matches: string[]; truncated: boolean } | null>(null)
+  const [contentError, setContentError] = useState<string | null>(null)
+
   const needle = query.trim()
-  const searching = needle !== ''
+  // The two searches are MUTUALLY EXCLUSIVE surfaces over one results region:
+  // a live name query parks the content search and vice versa; both empty =
+  // the file tree. The name half wins when both carry text (transient — each
+  // side clears the other the moment it starts).
+  const contentNeedle = contentQuery.trim()
+  const searching = needle !== '' || contentNeedle !== ''
+  const nameActive = needle !== ''
+  const contentActive = contentNeedle !== ''
   // The search effect below must re-run on a CHANGED list, never on a churned
   // array identity: the prefs store hands out one stable reference per
   // document, but keying on the value is what makes that a guarantee rather
@@ -216,6 +242,75 @@ export function TreePanel(props: {
       controller.abort()
     }
   }, [sessionId, cwd, needle, excludeKey])
+
+  /**
+   * Commit the content query (Enter on the keyword input): clears the name
+   * query so exactly one results list shows, mirroring how typing a name
+   * query clears the content one.
+   */
+  const runContentSearch = (): void => {
+    const next = contentDraft.trim()
+    if (next === '') return
+    setQuery('')
+    setContentQuery(next)
+  }
+
+  /** Expand/collapse the section; collapsing clears the query so the section
+   *  "closes back to the file tree" (the chip lists survive — they are the
+   *  user's scope settings, visible on reopen). */
+  const toggleContentOpen = (): void => {
+    if (contentOpen) {
+      setContentQuery('')
+      setContentDraft('')
+    }
+    setContentOpen(!contentOpen)
+  }
+
+  /** Add one include/exclude chip from its draft (Enter): trimmed, deduped,
+   *  empty drafts just clear. */
+  const addContentEntry = (
+    draft: string,
+    setDraft: Dispatch<SetStateAction<string>>,
+    list: readonly string[],
+    setList: Dispatch<SetStateAction<string[]>>,
+  ): void => {
+    const value = draft.trim()
+    setDraft('')
+    if (value === '' || list.includes(value)) return
+    setList([...list, value])
+  }
+
+  const contentIncludeKey = contentInclude.join('\0')
+  const contentExcludeKey = contentExclude.join('\0')
+  useEffect(() => {
+    if (contentNeedle === '') {
+      setContentResults(null)
+      setContentError(null)
+      return
+    }
+    // Immediate (no debounce): the query is an explicit Enter commit, not a
+    // keystroke stream. An in-flight run is aborted by the next commit, a
+    // chip change, or a clear — the same controller contract as the name
+    // search above.
+    const controller = new AbortController()
+    const patterns = excludeKey === '' ? undefined : excludeKey.split('\0')
+    api.fsContentSearch({ sessionId, cwd }, contentNeedle, contentInclude, contentExclude, patterns, controller.signal)
+      .then((found) => {
+        setContentResults(found)
+        setContentError(null)
+      })
+      .catch((failure: unknown) => {
+        if (controller.signal.aborted) return
+        setContentResults(null)
+        setContentError(failure instanceof Error ? failure.message : String(failure))
+      })
+    return () => {
+      controller.abort()
+    }
+    // The chip lists ride their joined keys (stable identity per content),
+    // the same trick the name search uses for the exclude pref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, cwd, contentNeedle, contentIncludeKey, contentExcludeKey, excludeKey])
 
   const busy = upload !== null
   /** Directory hits (the host reports them separately): a click navigates the
@@ -253,7 +348,16 @@ export function TreePanel(props: {
           value={query}
           placeholder={t('editorSearchPlaceholder')}
           spellCheck={false}
-          onChange={(event) => { setQuery(event.target.value) }}
+          onChange={(event) => {
+            const next = event.target.value
+            setQuery(next)
+            // Typing a name query retires the content search (the reverse
+            // direction lives in runContentSearch): one results surface.
+            if (next.trim() !== '' && contentQuery !== '') {
+              setContentQuery('')
+              setContentDraft('')
+            }
+          }}
         />
         <IconButton
           label={t('refresh')}
@@ -329,17 +433,117 @@ export function TreePanel(props: {
           }}
         />
       </div>
+      {/* Content search entry: a permanent row under the name search box,
+          collapsed by default. Expanding reveals the keyword input (Enter
+          runs) plus the include/exclude chip lists; collapsing clears the
+          query so the tree shows through again. */}
+      <button
+        type="button"
+        className={css.contentSearchToggle}
+        aria-expanded={contentOpen}
+        data-dsh-content-search-toggle={contentOpen ? 'open' : 'closed'}
+        onClick={toggleContentOpen}
+      >
+        <IconContentSearchOutline16 size={14} />
+        <span className={css.contentSearchToggleLabel}>{t('contentSearchToggle')}</span>
+        <IconChevronDownOutlineRegular size={14} className={clsx(css.contentSearchCaret, contentOpen && css.contentSearchCaretOpen)} />
+      </button>
+      {contentOpen && (
+        <div className={css.contentSearchPanel} data-dsh-content-search-panel="true">
+          <input
+            className={css.contentSearchInput}
+            value={contentDraft}
+            placeholder={t('contentSearchQueryPlaceholder')}
+            spellCheck={false}
+            onChange={(event) => { setContentDraft(event.target.value) }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                runContentSearch()
+              }
+            }}
+          />
+          <div className={css.contentSearchGroup}>
+            <input
+              className={css.contentSearchInput}
+              value={includeDraft}
+              placeholder={t('contentSearchIncludePlaceholder')}
+              spellCheck={false}
+              onChange={(event) => { setIncludeDraft(event.target.value) }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  addContentEntry(includeDraft, setIncludeDraft, contentInclude, setContentInclude)
+                }
+              }}
+            />
+            {contentInclude.length > 0 && (
+              <div className={css.contentChipRow}>
+                {contentInclude.map((entry) => (
+                  <span key={entry} className={css.contentChip}>
+                    {entry}
+                    <button
+                      type="button"
+                      className={css.contentChipRemove}
+                      aria-label={t('contentSearchRemove')}
+                      title={t('contentSearchRemove')}
+                      onClick={() => { setContentInclude(contentInclude.filter(item => item !== entry)) }}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className={css.contentSearchGroup}>
+            <input
+              className={css.contentSearchInput}
+              value={excludeDraft}
+              placeholder={t('contentSearchExcludePlaceholder')}
+              spellCheck={false}
+              onChange={(event) => { setExcludeDraft(event.target.value) }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  addContentEntry(excludeDraft, setExcludeDraft, contentExclude, setContentExclude)
+                }
+              }}
+            />
+            {contentExclude.length > 0 && (
+              <div className={css.contentChipRow}>
+                {contentExclude.map((entry) => (
+                  <span key={entry} className={css.contentChip}>
+                    {entry}
+                    <button
+                      type="button"
+                      className={css.contentChipRemove}
+                      aria-label={t('contentSearchRemove')}
+                      title={t('contentSearchRemove')}
+                      onClick={() => { setContentExclude(contentExclude.filter(item => item !== entry)) }}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       {uploadStatus !== '' && (
         <div className={clsx(css.editorSearchHint, uploadFailed && css.editorError)} title={uploadStatus}>{uploadStatus}</div>
       )}
-      {/* Search results: parked (not unmounted) while the query is empty. Its
-          contents render only for a live query — a parked panel must not put
-          state text (the loading line) into the panel's DOM. */}
+      {/* Search results: parked (not unmounted) while no query is live, and
+          ONE of the two searches owns the region — the name search when its
+          box carries text, else the content search. Its contents render only
+          for a live query — a parked panel must not put state text (the
+          loading line) into the panel's DOM. */}
       <div
         className={clsx(css.explorerBody, !searching && css.explorerHiddenPane)}
         hidden={!searching}
       >
-        {searching && (
+        {nameActive && (
           <>
             {error !== null && <div className={clsx(css.editorSearchHint, css.editorError)}>{error}</div>}
             {error === null && results === null && <div className={css.editorSearchHint}>{t('loading')}</div>}
@@ -366,6 +570,31 @@ export function TreePanel(props: {
               )
             })}
             {error === null && results?.truncated === true && (
+              <div className={css.editorSearchHint}>{t('editorSearchTruncated')}</div>
+            )}
+          </>
+        )}
+        {contentActive && (
+          <>
+            {contentError !== null && <div className={clsx(css.editorSearchHint, css.editorError)}>{contentError}</div>}
+            {contentError === null && contentResults === null && <div className={css.editorSearchHint}>{t('loading')}</div>}
+            {contentError === null && contentResults !== null && contentResults.matches.length === 0 && (
+              <div className={css.editorSearchHint}>{t('editorSearchNoResults')}</div>
+            )}
+            {/* Content hits are FILES only (a directory has no content to
+                search), so every row opens like a name-search file row. */}
+            {contentError === null && contentResults !== null && contentResults.matches.map((rel) => (
+              <button
+                key={rel}
+                type="button"
+                className={css.editorSearchResult}
+                title={rel}
+                onClick={() => onOpenFile(resolveSidebarPath(cwd, rel))}
+              >
+                <span className={css.editorSearchResultLabel}>{rel}</span>
+              </button>
+            ))}
+            {contentError === null && contentResults?.truncated === true && (
               <div className={css.editorSearchHint}>{t('editorSearchTruncated')}</div>
             )}
           </>

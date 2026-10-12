@@ -44,6 +44,18 @@ export const IconUploadOutline16 = ({ size = 16, className }: IconProps) => (
   </svg>
 )
 
+/** Content-search glyph: a document frame whose text lines end in a
+ *  magnifier — the file-manager "search INSIDE files" section toggle. */
+export const IconContentSearchOutline16 = ({ size = 16, className }: IconProps) => (
+  <svg width={size} height={size} className={className} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M8.5 14.5H4a1.5 1.5 0 0 1-1.5-1.5V3A1.5 1.5 0 0 1 4 1.5h5L13.5 6v2" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+    <path d="M9 1.5V6h4.5" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+    <path d="M4.5 8.5h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    <circle cx="10.75" cy="10.75" r="2.25" stroke="currentColor" strokeWidth="1.5" />
+    <path d="m12.5 12.5 1.75 1.75" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+  </svg>
+)
+
 // ── File-viewer inventory glyphs (Side card settings page) ────────────────
 
 /** Markdown viewer glyph: the classic "M with a down arrow" badge. */
