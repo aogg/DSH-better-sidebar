@@ -12,6 +12,10 @@ import { createElement, type ComponentProps } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
 import { TreePanel } from '../src/client/TreePanel.tsx'
+// Type-only: gives the mocked fsContentSearch fn the REAL api signature, so
+// `mock.calls[0]` is the full parameter tuple (a bare vi.fn() would push `[]`
+// and every destructuring below would be a TS2493).
+import type { api } from '../src/client/api.ts'
 
 import { setupReactAct } from './test-utils.ts'
 setupReactAct()
@@ -35,7 +39,7 @@ const { fsTrees, fsSearch, fsContentSearch } = vi.hoisted(() => ({
   fsTrees: vi.fn(async (_scope: unknown, paths: readonly string[]) => ({ levels: paths.map(path => defaultListing(path)) })),
   fsSearch: vi.fn(async (): Promise<{ matches: string[]; dirs: string[]; truncated: boolean }> =>
     ({ matches: [], dirs: [], truncated: false })),
-  fsContentSearch: vi.fn(async (): Promise<{ matches: string[]; truncated: boolean }> =>
+  fsContentSearch: vi.fn<typeof api.fsContentSearch>(async () =>
     ({ matches: ['src/a.ts'], truncated: false })),
 }))
 
