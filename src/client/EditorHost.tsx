@@ -44,7 +44,7 @@ import { relativeTo } from './paths.ts'
 import { resolveSidebarPath } from './paths.ts'
 import { clearRetargetedPath, closePathTabs, consumeRetargetedPath, pathTabKey, retargetPathTabs } from './tree-mutations.ts'
 import type { EditorToolbarControls, EditorToolbarState, FileViewerDescriptor } from './service.ts'
-import { firstLeaf, insertLeafAt, leafWithTab, mintTabId, type SidebarStore, type SidebarTab } from './state.ts'
+import { firstLeaf, insertLeafAt, leafWithTab, mintTabId, pathWithinCwd, revealPaths, type SidebarStore, type SidebarTab } from './state.ts'
 import css from './sidebar.module.css'
 
 type EditorLoad =
@@ -537,8 +537,28 @@ export function EditorHost(props: {
   }, [ops, path, scope.sessionId, scope.cwd, toolbar?.dirty, toolbar?.mode])
 
   const treeOpen = treeOpenOf(tab)
-  /** Persist the panel flag on the tab (survives reloads with the layout). */
-  const toggleTree = (): void => { patchMeta(ctx, tab, scope.sessionId, { treeOpen: !treeOpen }) }
+  /**
+   * Toggle the docked tree panel, persisting the flag on the tab (survives
+   * reloads with the layout).
+   *
+   * The OPEN half of the gesture (a file tab whose path lives inside the
+   * session cwd) lands the reveal FIRST: `revealPaths` expands the file's
+   * ancestor directories and marks it in the store's `revealed` set, so the
+   * panel that mounts a moment later renders the row already highlighted and
+   * its reveal-scroll effect centers it once the lazy levels arrive. Every
+   * open replays it — the reducer allocates a fresh `revealed` array even
+   * when the set is unchanged, which is what restarts the flash on a row
+   * that may already be marked (VSCode does the same on every "reveal in
+   * explorer"). Path-less and directory tabs, and paths outside the tree
+   * (`pathWithinCwd`), skip silently: there is no row to point at, and
+   * out-of-tree ancestors would expand phantom rows.
+   */
+  const toggleTree = (): void => {
+    if (!treeOpen && !isDir && pathWithinCwd(scope.cwd, path)) {
+      store.reduce(state => revealPaths(state, scope.cwd, [path]))
+    }
+    patchMeta(ctx, tab, scope.sessionId, { treeOpen: !treeOpen })
+  }
   const saveLabel = toolbar === null ? ''
     : toolbar.saveState === 'saving' ? t('loading')
       : toolbar.saveState === 'saved' ? t('saved')

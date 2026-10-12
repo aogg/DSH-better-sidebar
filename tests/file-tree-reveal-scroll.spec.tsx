@@ -42,7 +42,7 @@ vi.mock('../src/client/api.ts', () => ({
 
 interface TreeHarness {
   /** Re-render with new props; the refresh tick reloads the level cache. */
-  rerender: (revealed: string[], refreshTick: number) => Promise<void>
+  rerender: (revealed: string[], refreshTick: number, hidden?: boolean) => Promise<void>
   body: HTMLElement
   /** Pin one row's geometry (jsdom has no layout). */
   layoutRow: (top: number, height: number) => void
@@ -54,7 +54,7 @@ async function mountTree(bodyScroll: { top: number; client: number; height: numb
   const container = document.createElement('div')
   document.body.append(container)
   const root: Root = createRoot(container)
-  const render = (revealed: string[], refreshTick: number): void => {
+  const render = (revealed: string[], refreshTick: number, hidden?: boolean): void => {
     root.render(createElement(FileTree, {
       sessionId: 's1',
       cwd: '/tmp',
@@ -66,6 +66,7 @@ async function mountTree(bodyScroll: { top: number; client: number; height: numb
       refreshTick,
       onUploadRequest: () => {},
       busy: false,
+      ...(hidden === undefined ? {} : { hidden }),
     }))
   }
   await act(async () => { render([], 0) })
@@ -77,7 +78,7 @@ async function mountTree(bodyScroll: { top: number; client: number; height: numb
   Object.defineProperty(body, 'scrollHeight', { value: bodyScroll.height })
   Object.defineProperty(body, 'scrollTop', { value: bodyScroll.top, writable: true })
   return {
-    rerender: async (revealed, refreshTick) => { await act(async () => { render(revealed, refreshTick) }) },
+    rerender: async (revealed, refreshTick, hidden) => { await act(async () => { render(revealed, refreshTick, hidden) }) },
     body,
     layoutRow: (top, height) => {
       const row = body.querySelector('[data-dsh-revealed]')
@@ -118,6 +119,80 @@ describe('FileTree reveal scrolling (show in folder)', () => {
     const tree = await mountTree({ top: 0, client: 300, height: 1000 })
     await tree.rerender([], 1)
     expect(tree.scrollTo).not.toHaveBeenCalled()
+    tree.unmount()
+  })
+})
+
+/**
+ * The reveal FLASH (VSCode-style one-shot highlight on the revealed row):
+ * every fresh reveal round restarts the animation by ALTERNATING two
+ * interchangeable classes (changing animation-name is what restarts a CSS
+ * animation — re-applying the same class would not). `revealPaths` hands out
+ * a fresh `revealed` array on every call, even for an unchanged set, so the
+ * identity change is the replay trigger.
+ */
+describe('FileTree reveal flash (one-shot highlight, replayable)', () => {
+  /** The revealed file row (the tree lists /tmp/a.ts at the root). */
+  function revealedRow(tree: TreeHarness): HTMLElement {
+    const row = tree.body.querySelector('[data-dsh-revealed]')
+    expect(row).not.toBeNull()
+    return row as HTMLElement
+  }
+
+  it('flashes the revealed row on a fresh reveal', async () => {
+    const tree = await mountTree({ top: 0, client: 300, height: 1000 })
+    await tree.rerender(['/tmp/a.ts'], 0)
+    expect(revealedRow(tree).className).toContain('explorerRowFlashA')
+    tree.unmount()
+  })
+
+  it('no flash without a reveal', async () => {
+    const tree = await mountTree({ top: 0, client: 300, height: 1000 })
+    await tree.rerender(['/tmp/a.ts'], 0)
+    expect(revealedRow(tree).className).toContain('explorerRowFlashA')
+    // The reveal set clearing drops the flash with the highlight.
+    await tree.rerender([], 0)
+    expect(tree.body.querySelector('[data-dsh-revealed]')).toBeNull()
+    tree.unmount()
+  })
+
+  it('repeats of the same reveal ALTERNATE the flash class (the animation restarts)', async () => {
+    const tree = await mountTree({ top: 0, client: 300, height: 1000 })
+    await tree.rerender(['/tmp/a.ts'], 0)
+    expect(revealedRow(tree).className).toContain('explorerRowFlashA')
+    // A second revealPaths call hands out a NEW array with the SAME contents
+    // — exactly the "reveal an already-revealed file" replay.
+    await tree.rerender(['/tmp/a.ts'], 0)
+    const row = revealedRow(tree)
+    expect(row.className).toContain('explorerRowFlashB')
+    expect(row.className).not.toContain('explorerRowFlashA')
+    // And a third round alternates back.
+    await tree.rerender(['/tmp/a.ts'], 0)
+    expect(revealedRow(tree).className).toContain('explorerRowFlashA')
+    tree.unmount()
+  })
+
+  it('the same array IDENTITY does not re-flash (a re-render is not a reveal)', async () => {
+    const tree = await mountTree({ top: 0, client: 300, height: 1000 })
+    const revealed = ['/tmp/a.ts']
+    await tree.rerender(revealed, 0)
+    expect(revealedRow(tree).className).toContain('explorerRowFlashA')
+    // Re-render with the SAME array (e.g. an unrelated parent re-render):
+    // no identity change, no replay — the class stays A.
+    await tree.rerender(revealed, 0)
+    expect(revealedRow(tree).className).toContain('explorerRowFlashA')
+    tree.unmount()
+  })
+
+  it('a reveal while the tree is parked (search) flashes only when it surfaces', async () => {
+    const tree = await mountTree({ top: 0, client: 300, height: 1000 })
+    // Hidden tree (the search panel owns the surface): the reveal is skipped
+    // entirely — no flash while nobody can see it.
+    await tree.rerender(['/tmp/a.ts'], 0, true)
+    expect(revealedRow(tree).className).not.toContain('explorerRowFlash')
+    // Surfacing with a FRESH reveal round plays the flash.
+    await tree.rerender(['/tmp/a.ts'], 0, false)
+    expect(revealedRow(tree).className).toContain('explorerRowFlashA')
     tree.unmount()
   })
 })
