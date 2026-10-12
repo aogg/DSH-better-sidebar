@@ -932,10 +932,20 @@
 }
 
 /* Open-with settings panel: one custom editor row (name + URL template +
-   VSCode-family checkbox + remove) and the row-validity hint. */
+   VSCode-family checkbox + remove), one path-mapping row (workspace prefix +
+   target prefix + remove — same inputs/remove as the editor row), and the
+   row-validity hint. */
 .openWithEditorRow {
   display: grid;
   grid-template-columns: 1fr 1.5fr auto auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.openWithPathRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
   gap: 8px;
   align-items: center;
   min-width: 0;

@@ -1,10 +1,13 @@
 /**
  * The file tree "open with" pure logic: config parsing (tolerant), target
  * resolution (built-ins + custom, SSH filtering), URL building (local file
- * URLs and VSCode-family SSH-remote URLs) and the custom-editor validators.
+ * URLs and VSCode-family SSH-remote URLs), the workspace→target path-prefix
+ * mappings (segment-boundary match, longest prefix wins, URL targets only)
+ * and the custom-editor validators.
  */
 import { describe, expect, it } from 'vitest'
 import {
+  applyPathMappings,
   isValidCustomEditor,
   newCustomEditorId,
   normalizeUrlPath,
@@ -14,13 +17,15 @@ import {
   resolveOpenWithTargets,
   type CustomEditor,
   type OpenWithTarget,
+  type PathMapping,
 } from '../src/client/open-with.ts'
 
 describe('parseOpenWithConfig', () => {
   it('returns the defaults for null / non-object / array values', () => {
-    expect(parseOpenWithConfig(null)).toEqual({ sshHost: '', customEditors: [], pinned: [] })
-    expect(parseOpenWithConfig('junk')).toEqual({ sshHost: '', customEditors: [], pinned: [] })
-    expect(parseOpenWithConfig([])).toEqual({ sshHost: '', customEditors: [], pinned: [] })
+    const defaults = { sshHost: '', customEditors: [], pinned: [], pathMappings: [] }
+    expect(parseOpenWithConfig(null)).toEqual(defaults)
+    expect(parseOpenWithConfig('junk')).toEqual(defaults)
+    expect(parseOpenWithConfig([])).toEqual(defaults)
   })
 
   it('keeps structurally valid custom editors (incl. in-progress rows) and drops junk', () => {
@@ -39,6 +44,32 @@ describe('parseOpenWithConfig', () => {
     expect(config.sshHost).toBe('dev')
     expect(config.customEditors.map(editor => editor.id)).toEqual(['a', 'b', 'c'])
     expect(config.pinned).toEqual(['vscode', 'custom:a', 'custom:c'])
+  })
+
+  it('parses pathMappings tolerantly: junk rows dropped, blank-prefix rows kept', () => {
+    const config = parseOpenWithConfig({
+      pathMappings: [
+        { id: 'm1', from: '/code/www', to: 'D:/code/www' },
+        { id: 'm2', from: '', to: '' }, // in-progress settings row survives
+        'junk',
+        null,
+        42,
+        { id: 'm3', from: 42, to: 'X' }, // non-string prefix
+        { id: 'm4', from: '/a' }, // missing to
+        { id: '', from: '/a', to: 'B' }, // blank id
+        { from: '/a', to: 'B' }, // missing id
+      ],
+    })
+    expect(config.pathMappings).toEqual([
+      { id: 'm1', from: '/code/www', to: 'D:/code/www' },
+      { id: 'm2', from: '', to: '' },
+    ])
+  })
+
+  it('falls back to no path mappings when the field is malformed or absent', () => {
+    expect(parseOpenWithConfig({}).pathMappings).toEqual([])
+    expect(parseOpenWithConfig({ pathMappings: 'junk' }).pathMappings).toEqual([])
+    expect(parseOpenWithConfig(null).pathMappings).toEqual([])
   })
 })
 
@@ -79,6 +110,61 @@ describe('resolveOpenWithTargets', () => {
     const config = parseOpenWithConfig({ pinned: ['ghost'] })
     expect(config.pinned).toEqual(['ghost'])
     expect(resolveOpenWithTargets(config).map(target => target.id)).toContain('vscode')
+  })
+})
+
+const mapping = (from: string, to: string, id = 'm'): PathMapping => ({ id, from, to })
+
+describe('applyPathMappings', () => {
+  const one = [mapping('/code/www', 'D:/code/www')]
+
+  it('replaces the workspace prefix at a path-segment boundary', () => {
+    expect(applyPathMappings('/code/www/my/x.ts', one)).toBe('D:/code/www/my/x.ts')
+    expect(applyPathMappings('/code/www', one)).toBe('D:/code/www')
+  })
+
+  it('never matches half a segment name', () => {
+    expect(applyPathMappings('/code/wwwx/a.ts', one)).toBe('/code/wwwx/a.ts')
+    expect(applyPathMappings('/code/www-x/a.ts', one)).toBe('/code/www-x/a.ts')
+    expect(applyPathMappings('/code/wwwa', one)).toBe('/code/wwwa')
+  })
+
+  it('ignores trailing slashes on from when matching', () => {
+    const slash = [mapping('/code/www/', 'D:/code/www')]
+    expect(applyPathMappings('/code/www/a.ts', slash)).toBe('D:/code/www/a.ts')
+    expect(applyPathMappings('/code/www', slash)).toBe('D:/code/www')
+  })
+
+  it('picks the longest from; equal lengths keep the first configured row', () => {
+    const two = [mapping('/code', 'X:/c', 'a'), mapping('/code/www', 'D:/code/www', 'b')]
+    expect(applyPathMappings('/code/www/a.ts', two)).toBe('D:/code/www/a.ts')
+    expect(applyPathMappings('/code/other.ts', two)).toBe('X:/c/other.ts')
+    const tie = [mapping('/aa', 'FIRST', 'a'), mapping('/aa', 'SECOND', 'b')]
+    expect(applyPathMappings('/aa/f.ts', tie)).toBe('FIRST/f.ts')
+  })
+
+  it('replaces once, at the head of the path only', () => {
+    expect(applyPathMappings('/code/www/code/www/a.ts', one)).toBe('D:/code/www/code/www/a.ts')
+  })
+
+  it('normalizes backslashes of the path and from for matching', () => {
+    expect(applyPathMappings('\\code\\www\\a.ts', [mapping('\\code\\www', 'D:/code/www')])).toBe('D:/code/www/a.ts')
+    expect(applyPathMappings('/code/www\\a.ts', one)).toBe('D:/code/www/a.ts')
+  })
+
+  it('inserts to verbatim (no separator fixups)', () => {
+    expect(applyPathMappings('/code/www/a.ts', [mapping('/code/www', 'D:/code/www/')])).toBe('D:/code/www//a.ts')
+  })
+
+  it('skips rows with a blank from or to', () => {
+    const rows = [mapping('', 'D:/x', 'a'), mapping('/code/www', '', 'b'), mapping('  ', 'D:/x', 'c')]
+    expect(applyPathMappings('/code/www/a.ts', rows)).toBe('/code/www/a.ts')
+  })
+
+  it('leaves unmatched paths unchanged', () => {
+    expect(applyPathMappings('/home/u/a.ts', one)).toBe('/home/u/a.ts')
+    expect(applyPathMappings('code/www/a.ts', one)).toBe('code/www/a.ts')
+    expect(applyPathMappings('/code/www/a.ts', [])).toBe('/code/www/a.ts')
   })
 })
 
@@ -127,6 +213,42 @@ describe('openWithUrl', () => {
     const targets = resolveOpenWithTargets(config)
     expect(openWithUrl(targets[targets.length - 1]!, '/r/f.ts', config))
       .toBe('myfork://vscode-remote/ssh-remote+dev/r/f.ts')
+  })
+
+  it('maps the workspace prefix for URL targets before the template substitution', () => {
+    const config = parseOpenWithConfig({ pathMappings: [mapping('/code/www', 'D:/code/www')] })
+    expect(openWithUrl(byId('vscode'), '/code/www/my/x.ts', config)).toBe('vscode://file/D:/code/www/my/x.ts')
+    expect(openWithUrl(byId('zed'), '/code/www/my/x.ts', config)).toBe('zed://file/D:/code/www/my/x.ts')
+  })
+
+  it('maps custom-editor URL targets too', () => {
+    const config = parseOpenWithConfig({
+      pathMappings: [mapping('/code/www', 'D:/code/www')],
+      customEditors: [{ id: 'e', name: 'Windsurf', urlTemplate: 'windsurf://file/{path}', isVscodeFamily: false }],
+    })
+    const target = resolveOpenWithTargets(config).find(item => item.id === 'custom:e')!
+    expect(openWithUrl(target, '/code/www/a.ts', config)).toBe('windsurf://file/D:/code/www/a.ts')
+  })
+
+  it('leaves unmatched paths on the plain URL form', () => {
+    const config = parseOpenWithConfig({ pathMappings: [mapping('/code/www', 'D:/code/www')] })
+    expect(openWithUrl(byId('vscode'), '/home/u/f.ts', config)).toBe('vscode://file//home/u/f.ts')
+    expect(openWithUrl(byId('vscode'), '/code/wwwx/f.ts', config)).toBe('vscode://file//code/wwwx/f.ts')
+  })
+
+  it('never maps reveal targets (the host file manager resolves the real path)', () => {
+    const config = parseOpenWithConfig({ pathMappings: [mapping('/code/www', 'D:/code/www')] })
+    expect(openWithUrl(byId('explorer'), '/code/www/x.ts', config)).toBeUndefined()
+  })
+
+  it('skips the mappings in SSH mode (the remote path is another namespace)', () => {
+    const config = parseOpenWithConfig({
+      sshHost: 'dev',
+      pathMappings: [mapping('/code/www', 'D:/code/www')],
+    })
+    expect(openWithUrl(byId('vscode'), '/code/www/f.ts', config))
+      .toBe('vscode://vscode-remote/ssh-remote+dev/code/www/f.ts')
+    expect(openWithUrl(byId('zed'), '/code/www/f.ts', config)).toBe('zed://file//code/www/f.ts')
   })
 })
 

@@ -1,9 +1,10 @@
 /**
  * The file tree's "open with" vocabulary: which external editors / file
  * managers the context menu can hand a row's path to, how the per-user
- * configuration (custom editors, SSH host, pinned ids) is parsed out of the
- * persisted blob, and how the external URL is built (local `file` URLs and
- * VSCode-family SSH-remote URLs).
+ * configuration (custom editors, SSH host, path-prefix mappings, pinned ids)
+ * is parsed out of the persisted blob, and how the external URL is built
+ * (local `file` URLs and VSCode-family SSH-remote URLs, with the workspace
+ * path prefix-mapped to the target machine's namespace first).
  *
  * Pure by design (no React / no `api`), so the whole surface is unit-testable
  * without a DOM or a host route. The menu and the settings panel only consume
@@ -32,6 +33,20 @@ export interface OpenWithConfig {
   /** Ids of open-with targets pinned to the menu's top level
    *  ('explorer' | 'vscode' | 'cursor' | 'zed' | 'custom:<id>'). */
   pinned: string[]
+  /** Workspace-path prefix → target-machine prefix, applied before the
+   *  `{path}` substitution of URL targets (e.g. `/code/www` → `D:/code/www`
+   *  so a DSH host running in a Linux container hands the Windows VS Code a
+   *  path it can resolve). */
+  pathMappings: PathMapping[]
+}
+
+/** One path-prefix mapping row (persisted with the rest of the blob). */
+export interface PathMapping {
+  id: string
+  /** The workspace-side prefix, e.g. `/code/www` (the DSH host's view). */
+  from: string
+  /** The target-machine prefix, e.g. `D:/code/www` (inserted verbatim). */
+  to: string
 }
 
 /** One menu-visible open target (built-in or custom, SSH-filtered). */
@@ -57,6 +72,7 @@ export const OPEN_WITH_DEFAULTS: OpenWithConfig = {
   sshHost: '',
   customEditors: [],
   pinned: [],
+  pathMappings: [],
 }
 
 /** The built-in open targets, in menu order. */
@@ -111,11 +127,23 @@ function isCustomEditor(value: unknown): value is CustomEditor {
     && typeof record.isVscodeFamily === 'boolean'
 }
 
+/** Whether a persisted value makes a structurally valid mapping row. Both
+ *  prefixes may be EMPTY — the settings panel edits rows in place and an
+ *  in-progress row must survive the round-trip (blank rows never match
+ *  anything, see {@link applyPathMappings}). */
+function isPathMapping(value: unknown): value is PathMapping {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return typeof record.id === 'string' && record.id !== ''
+    && typeof record.from === 'string'
+    && typeof record.to === 'string'
+}
+
 /**
  * Parse the persisted `openWith` blob (tolerant): malformed fields fall back
- * to the defaults, malformed custom-editor rows are dropped, and pinned ids
- * are kept verbatim (unknown ids are pruned when the targets are resolved —
- * the menu is the only consumer of the resolved list).
+ * to the defaults, malformed custom-editor / path-mapping rows are dropped,
+ * and pinned ids are kept verbatim (unknown ids are pruned when the targets
+ * are resolved — the menu is the only consumer of the resolved list).
  */
 export function parseOpenWithConfig(raw: unknown): OpenWithConfig {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { ...OPEN_WITH_DEFAULTS }
@@ -127,7 +155,10 @@ export function parseOpenWithConfig(raw: unknown): OpenWithConfig {
   const pinned = Array.isArray(record.pinned)
     ? record.pinned.filter((id): id is string => typeof id === 'string' && id !== '')
     : []
-  return { sshHost, customEditors, pinned }
+  const pathMappings = Array.isArray(record.pathMappings)
+    ? record.pathMappings.filter(isPathMapping)
+    : []
+  return { sshHost, customEditors, pinned, pathMappings }
 }
 
 /** Whether a custom editor id belongs to this config (id prefix match). */
@@ -171,16 +202,50 @@ export function openWithSshActive(config: OpenWithConfig): boolean {
 }
 
 /**
+ * Apply the path-prefix mappings to one workspace path. Only rows with BOTH
+ * prefixes non-blank participate (blank rows are settings-panel
+ * work-in-progress). Matching normalizes the path and every `from` to
+ * forward slashes ({@link normalizeUrlPath}) and trims trailing slashes off
+ * `from`, then requires a PATH-SEGMENT boundary: `/code/www` hits
+ * `/code/www` itself and `/code/www/a.ts`, never `/code/wwwx/a.ts`. The
+ * longest `from` wins (equal lengths keep the first row in configuration
+ * order); the `to` prefix replaces the match VERBATIM — no separator
+ * fixups, no re-encoding — once, at the head of the path only. Unmatched
+ * paths come back unchanged.
+ */
+export function applyPathMappings(path: string, mappings: readonly PathMapping[]): string {
+  const normalizedPath = normalizeUrlPath(path)
+  let best: { from: string; to: string } | undefined
+  for (const mapping of mappings) {
+    if (mapping.from.trim() === '' || mapping.to.trim() === '') continue
+    const from = normalizeUrlPath(mapping.from).replace(/\/+$/, '')
+    const hit = normalizedPath === from || normalizedPath.startsWith(`${from}/`)
+    if (hit && (best === undefined || from.length > best.from.length)) best = { from, to: mapping.to }
+  }
+  if (best === undefined) return path
+  return `${best.to}${normalizedPath.slice(best.from.length)}`
+}
+
+/**
  * The URL to open for one resolved target, or undefined when the target has
  * no URL form (reveal) or the template is malformed. The path is inserted
  * RAW into the template (browsers percent-encode as needed; VSCode-family
  * URL parsers consume the absolute path with its leading slash, e.g.
  * `vscode://file//home/u/f.ts` or `vscode://file/C:/Users/u/f.ts`).
+ *
+ * The configured path-prefix mappings apply to URL targets of the LOCAL
+ * workspace only: `reveal` resolves on the machine that owns the workspace
+ * (the host's file manager needs no translation), and in SSH mode the path
+ * lives in the remote machine's namespace — mapping it would corrupt it.
  */
 export function openWithUrl(target: OpenWithTarget, path: string, config: OpenWithConfig): string | undefined {
   if (target.kind !== 'url' || target.urlTemplate === undefined) return undefined
-  const normalized = normalizeUrlPath(path)
   const ssh = openWithSshActive(config)
+  const mapped = ssh ? path : applyPathMappings(path, config.pathMappings)
+  // A mapping hit is already fully forward-slashed except for the verbatim
+  // `to` prefix (a Windows drive letter must survive) — only an unmatched
+  // path still needs backslash normalization.
+  const normalized = mapped === path ? normalizeUrlPath(path) : mapped
   if (ssh && target.isVscodeFamily) {
     const scheme = schemeOf(target.urlTemplate)
     if (scheme === undefined) return undefined
