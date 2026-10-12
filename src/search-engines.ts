@@ -562,6 +562,26 @@ export async function runEngine(
   }
 }
 
+/**
+ * Run one RAW engine invocation (the caller's argv) under the shared stream
+ * contract: capped line streaming with the maxMatches+1 sentinel, close-based
+ * settlement (#883), and the 15s timeout. The content search's rg pass
+ * (fs-content-search.ts) rides THIS function — and therefore the same
+ * `spawner` hook the name-search engines use — so tests can script its child
+ * without a real binary, and a real deployment shares one probe/spawn seam.
+ * Note the exit-code contract differs from `--files` listing: rg exits 1
+ * when NOTHING matched, which streamLines already treats as success.
+ */
+export async function runEngineArgv(
+  probe: EngineProbe,
+  argv: readonly string[],
+  cwd: string,
+  cap: number,
+): Promise<{ lines: string[]; truncated: boolean }> {
+  const child = spawner(probe.binary, argv, { cwd, stdio: ['ignore', 'pipe', 'ignore'] })
+  return streamLines(child, cap)
+}
+
 /** The engines a caller may actually try (verified, not broken). */
 export async function usableEngines(): Promise<readonly EngineProbe[]> {
   const probes = await probeEngines()
