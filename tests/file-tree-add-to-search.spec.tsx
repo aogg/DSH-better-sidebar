@@ -266,7 +266,7 @@ function searchGroup(container: HTMLElement, index: 0 | 1): HTMLElement {
 }
 
 function chipTexts(group: HTMLElement): string[] {
-  return [...group.querySelectorAll<HTMLElement>('span[class*="contentChip"]')].map(chip => chip.textContent)
+  return [...group.querySelectorAll<HTMLElement>('span[class*="contentChip"]')].map(chip => chip.textContent ?? '')
 }
 
 /** The results region body (the explorer body that is NOT the file tree). */

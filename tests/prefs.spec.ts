@@ -44,6 +44,8 @@ describe('side card preferences', () => {
         customCss: '',
         htmlViewerNoSandbox: false,
         htmlViewerDefaultUnsafe: false,
+        rightbarOpenOnNewSession: true,
+        rightbarOpenRatio: 0.35,
         tabsEnabled: {},
         viewersEnabled: {},
         pluginSettings: {},
@@ -65,6 +67,8 @@ describe('side card preferences', () => {
         customCss: '',
         htmlViewerNoSandbox: false,
         htmlViewerDefaultUnsafe: false,
+        rightbarOpenOnNewSession: true,
+        rightbarOpenRatio: 0.35,
         tabsEnabled: {},
         viewersEnabled: {},
         pluginSettings: {},
@@ -86,6 +90,8 @@ describe('side card preferences', () => {
         customCss: '',
         htmlViewerNoSandbox: false,
         htmlViewerDefaultUnsafe: false,
+        rightbarOpenOnNewSession: true,
+        rightbarOpenRatio: 0.35,
         tabsEnabled: {},
         viewersEnabled: {},
         pluginSettings: {},
@@ -155,6 +161,24 @@ describe('side card preferences', () => {
     expect((await loadPrefs(wire({}))).customCss).toBe('')
     expect((await loadPrefs(wire({ customCss: 7 }))).customCss).toBe('')
     expect((await loadPrefs(wire({ customCss: 'html { }' }))).customCss).toBe('html { }')
+  })
+
+  it('clamps the rightbar open ratio into the declared range; non-numbers fall to the default', async () => {
+    // A hand-edited (or older-writer) document must not poison the layout:
+    // anything outside 0.15–0.7 lands on the nearest bound, and a malformed
+    // value falls to the schema default.
+    expect((await loadPrefs(wire({}))).rightbarOpenRatio).toBe(0.35)
+    expect((await loadPrefs(wire({ rightbarOpenRatio: 0.5 }))).rightbarOpenRatio).toBe(0.5)
+    expect((await loadPrefs(wire({ rightbarOpenRatio: 0.05 }))).rightbarOpenRatio).toBe(0.15)
+    expect((await loadPrefs(wire({ rightbarOpenRatio: 0.95 }))).rightbarOpenRatio).toBe(0.7)
+    expect((await loadPrefs(wire({ rightbarOpenRatio: 'wide' }))).rightbarOpenRatio).toBe(0.35)
+    expect((await loadPrefs(wire({ rightbarOpenRatio: Number.NaN }))).rightbarOpenRatio).toBe(0.35)
+  })
+
+  it('defaults the new-session auto-open to on; only a real boolean flips it', async () => {
+    expect((await loadPrefs(wire({}))).rightbarOpenOnNewSession).toBe(true)
+    expect((await loadPrefs(wire({ rightbarOpenOnNewSession: false }))).rightbarOpenOnNewSession).toBe(false)
+    expect((await loadPrefs(wire({ rightbarOpenOnNewSession: 0 }))).rightbarOpenOnNewSession).toBe(true)
   })
 
   it('IGNORES the retired title-bar keys: a stored document that still carries them parses', async () => {

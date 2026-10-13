@@ -82,6 +82,11 @@ describe('dsh-better-sidebar plugin export shape', () => {
     // The separate file-window mode is the default (each file opens its own
     // tab; the merged editor-explorer is opt-in).
     expect(resolved.editorExplorer).toBe(false)
+    // The right-sidebar pair: new sessions auto-open the column (on), and the
+    // open width is 35% of the viewport until the user (or a drag write-back)
+    // changes it.
+    expect(resolved.rightbarOpenOnNewSession).toBe(true)
+    expect(resolved.rightbarOpenRatio).toBe(0.35)
     // The workspace fence is GONE: `workspaceFence` is no longer a declared
     // schema field, so a resolved document does not carry it. A legacy stored
     // value passes through the OPEN object schema untouched (and is inert).
@@ -125,5 +130,26 @@ describe('dsh-better-sidebar plugin export shape', () => {
     const { customCss, ...schemaDefaults } = SIDEBAR_PREFS_DEFAULTS
     void customCss
     expect(overridden).toEqual({ ...schemaDefaults, openByDefault: false, defaultWidthPercent: 45, changesDiffFloat: true })
+  })
+
+  it('marks every preference field volatile (a settings edit must not remount the plugin)', async () => {
+    // The Loader's volatile-commit path is the WHOLE mechanism that keeps a
+    // preference edit off the plugin-remount path (src/config.ts): the marked
+    // fields are wrapped in Volatile references and committed live. A new
+    // preference field that misses the mark makes every settings write remount
+    // the client. `listLimit` is deliberately NOT volatile (deployment limits
+    // keep the remount semantics); every PrefsSchema field must be.
+    // The marking happens on the Loader ROW schema (Config spreads the
+    // volatile copies over the limits); PrefsSchema itself stays unmarked.
+    const { Config } = await import('../src/config.ts')
+    const { SIDEBAR_PREFS_DEFAULTS } = await import('../src/prefs-shared.ts')
+    const dict = (Config as unknown as { dict?: Record<string, { meta?: { volatile?: boolean } }> }).dict ?? {}
+    for (const key of Object.keys(SIDEBAR_PREFS_DEFAULTS)) {
+      expect(dict[key], `pref field "${key}" is in the schema`).toBeDefined()
+      expect(dict[key]?.meta?.volatile, `pref field "${key}" is volatile`).toBe(true)
+    }
+    // The non-volatile residue is exactly the deployment-limit set.
+    const nonVolatile = Object.entries(dict).filter(([, field]) => field?.meta?.volatile !== true).map(([key]) => key)
+    expect(nonVolatile).toEqual(['listLimit'])
   })
 })

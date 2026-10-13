@@ -20,11 +20,13 @@ import { RenderBoundary } from './RenderBoundary.tsx'
 import { createNativeTabRecords } from './native/tab-adapter.tsx'
 import { registerNativeSurface } from './native/index.ts'
 import { registerBottomToggle } from './sidebar/bottom-toggle.tsx'
+import { registerStartLinks } from './sidebar/start-links.tsx'
 import { createNativeSurface } from './native/surface.ts'
 import { isTargetAvailable, openInterceptedLink, registerLinkInterception, shouldTakeOverLink } from './link-intercept.ts'
 import { registerImeGuard } from './ime-guard.ts'
 import { registerSettingsNavIcon } from './settings-nav-icon.ts'
-import { loadBootDecision } from './prefs.ts'
+import { createPrefsWriter, loadBootDecision } from './prefs.ts'
+import { createRightbarWidthSync } from './sidebar/rightbar-width.ts'
 import { SideCardSection } from './SideCardSection.tsx'
 import { api } from './api.ts'
 import { LOCALE_NS, attachLocale, attachBetterLocale, t, zh, en } from './locales.ts'
@@ -188,6 +190,33 @@ export function apply(ctx: Context): void {
   ctx.effect(
     () => registerBottomToggle(ctx, sidebarStore),
     'dsh-better-sidebar: bottom-workbench toggle',
+  )
+  // The hero (start page) quick-entry row: a MutationObserver over the host's
+  // conversation slot phase marker portals one row of capsule links into the
+  // hero root while the phase is 'hero' (observer + portal cleaned up by the
+  // effect disposer).
+  ctx.effect(
+    () => registerStartLinks(ctx, service),
+    'dsh-better-sidebar: hero start links',
+  )
+  // The right sidebar's open-width ratio: applies the configured width once per
+  // host expansion (a hidden → tracked transition) and writes the dragged width
+  // back (debounced) through the shared prefs writer. Every probe failure is a
+  // silent degrade (see rightbar-width.ts).
+  ctx.effect(
+    () => {
+      const writer = createPrefsWriter(api, next => { sidebarStore.setPrefs(next) })
+      const sync = createRightbarWidthSync({
+        ctx,
+        getRatio: () => sidebarStore.getPrefs().rightbarOpenRatio,
+        writeRatio: (ratio) => { void writer({ rightbarOpenRatio: ratio }) },
+      })
+      return () => {
+        sync.dispose()
+        writer.dispose()
+      }
+    },
+    'dsh-better-sidebar: rightbar open width sync',
   )
   ctx.effect(
     () => () => { nativeSurface.dispose(); service.setSurface(undefined) },
