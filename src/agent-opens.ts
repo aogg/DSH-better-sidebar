@@ -29,6 +29,7 @@ import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Context } from './context-types.ts'
 import type { SidebarPrefs } from './prefs-shared.ts'
+import { workspaceDirPrefixRemainder } from './workspace-prefix.ts'
 
 /** What the model asked to open. */
 export type AgentOpenKind = 'file' | 'folder' | 'url'
@@ -152,15 +153,32 @@ async function classifyTarget(raw: string, cwd: string): Promise<{ kind: AgentOp
   if (!isWindowsDrivePrefix(raw) && /^[a-z][a-z0-9+.-]*:/i.test(raw)) {
     throw new Error('sidebar_open only accepts http:// and https:// URLs; use a local path for files')
   }
-  const target = resolve(isAbsolute(raw) ? raw : join(cwd, raw))
+  const direct = resolve(isAbsolute(raw) ? raw : join(cwd, raw))
+  let target = direct
   let info
   try {
     info = await stat(target)
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code
-    if (code === 'ENOENT') throw new Error(`"${raw}" does not exist (resolved to "${target}")`, { cause: error })
-    if (code === 'EACCES' || code === 'EPERM') throw new Error(`"${target}" is not readable`, { cause: error })
-    throw new Error(`cannot open "${target}": ${error instanceof Error ? error.message : String(error)}`, { cause: error })
+    // Workspace-dir-prefix compatibility (workspace-prefix.ts): only a
+    // MISSING literal target may retry the spelling with the leading
+    // `basename(cwd)` segment stripped, and the retry must EXIST to win — a
+    // real same-named subdirectory already hit the stat above. Every other
+    // failure surfaces exactly as before.
+    const remainder = code === 'ENOENT' ? workspaceDirPrefixRemainder(cwd, raw) : undefined
+    if (remainder !== undefined && remainder !== '') {
+      const alternate = resolve(join(cwd, remainder))
+      const retry = await stat(alternate).then(
+        (found) => { target = alternate; return found },
+        () => undefined,
+      ).catch(() => undefined)
+      if (retry !== undefined) info = retry
+    }
+    if (info === undefined) {
+      if (code === 'ENOENT') throw new Error(`"${raw}" does not exist (resolved to "${direct}")`, { cause: error })
+      if (code === 'EACCES' || code === 'EPERM') throw new Error(`"${direct}" is not readable`, { cause: error })
+      throw new Error(`cannot open "${direct}": ${error instanceof Error ? error.message : String(error)}`, { cause: error })
+    }
   }
   const title = basenameOf(target)
   return { kind: info.isDirectory() ? 'folder' : 'file', target, title: title === '' ? raw : title }

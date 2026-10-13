@@ -17,10 +17,12 @@
  * way they did with the fence: the change is the SEMANTICS — "resolve" rather
  * than "guard".
  */
+import { stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { requireAbsolute } from './fs-tree.ts'
 import { resolveSessionPath } from './session-path.ts'
+import { workspaceDirPrefixRemainder } from './workspace-prefix.ts'
 
 /**
  * Resolve an existing path to one absolute, lexically-normalized target.
@@ -74,4 +76,40 @@ export function resolveTarget(cwd: string, target: string): string {
   // write / rename / remove / upload, media, html) shares ONE contract.
   const joined = isAbsolute(homeExpanded) ? homeExpanded : join(cwd, homeExpanded)
   return requireAbsolute(resolveSessionPath(cwd, joined))
+}
+
+/** Whether some path exists on disk (any node type). Probe failures read as absent. */
+export async function pathExists(path: string): Promise<boolean> {
+  return await stat(path).then(() => true).catch(() => false)
+}
+
+/**
+ * Resolve a READ target with the workspace-dir-prefix compatibility, keeping
+ * the literal meaning whenever it can be honored.
+ *
+ * Fallback order (the compatibility can only fire when the target qualifies —
+ * see workspace-prefix.ts — and the resolution layer here is the one that can
+ * stat, so the probe lives at THIS layer rather than in any client-side or
+ * purely lexical one):
+ *
+ * 1. the target resolved verbatim, when it EXISTS — a real same-named
+ *    subdirectory always wins;
+ * 2. the target with the leading `basename(cwd)` segment stripped, when THAT
+ *    exists — the chat-spelled spelling (`my-ai/dsh/…` under a cwd whose last
+ *    segment is `my-ai`) opens the file it meant;
+ * 3. the verbatim resolution otherwise — the upstream error the caller
+ *    surfaces (ENOENT on read, creation for a write) names the literal path,
+ *    exactly as before this compatibility existed.
+ *
+ * A target that does not qualify skips every probe and is returned verbatim
+ * (zero extra stats, zero behavior change for absolute paths, `..` traversal
+ * and non-first-segment mentions).
+ */
+export async function resolveTargetCompat(cwd: string, target: string): Promise<string> {
+  const remainder = workspaceDirPrefixRemainder(cwd, target)
+  if (remainder === undefined) return resolveTarget(cwd, target)
+  const direct = resolveTarget(cwd, target)
+  if (await pathExists(direct)) return direct
+  const alternate = resolveTarget(cwd, remainder)
+  return (await pathExists(alternate)) ? alternate : direct
 }
