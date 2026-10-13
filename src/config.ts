@@ -17,6 +17,8 @@
 import z from '@deepseek-ai/schemastery'
 import {
   EXPLORER_EXCLUDE_DEFAULTS,
+  RIGHTBAR_RATIO_MAX,
+  RIGHTBAR_RATIO_MIN,
   type SidebarPrefs,
 } from './prefs-shared.ts'
 
@@ -96,6 +98,12 @@ export const PrefsSchema: z<SidebarPrefs> = z.object({
   customCss: z.string(),
   htmlViewerNoSandbox: z.boolean().default(false),
   htmlViewerDefaultUnsafe: z.boolean().default(false),
+  // The right-sidebar width/open behaviour (feature pair: open ratio +
+  // new-session auto-open). The ratio range mirrors the client clamp
+  // (prefs-shared.ts); the settings service enforces it on write, the client
+  // re-clamps on read (a hand-edited document must not poison the layout).
+  rightbarOpenOnNewSession: z.boolean().default(true),
+  rightbarOpenRatio: z.number().min(RIGHTBAR_RATIO_MIN).max(RIGHTBAR_RATIO_MAX).default(0.35),
   // Per-feature enable switches are OPEN maps (any tab/viewer id, built-in or
   // external): an absent key means enabled, so old documents resolve to {}
   // (everything on) with no migration. Non-boolean values fail validation.

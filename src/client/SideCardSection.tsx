@@ -54,6 +54,7 @@ import clsx from 'clsx'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SidebarPrefs } from '../prefs-shared.ts'
+import { RIGHTBAR_RATIO_MAX, RIGHTBAR_RATIO_MIN } from '../prefs-shared.ts'
 import { api } from './api.ts'
 import { parsePrefs } from './prefs.ts'
 import { AddPluginModal, type PluginKind } from './add-plugin-modal.tsx'
@@ -187,6 +188,122 @@ function Switch(props: {
         <span className={css.switchThumb} />
       </span>
     </label>
+  )
+}
+
+/**
+ * 水平拖动的整数输入框（打开宽度占比行）：拖动 3px 记 1%，键入走普通文本编辑，
+ * 提交统一在 blur / Enter / 拖动松手（clamped 整数，提交方负责换算与持久化）。
+ * 草稿是本地 state；外部提交（含失败回滚）通过 props.value 的变化重置草稿。
+ */
+function DragNumberInput(props: {
+  value: number
+  min: number
+  max: number
+  label: string
+  onCommit: (next: number) => void
+}) {
+  const { value, min, max, label, onCommit } = props
+  const [draft, setDraft] = useState(String(value))
+  const dragRef = useRef<{ startX: number; startValue: number } | null>(null)
+  const clamp = (next: number): number => Math.min(max, Math.max(min, Math.round(next)))
+  // 外部值变化（含提交失败回滚）→ 草稿回到既存值。
+  useEffect(() => { setDraft(String(value)) }, [value])
+  const commitDraft = (): void => {
+    const parsed = Number(draft)
+    if (!Number.isFinite(parsed)) {
+      setDraft(String(value))
+      return
+    }
+    const next = clamp(parsed)
+    setDraft(String(next))
+    onCommit(next)
+  }
+  return (
+    <span
+      className={css.dragNumber}
+      data-dsh-drag-number=""
+      onPointerDown={event => {
+        if (event.button !== 0) return
+        event.preventDefault()
+        // jsdom lacks setPointerCapture — the tests dispatch plain pointer events.
+        event.currentTarget.setPointerCapture?.(event.pointerId)
+        dragRef.current = { startX: event.clientX, startValue: value }
+      }}
+      onPointerMove={event => {
+        const drag = dragRef.current
+        if (drag === null) return
+        // 3px 记 1%：步进粒度 1%，手感与滚动条微调接近。
+        const step = Math.round((event.clientX - drag.startX) / 3)
+        setDraft(String(clamp(drag.startValue + step)))
+      }}
+      onPointerUp={event => {
+        if (dragRef.current === null) return
+        dragRef.current = null
+        event.currentTarget.releasePointerCapture?.(event.pointerId)
+        commitDraft()
+      }}
+      onPointerCancel={() => {
+        if (dragRef.current === null) return
+        dragRef.current = null
+        commitDraft()
+      }}
+    >
+      <input
+        type="text"
+        inputMode="numeric"
+        className={css.dragNumberInput}
+        value={draft}
+        min={min}
+        max={max}
+        step={1}
+        aria-label={label}
+        onChange={event => { setDraft(event.currentTarget.value) }}
+        onBlur={commitDraft}
+        onKeyDown={event => {
+          if (event.key === 'Enter') event.currentTarget.blur()
+        }}
+      />
+      <span className={css.suffix}>%</span>
+    </span>
+  )
+}
+
+/**
+ * 单选组（真实 radio，原生语义）：一行两个选项的「打开 / 不打开」。
+ */
+function RadioPair(props: {
+  name: string
+  label: string
+  onLabel: string
+  offLabel: string
+  value: boolean
+  onChange: (next: boolean) => void
+}) {
+  const { name, label, onLabel, offLabel, value, onChange } = props
+  return (
+    <span className={css.radioGroup} role="radiogroup" aria-label={label} data-dsh-radio-pair={name}>
+      <label className={css.radioOption}>
+        <input
+          type="radio"
+          name={name}
+          value="on"
+          checked={value}
+          onChange={() => { onChange(true) }}
+        />
+        <span>{onLabel}</span>
+      </label>
+      <label className={css.radioOption}>
+        <input
+          type="radio"
+          name={name}
+          value="off"
+          checked={!value}
+          onChange={() => { onChange(false) }}
+        />
+        <span>{offLabel}</span>
+      </label>
+    </span>
   )
 }
 
@@ -883,6 +1000,37 @@ export function SideCardSection({ store, service }: SideCardSectionProps) {
       {/* 常规: the DSH settings-row recipe — title/desc left, control right. */}
       <div className={css.group}>
         <div className={css.groupHeading}>{t('settingsGeneralTitle')}</div>
+        <div className={css.row}>
+          <span className={css.rowText}>
+            <span className={css.title}>{t('settingsRightbarRatioTitle')}</span>
+            <span className={css.desc}>{t('settingsRightbarRatioDesc')}</span>
+          </span>
+          <span className={css.control}>
+            <DragNumberInput
+              label={t('settingsRightbarRatioTitle')}
+              value={Math.round(prefs.rightbarOpenRatio * 100)}
+              min={Math.round(RIGHTBAR_RATIO_MIN * 100)}
+              max={Math.round(RIGHTBAR_RATIO_MAX * 100)}
+              onCommit={percent => { applyPref({ rightbarOpenRatio: Math.round(percent * 10) / 1000 }) }}
+            />
+          </span>
+        </div>
+        <div className={css.row}>
+          <span className={css.rowText}>
+            <span className={css.title}>{t('settingsOpenOnNewSessionTitle')}</span>
+            <span className={css.desc}>{t('settingsOpenOnNewSessionDesc')}</span>
+          </span>
+          <span className={css.control}>
+            <RadioPair
+              name="dsh-rightbar-open-on-new-session"
+              label={t('settingsOpenOnNewSessionTitle')}
+              onLabel={t('settingsOpenOnNewSessionOn')}
+              offLabel={t('settingsOpenOnNewSessionOff')}
+              value={prefs.rightbarOpenOnNewSession}
+              onChange={next => { applyPref({ rightbarOpenOnNewSession: next }) }}
+            />
+          </span>
+        </div>
         <div className={css.row}>
           <span className={css.rowText}>
             <span className={css.title}>{t('settingsOpenToolsTitle')}</span>

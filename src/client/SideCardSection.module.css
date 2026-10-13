@@ -1005,3 +1005,56 @@
   color: var(--dsw-alias-state-error-primary);
   padding: 0 2px;
 }
+
+/* 水平拖动的整数输入（打开宽度占比行）：grab 光标表达可拖性；拖动判定在
+   容器上，输入编辑仍走原生 input。 */
+.dragNumber {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  cursor: ew-resize;
+  user-select: none;
+}
+
+.dragNumberInput {
+  width: 52px;
+  padding: 4px 6px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 13px;
+  text-align: right;
+  cursor: text;
+}
+
+.dragNumberInput:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l4);
+  outline-offset: 1px;
+}
+
+.dragNumber .suffix {
+  cursor: ew-resize;
+}
+
+/* 单选组（新会话自动打开右栏行）：真实 radio + 文字，两枚并排。 */
+.radioGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.radioOption {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+.radioOption input {
+  accent-color: var(--dsw-alias-button-primary-fill);
+  cursor: pointer;
+}
