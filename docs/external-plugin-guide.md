@@ -1082,6 +1082,18 @@ interface SettingsDescriptor {
 
 历史背景（`< v0.23.0`）：旧的实现用 realpath 解析后比对工作区前缀，越界回 403，并有一个 `workspaceFence` 开关（默认开）可临时关闭；开启时编辑器/文件树错误面会显示原因 + 一键关闭按钮（`FenceErrorNotice`）。用户要求删除该检查，上述代码路径随之删除（`src/path-security.ts` 现在是纯词法解析）。旧 profile 里遗留的 `workspaceFence` 键只是**未知键**——schemastery 的 object schema 对未知键是容忍的，既不报错也不再有任何效果。
 
+### 8.1.1 路径解析的工作区目录名前缀兼容
+
+模型在聊天正文里写文件链接时，常把它看到的工作区绝对路径的第一段抄进相对路径：cwd 是 `/code/www/my/gitee/my-ai`，它写 `[…](<my-ai/dsh/…/index.md>)`。宿主把该链接原样变成 `dsh-resource://file/…` 地址，侧栏 fs 路由再把它 join 到 cwd 上，得到 `<cwd>/my-ai/dsh/…`（多一层），ENOENT。为兼容这一拼写，**读路径**的解析（`fs.read` / `fs.readPage` / `fs.tree` / `fs.trees` / `/sidebar/file` 媒体 / `/sidebar/html` 预览 / `sidebar_open` 工具）带一条**存在性守卫的回退**（`src/workspace-prefix.ts` 纯词法层 + `path-security.resolveTargetCompat` 探测层，`fs.read`/`fs.readPage` 的回退在 `resolveGitPath` 的「会话相对 → 仓库根」两档之间）：
+
+1. **按字面解析，存在即用**——真实同名子目录永远优先，兼容不改变任何既有命中；
+2. 字面路径**不存在**、路径是相对的（或客户端预 join 出的 `<cwd>/…` 形状）、且**第一段 === `basename(cwd)`**（大小写敏感；Windows 上大小写变体会先命中字面探测）时，改试剥离后的路径，**存在才采用**；
+3. 两者都不存在 → 维持字面解析结果，上游报错原样（ENOENT 指向字面路径）。
+
+不触发剥离的拼写：`..` 出现在任何段（剥离会改变 `..` 的解析结果，故含 `..` 一律不动）、`~` 开头、首段之外的出现（`a/my-ai/b`）、绝对路径且不以 `<cwd>/` 开头、`?`/`#`（仍在地址解析层剥离，先于这一切）。回退放在宿主 fs 层而不是客户端或纯词法层，因为**只有这一层能 stat**——客户端 join 与地址语法解析保持原样。
+
+**写路径不按「不存在」重定向**（新文件不存在是常态，无法与陈旧前缀区分）：`fs.write`（编辑器保存）只在**带数字 `expectedMtimeMs` 基线**（证明这是既有文件的编辑会话，基线属于被读侧解析出的那个文件）、字面目标已不存在、且剥离目标存在这三者同时成立时才落到剥离路径；无基线的写入、`fs.rename` / `fs.mkdir` / `fs.createFile` / `fs.remove` / upload 保持字面语义。tab 的地址（与 contentId）仍带原拼写，读请求每次经路由解析——对消费插件透明，`resolveTarget`/`ensureWorkspaceWritePath` 的词法契约不变。
+
 ---
 
 ## 9. 生命周期与 HMR
