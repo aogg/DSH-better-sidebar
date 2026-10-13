@@ -31,7 +31,10 @@
  * offer "upload here", "new folder" and "new file" (an inline editor at the
  * top of that level; the two creators are mutually exclusive); every row can
  * copy the relative or absolute path (with a brief
- * "copied" label replacing the button after a successful write).
+ * "copied" label replacing the button after a successful write), and every
+ * row offers「添加到搜索中」— a submenu feeding the content-search
+ * include/exclude chips with this row's path (when the caller provides
+ * `onAddToContentSearch`).
  *
  * Rows are memoized components (FileRow / DirRow) fed by stable callbacks and
  * per-row booleans, so a copy flash, a drag target or a selection change only
@@ -46,7 +49,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import {
-  IconArchiveOutlineRegular, IconChevronRightOutlineRegular, IconCloseFillRegular, IconCodeOutlineRegular, IconCopyOutlineRegular,
+  IconArchiveOutlineRegular, IconChevronRightOutlineRegular, IconCloseFillRegular, IconCloseOutlineRegular, IconCodeOutlineRegular, IconCopyOutlineRegular,
   IconDownloadOutlineRegular,
   IconEditOutlineRegular, IconFolderOpenRegular, IconLinkOutlineRegular, IconPlusOutlineRegular, IconTrashOutlineRegular,
   Menu, type MenuEntry, type MenuItem, writeClipboard,
@@ -58,7 +61,7 @@ import { compactChain, compactLoadTargets } from './file-tree-compact.ts'
 import { DEFAULT_FILE_TREE_SORT, sortEntries, type FileTreeSort } from './file-tree-sort.ts'
 import { FS_TREES_MAX_PATHS } from '../fs-batch.ts'
 import { builtinFileIcon, builtinFolderIcon } from './file-icons.tsx'
-import { IconUploadOutline16, IconVscode16 } from './icons.tsx'
+import { IconContentSearchOutline16, IconUploadOutline16, IconVscode16 } from './icons.tsx'
 import { isLikelyImeKey } from './ime-guard.ts'
 import { useSubmenuFlip } from './menu-flip.ts'
 import type { OpenInApp, OpenInAppEntry } from './open-in-app.ts'
@@ -526,6 +529,13 @@ export function FileTree(props: {
   onToggleOpenWithPin?: (targetId: string) => void
   /** Insert `@<relative path>` into the composer draft (file vs directory). */
   onReferenceFile: (path: string, isDir: boolean) => void
+  /**
+   * Context-menu 「添加到搜索中」: the caller (TreePanel) owns the content-search
+   * chip lists — this tree only reports the right-clicked row's ABSOLUTE path
+   * plus which list the user picked (`include` / `exclude`). Absent → the
+   * whole submenu is not offered (the same contract as the open escapes).
+   */
+  onAddToContentSearch?: (path: string, target: 'include' | 'exclude') => void
   /** The explorerExclude pref patterns: the HOST filters the listing with
    *  them (excluded rows never arrive), so changing the list wipes the level
    *  cache and reloads — the rows themselves need no client-side filter. */
@@ -580,7 +590,7 @@ export function FileTree(props: {
   const {
     sessionId, cwd, expanded, revealed, onOpenFileNewTab, onOpenFileSide,
     openInApp, openWithTargets, openWithPinned, openWithSsh, onOpenWith, onToggleOpenWithPin,
-    openWithShowPluginTargets, exclude,
+    openWithShowPluginTargets, exclude, onAddToContentSearch,
     onPathRenamed, onPathDeleted, refreshTick, onUploadRequest, busy, hidden, visible, service,
   } = props
   const sort = props.sort ?? DEFAULT_FILE_TREE_SORT
@@ -1641,6 +1651,33 @@ export function FileTree(props: {
     return []
   }
 
+  /**
+   * The「添加到搜索中」submenu: feed the content-search section's
+   * include/exclude chip lists with the right-clicked row. The tree only
+   * REPORTS the row (absolute path + which list); TreePanel owns the chip
+   * lists and derives the chip shape — see TreePanel's addToContentSearch.
+   * The parent row copies the open-with submenu's label contract verbatim:
+   * the primitives Menu draws no chevron for submenu parents, so the
+   * trailing arrow rides inside the label (full-width flex row, right
+   * aligned). Rows: files AND directories alike (a directory names a
+   * subtree scope, a file names itself); the breadcrumb/compact rows and
+   * the workspace root reuse the same builder, which is expected.
+   */
+  const addToSearchSubmenu = (): MenuItem => ({
+    id: 'add-to-search',
+    label: (
+      <span className={css.openWithLabel}>
+        <span className={css.openWithName}>{t('addToSearch')}</span>
+        <IconChevronRightOutlineRegular size={14} className={css.openWithChevron} aria-hidden />
+      </span>
+    ),
+    icon: <IconContentSearchOutline16 size={14} />,
+    submenu: [
+      { id: 'add-to-search:include', label: t('addToSearchInclude'), icon: <IconPlusOutlineRegular size={14} /> },
+      { id: 'add-to-search:exclude', label: t('addToSearchExclude'), icon: <IconCloseOutlineRegular size={14} /> },
+    ],
+  })
+
   /** Download a file through the host route (raw bytes, binary-safe). */
   const downloadFile = (path: string): void => {
     const url = downloadUrl({ sessionId, cwd }, path)
@@ -2278,6 +2315,10 @@ export function FileTree(props: {
             : []),
           // 5: ZIP of the current selection (≥2 rows, or one lone directory).
           ...(rowMenu === null ? [] : zipEntries(rowMenu)),
+          // 5.5:「添加到搜索中」— feed the content-search include/exclude
+          // chips with this row (every row kind; the caller decides whether
+          // the submenu is offered at all).
+          ...(rowMenu !== null && onAddToContentSearch !== undefined ? [addToSearchSubmenu()] : []),
           // 6: copy, then the mutations (never on the workspace root row).
           { id: 'relative', label: t('copyRelative'), icon: <IconCopyOutlineRegular size={14} /> },
           { id: 'absolute', label: t('copyAbsolute'), icon: <IconCopyOutlineRegular size={14} /> },
@@ -2329,6 +2370,12 @@ export function FileTree(props: {
           }
           if (id === 'archive-selection') {
             downloadArchive([...selected])
+            return
+          }
+          // 「添加到搜索中」submenu: hand the row + the picked list to the
+          // caller (TreePanel owns the chips; the id suffix IS the list).
+          if (id.startsWith('add-to-search:')) {
+            onAddToContentSearch?.(target.path, id === 'add-to-search:include' ? 'include' : 'exclude')
             return
           }
           if (id === 'download') {

@@ -3,6 +3,10 @@
  * (300ms debounce; an in-flight search is aborted by the next keystroke),
  * with a permanent content-search entry row under it — expanding reveals a
  * keyword input (Enter runs, no debounce) plus include/exclude chip lists,
+ * and the tree's context menu feeds the same lists (「添加到搜索中」→
+ * 添加到包含/排除 adds the right-clicked row as a chip and expands the
+ * section; nothing else is touched — no query runs, a live name search
+ * keeps its results),
  * and the two searches share ONE results region (whichever query is live
  * owns it; starting one clears the other; clearing both restores the tree)
  * — all over the shared controlled FileTree. The results panel and the tree
@@ -35,7 +39,7 @@ import { IconContentSearchOutline16, IconUploadOutline16 } from './icons.tsx'
 import type { OpenInApp } from './open-in-app.ts'
 import type { OpenWithTarget } from './open-with.ts'
 import { t } from './locales.ts'
-import { isWithinWorkspace, resolveSidebarPath } from './paths.ts'
+import { isWithinWorkspace, relativeTo, resolveSidebarPath } from './paths.ts'
 import { IconButton } from './ui/index.ts'
 import { UploadOverlay } from './UploadOverlay.tsx'
 import {
@@ -266,18 +270,71 @@ export function TreePanel(props: {
     setContentOpen(!contentOpen)
   }
 
+  /**
+   * The ONE chip-append rule shared by the panel's Enter handlers and the
+   * tree context menu: trim, drop empties, and silently ignore a value that
+   * is already in the list (no duplicate chips). Returns the list unchanged
+   * when the value lands nowhere, so a functional setState can hand it back
+   * without churning identity.
+   */
+  const addChip = (list: string[], value: string): string[] => {
+    const trimmed = value.trim()
+    return trimmed === '' || list.includes(trimmed) ? list : [...list, trimmed]
+  }
+
   /** Add one include/exclude chip from its draft (Enter): trimmed, deduped,
    *  empty drafts just clear. */
   const addContentEntry = (
     draft: string,
     setDraft: Dispatch<SetStateAction<string>>,
-    list: readonly string[],
+    list: string[],
     setList: Dispatch<SetStateAction<string[]>>,
   ): void => {
-    const value = draft.trim()
     setDraft('')
-    if (value === '' || list.includes(value)) return
-    setList([...list, value])
+    setList(addChip(list, draft))
+  }
+
+  /**
+   * A tree context-menu 「添加到包含 / 添加到排除」: turn the right-clicked
+   * row's ABSOLUTE path into a content-search chip, then expand the section
+   * so the chip's landing spot is visible.
+   *
+   * Chip shape = exactly what typing the path into the include/exclude input
+   * would mean: the cwd-relative form (`relativeTo`, '/' separators — the
+   * host resolves a bare relative entry against the session cwd). The host
+   * (fs-content-search.ts) classifies an entry resolving to an EXISTING
+   * directory as a subtree scope on BOTH sides — include: relative-prefix
+   * judging (`buildContentFilter`'s `inScopeDir`: the directory and
+   * everything under it), exclude: the same subtree dropped (the `excluded`
+   * ancestor walk) — so a bare relative dir path suffices; no `dir/**` glob
+   * is needed. A file names itself. A path OUTSIDE the cwd passes through
+   * `relativeTo` unchanged as an ABSOLUTE path — the host's `resolveTarget`
+   * accepts absolute entries, so the chip classifies identically (an include
+   * scope may sit outside the workspace; the names-search "copy relative"
+   * row already falls back the same way). No cwd (no session root) → nothing
+   * to project the row against, and no row could have been right-clicked
+   * anyway; the call is a deliberate no-op. The workspace root itself yields
+   * `'.'` (the cwd): include = the whole workspace; an exclude naming the
+   * search root is a host-side no-op by design (`excluded` never excludes
+   * the root) — kept uniform rather than special-cased, so one rule covers
+   * every row.
+   *
+   * Deliberately narrow side effects: chips append (deduped by the same
+   * {@link addChip} rule as `addContentEntry` — a duplicate lands silently
+   * nowhere), the section is force-expanded, and NOTHING else happens here —
+   * no query is committed or cleared (a live NAME search keeps running and
+   * keeps owning the results region until the user runs a content search)
+   * and the keyword / chip drafts are untouched. A live content search
+   * naturally re-runs with the new chip through the existing effect — the
+   * very same thing that happens when a chip is typed by hand.
+   */
+  const addToContentSearch = (path: string, target: 'include' | 'exclude'): void => {
+    const root = cwd
+    if (root === undefined) return
+    const chip = relativeTo(root, path)
+    if (target === 'include') setContentInclude(list => addChip(list, chip))
+    else setContentExclude(list => addChip(list, chip))
+    setContentOpen(true)
   }
 
   const contentIncludeKey = contentInclude.join('\0')
@@ -620,6 +677,7 @@ export function TreePanel(props: {
         openWithShowPluginTargets={openWithShowPluginTargets}
         exclude={exclude}
         onReferenceFile={onReferenceFile}
+        onAddToContentSearch={addToContentSearch}
         onPathRenamed={onPathRenamed}
         onPathDeleted={onPathDeleted}
         refreshTick={refreshTick}
