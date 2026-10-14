@@ -62,3 +62,95 @@
 .keys {
   margin-left: 2px;
 }
+
+/* ── 开始页里的设置页（data-dsh-start-settings）────────────────────────────
+   入口行下方的设置卡片：几何对齐插件卡片观感（16px 族 + layer-3 填充），
+   内容是 SideCardSection 本体，头部带「打开宿主设置」降级出口与关闭按钮。 */
+
+.settings {
+  width: min(720px, 100%);
+  margin: 0 auto;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 16px;
+  background: var(--dsw-alias-bg-layer-3);
+  box-shadow: var(--dsw-shadow-lv2);
+  overflow: hidden;
+}
+
+.settingsHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.settingsTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.settingsHeadActions {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settingsGhost {
+  padding: 3px 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.settingsGhost:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.settingsGhost:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l4);
+  outline-offset: 1px;
+}
+
+.settingsClose {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-dimmed);
+  cursor: pointer;
+}
+
+.settingsClose:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.settingsClose:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l4);
+  outline-offset: 1px;
+}
+
+/* 卡片体自身滚动：hero 高度有限，60vh 是入口行之下留白的经验上限。 */
+.settingsBody {
+  max-height: 60vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}

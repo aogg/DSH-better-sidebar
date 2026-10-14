@@ -1,27 +1,38 @@
 /**
- * Hero 快捷入口行（src/client/sidebar/start-links.tsx）。
+ * Hero 快捷入口行 + 开始页里的设置页（src/client/sidebar/start-links.tsx）。
  *
  * 宿主 DOM 用假结构模拟（`[data-slot="main.conversation"]` + `[data-phase]` +
  * `[data-composer-seat]`，与 dock-fallback spec 同一手法）：相位标记是宿主
- * ConversationMainPanel 的稳定 data-* 输出，类名是哈希值不进断言。钉住六件事：
+ * ConversationMainPanel 的稳定 data-* 输出，类名是哈希值不进断言。钉住七件事：
  * 相位 hero 渲染 6 个胶囊、相位离开 hero 移除、点击走正确的 openTab 参数、
- * 无在屏会话时终端点击是 no-op（不抛错）、设置胶囊走 settings-entry 探测链
- * （已开直达分区 / 合成 settings.open 快捷键 / 探测失败静默 no-op）、
- * observer/portal 随 disposer 清理。
+ * 无在屏会话时终端点击是 no-op（不抛错）、store 注入时设置胶囊打开内置设置页
+ * （SideCardSection 本体，Esc/再点/相位离开收起）、store 缺席时设置胶囊走
+ * settings-entry 探测链（已开直达分区 / 合成 settings.open 快捷键 / 探测失败
+ * 静默 no-op）、observer/portal 随 disposer 清理。
  */
 // @vitest-environment jsdom
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 // First import: browser globals before the primitive-carrying sidebar graph loads.
 import './browser-globals.ts'
 import { setupReactAct } from './test-utils.ts'
 import { registerStartLinks, terminalShortcutKeys } from '../src/client/sidebar/start-links.tsx'
 import { openSettingsEntry, settingsOpenBinding } from '../src/client/sidebar/settings-entry.ts'
+import { createBetterSidebarService, type BetterSidebarService } from '../src/client/service.ts'
+import { createSidebarStore, type SidebarStore } from '../src/client/state.ts'
 import type { Context } from '../src/context-types.ts'
-import type { BetterSidebarService } from '../src/client/service.ts'
 
 setupReactAct()
+
+// The settings page mounts SideCardSection, whose mount effect reads the
+// prefs through the plugin settings RPC — mocked here (the
+// side-card-rightbar-settings手法); the rest of this spec never touches api.
+vi.mock('../src/client/api.ts', () => ({
+  api: {
+    settingsGet: vi.fn(async () => ({ value: {}, revision: 7 })),
+    settingsUpdate: vi.fn(async (patch: Record<string, unknown>) => ({ value: patch, revision: 8 })),
+  },
+}))
 
 beforeAll(() => {
   Object.defineProperty(navigator, 'language', { value: 'en-US', configurable: true })
@@ -393,5 +404,79 @@ describe('设置入口（宿主设置壳探测链，settings-entry.ts）', () =>
     expect(settingsOpenBinding(makeCtx({ shortcutEntries: settingsCatalog({ code: 7, modifiers: [] }) }))).toBeUndefined()
     expect(settingsOpenBinding(makeCtx({ shortcutEntries: settingsCatalog('Comma') }))).toBeUndefined()
     expect(settingsOpenBinding(makeCtx())).toBeUndefined()
+  })
+})
+
+/** 真实 store + service（SideCardSection 的清单/偏好面），api 已在文件头 mock。 */
+function realSide(): { store: SidebarStore; service: BetterSidebarService } {
+  const store = createSidebarStore()
+  return { store, service: createBetterSidebarService(store) }
+}
+
+describe('开始页里的设置页（store 注入后的「设置」胶囊）', () => {
+  it('store 注入：点「设置」胶囊渲染内置设置页（SideCardSection 本体），再点收起', async () => {
+    mountHero('hero')
+    const ctx = makeCtx()
+    const { store, service } = realSide()
+    let dispose: () => void = () => {}
+    act(() => { dispose = registerStartLinks(ctx, service, store) })
+    try {
+      await flush()
+      const node = document.querySelector('[data-dsh-start-link="settings"]')
+      if (node === null) throw new Error('missing settings link')
+      expect(document.querySelector('[data-dsh-start-settings]')).toBeNull()
+      click(node)
+      const panel = document.querySelector('[data-dsh-start-settings]')
+      expect(panel).not.toBeNull()
+      // 面板内容就是 Side card 分区本体：常规组 + 宽度占比拖动输入行。
+      expect(panel?.textContent).toContain('General')
+      expect(panel?.querySelector('[data-dsh-drag-number]')).not.toBeNull()
+      expect(node.getAttribute('aria-expanded')).toBe('true')
+      click(node)
+      expect(document.querySelector('[data-dsh-start-settings]')).toBeNull()
+      expect(node.getAttribute('aria-expanded')).toBe('false')
+    } finally {
+      act(() => { dispose() })
+    }
+  })
+
+  it('Esc 关闭设置页（不冒泡成其他行为）', async () => {
+    mountHero('hero')
+    const ctx = makeCtx()
+    const { store, service } = realSide()
+    let dispose: () => void = () => {}
+    act(() => { dispose = registerStartLinks(ctx, service, store) })
+    try {
+      await flush()
+      const node = document.querySelector('[data-dsh-start-link="settings"]')
+      if (node === null) throw new Error('missing settings link')
+      click(node)
+      expect(document.querySelector('[data-dsh-start-settings]')).not.toBeNull()
+      act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
+      expect(document.querySelector('[data-dsh-start-settings]')).toBeNull()
+    } finally {
+      act(() => { dispose() })
+    }
+  })
+
+  it('相位离开 hero：入口行与设置页一并移除', async () => {
+    const { phaseRoot } = mountHero('hero')
+    const ctx = makeCtx()
+    const { store, service } = realSide()
+    let dispose: () => void = () => {}
+    act(() => { dispose = registerStartLinks(ctx, service, store) })
+    try {
+      await flush()
+      const node = document.querySelector('[data-dsh-start-link="settings"]')
+      if (node === null) throw new Error('missing settings link')
+      click(node)
+      expect(document.querySelector('[data-dsh-start-settings]')).not.toBeNull()
+      act(() => { phaseRoot.setAttribute('data-phase', 'active') })
+      await flush()
+      expect(document.querySelector('[data-dsh-start-links-host]')).toBeNull()
+      expect(document.querySelector('[data-dsh-start-settings]')).toBeNull()
+    } finally {
+      act(() => { dispose() })
+    }
   })
 })

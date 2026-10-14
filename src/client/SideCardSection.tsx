@@ -75,8 +75,12 @@ export interface SideCardSectionInjected {
   service: BetterSidebarService
 }
 
-/** Full section props: the runtime share plus the injected face. */
-export type SideCardSectionProps = PropsRuntime<'settings.section'> & SideCardSectionInjected
+/** Full section props: the runtime share plus the injected face. The runtime
+ *  half is OPTIONAL: the settings shell's slot always provides it, and the
+ *  start-page settings panel (sidebar/start-links.tsx) mounts the same
+ *  component standalone with the injected face alone — the section body never
+ *  reads the runtime share (only `store` + `service` are destructured). */
+export type SideCardSectionProps = Partial<PropsRuntime<'settings.section'>> & SideCardSectionInjected
 
 /** Map one wire failure to the inline message (the conflict gets friendly copy). */
 function messageOf(error: unknown): string {

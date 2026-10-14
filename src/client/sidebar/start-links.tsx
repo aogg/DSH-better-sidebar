@@ -1,11 +1,20 @@
 /**
- * 开始页面（hero）末尾的快捷入口行。
+ * 开始页面（hero）末尾的快捷入口行 + 内置设置页。
  *
  * DSH web 在主区没有会话内容时渲染 hero 开始页：宿主把相位打在
  * ConversationRoot 的 `data-phase` 上（"settling" | "hero" | "active"，宿主
  * ConversationMainPanel），`hero` 即开始页。本模块在该根元素**末尾**追加一行
  * 胶囊入口（portal 挂载，行落在输入框 `[data-composer-seat]` 之下），相位离开
  * hero 或宿主 DOM 被替换时整体移除。
+ *
+ * 「设置」胶囊打开的是**开始页里的设置页**（`data-dsh-start-settings`）：同一
+ * portal 宿主内、入口行下方渲染一张设置卡片，内容直接复用宿主设置壳的
+ * SideCardSection（侧边卡片全部配置项 + 各功能的齿轮弹窗 + 添加插件弹窗，
+ * 读写走同一条插件 settings 路由，两处所见即同一份数据）。Esc / 关闭按钮 /
+ * 再次点击胶囊 / 相位离开 hero 都会收起。宿主设置壳没有公开打开 API，卡片头
+ * 保留「打开宿主设置」按钮走 settings-entry.ts 的探测链作为降级出口（全链
+ * 静默降级）。store 缺席（调用方未注入共享 store）时胶囊退回旧的
+ * 「打开宿主设置」行为。
  *
  * 契约边界：
  * - 只消费 `data-*` 标记（`[data-slot="main.conversation"]` 的槽锚 +
@@ -16,18 +25,19 @@
  *   会 throw（ui-sidebar-right README：命令作用于在屏会话），所以终端按钮先读
  *   `ctx.sidebarRight.mounted`，无在屏会话时点击是 no-op——hero 也可能是「无会话」
  *   相位，此时插件 tab 的 openTab 同样因无活动会话而静默返回，两条路径都不会抛。
- *   「设置」走 settings-entry.ts 的探测链（宿主无公开打开 API，全链静默降级）。
  * - MutationObserver 与 portal root 都由返回的 disposer 清理（ctx.effect，
  *   HMR / 插件停用时反向注销）。
  */
-import { createElement } from 'react'
+import { useCallback, useEffect, useState, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { IconSettingsOutlineRegular, ShortcutKeys } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconCloseFillRegular, IconSettingsOutlineRegular, ShortcutKeys } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Context } from '../../context-types.ts'
 import { changesTabIcon, filesTabIcon, sidechatTabIcon, tasksTabIcon, terminalTabIcon } from '../builtins/tab-icons.tsx'
 import { mountedSessionId } from '../native/surface.ts'
 import { t } from '../locales.ts'
+import type { SidebarStore } from '../state.ts'
 import type { BetterSidebarService } from '../service.ts'
+import { SideCardSection } from '../SideCardSection.tsx'
 import { openSettingsEntry } from './settings-entry.ts'
 import css from './start-links.module.css'
 
@@ -118,9 +128,45 @@ function settingsStartIcon(size: number): React.ReactNode {
   )
 }
 
-/** 入口行本身（portal 内容）。 */
-export function StartLinks(props: { ctx: Context; service: BetterSidebarService; keys?: readonly string[]; aria?: string }) {
-  const { ctx, service } = props
+/**
+ * 开始页里的设置页（`data-dsh-start-settings`）：入口行下方的设置卡片，内容
+ * 就是宿主设置壳的 Side card 分区本体（同一组件、同一 store、同一条 settings
+ * 路由）。Esc 关闭；「打开宿主设置」是宿主设置壳的降级出口（探测链静默）。
+ */
+function StartSettingsPanel(props: { ctx: Context; service: BetterSidebarService; store: SidebarStore; onClose: () => void }) {
+  const { ctx, service, store, onClose } = props
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('keydown', onKey) }
+  }, [onClose])
+  return (
+    <div className={css.settings} data-dsh-start-settings="" role="region" aria-label={t('startSettingsPanelAria')}>
+      <div className={css.settingsHead}>
+        <span className={css.settingsTitle}>{t('startSettings')}</span>
+        <span className={css.settingsHeadActions}>
+          <button type="button" className={css.settingsGhost} onClick={() => { openSettingsEntry(ctx) }}>
+            {t('startSettingsOpenHost')}
+          </button>
+          <button type="button" className={css.settingsClose} aria-label={t('startSettingsClose')} onClick={onClose}>
+            <IconCloseFillRegular size={14} />
+          </button>
+        </span>
+      </div>
+      <div className={css.settingsBody}>
+        <SideCardSection store={store} service={service} />
+      </div>
+    </div>
+  )
+}
+
+/** 入口行本身（portal 内容；「设置」胶囊开关同一 portal 内的内置设置页）。 */
+export function StartLinks(props: { ctx: Context; service: BetterSidebarService; store?: SidebarStore; keys?: readonly string[]; aria?: string }) {
+  const { ctx, service, store } = props
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const closeSettings = useCallback(() => { setSettingsOpen(false) }, [])
   const links: StartLink[] = [
     { kind: 'files', label: () => t('files'), icon: filesTabIcon },
     { kind: 'changes', label: () => t('changes'), icon: changesTabIcon },
@@ -136,33 +182,47 @@ export function StartLinks(props: { ctx: Context; service: BetterSidebarService;
     { kind: 'settings', label: () => t('startSettings'), icon: settingsStartIcon },
   ]
   return (
-    <div className={css.row} data-dsh-start-links="" aria-label={t('startLinksAria')}>
-      {links.map(link => (
-        <button
-          key={link.kind}
-          type="button"
-          className={css.pill}
-          data-dsh-start-link={link.kind}
-          aria-label={link.aria}
-          onClick={() => { openStartLink(link.kind, ctx, service) }}
-        >
-          <span className={css.icon} aria-hidden="true">{link.icon(14)}</span>
-          <span className={css.label}>{link.label()}</span>
-          {link.keys !== undefined && link.keys.length > 0 && (
-            <ShortcutKeys keys={link.keys} className={css.keys} />
-          )}
-        </button>
-      ))}
-    </div>
+    <>
+      <div className={css.row} data-dsh-start-links="" aria-label={t('startLinksAria')}>
+        {links.map(link => (
+          <button
+            key={link.kind}
+            type="button"
+            className={css.pill}
+            data-dsh-start-link={link.kind}
+            aria-label={link.aria}
+            aria-expanded={link.kind === 'settings' && store !== undefined ? settingsOpen : undefined}
+            onClick={() => {
+              if (link.kind === 'settings' && store !== undefined) {
+                setSettingsOpen(open => !open)
+                return
+              }
+              openStartLink(link.kind, ctx, service)
+            }}
+          >
+            <span className={css.icon} aria-hidden="true">{link.icon(14)}</span>
+            <span className={css.label}>{link.label()}</span>
+            {link.keys !== undefined && link.keys.length > 0 && (
+              <ShortcutKeys keys={link.keys} className={css.keys} />
+            )}
+          </button>
+        ))}
+      </div>
+      {settingsOpen && store !== undefined && (
+        <StartSettingsPanel ctx={ctx} service={service} store={store} onClose={closeSettings} />
+      )}
+    </>
   )
 }
 
 /**
- * 注册 hero 快捷入口行：监听 `[data-slot="main.conversation"]` 内的
- * `data-phase` 属性变更（含子树增删，SPA 导航 / HMR 的 DOM 替换一并覆盖），
- * 仅 `hero` 时把入口行 portal 到相位根元素末尾。返回清理 disposer。
+ * 注册 hero 快捷入口行（+ 内置设置页）：监听 `[data-slot="main.conversation"]`
+ * 内的 `data-phase` 属性变更（含子树增删，SPA 导航 / HMR 的 DOM 替换一并覆盖），
+ * 仅 `hero` 时把入口行 portal 到相位根元素末尾。`store` 是共享偏好 store：
+ * 注入后「设置」胶囊打开内置设置页（SideCardSection 需要），缺席时退回
+ * 「打开宿主设置」。返回清理 disposer。
  */
-export function registerStartLinks(ctx: Context, service: BetterSidebarService): () => void {
+export function registerStartLinks(ctx: Context, service: BetterSidebarService, store?: SidebarStore): () => void {
   const doc = document
   let root: Root | undefined
   let host: HTMLElement | undefined
@@ -204,6 +264,7 @@ export function registerStartLinks(ctx: Context, service: BetterSidebarService):
     root.render(createElement(StartLinks, {
       ctx,
       service,
+      ...(store !== undefined ? { store } : {}),
       keys: shortcut?.keys ?? ['Ctrl', '`'],
       ...(shortcut?.aria !== undefined ? { aria: shortcut.aria } : {}),
     }))
