@@ -32,6 +32,7 @@ import {
 import { createProbeGate, listDirectory, messageOf, parentOf, requireAbsolute, rootLabel, type SidebarFsEntry } from './fs-tree.ts'
 import { resolveSessionPath } from './session-path.ts'
 import { createWorkspaceFile, mkdirWorkspaceEntry, renameWorkspaceEntry, removeWorkspaceEntry, writeWorkspaceText, writeWorkspaceUpload } from './fs-operations.ts'
+import { startWorkspaceTransfer, transferCancel, transferStatus, type TransferConflict, type TransferMode } from './fs-transfer.ts'
 // `ensureWorkspacePath` stays for the WRITE/watch destinations (archive
 // selection, fs-watch registration), which must keep their lexical meaning;
 // the READ routes resolve through `resolveTargetCompat` below.
@@ -879,6 +880,35 @@ function buildApi(
         cwd,
         path: requireString(payload, 'path'),
       })
+    },
+    // The file tree's 复制/剪切黏贴 (one async HOST job per paste): the route
+    // answers after the pre-walk with the progress totals, the job keeps
+    // running, and `fs.transferStatus` polls it (`fs.transferCancel` stops it
+    // between files). The conflict choice (replace / skip) was collected by
+    // the client's dialog BEFORE the call — the host never prompts.
+    'fs.transfer': async (payload) => {
+      const { cwd } = await cwdOf(payload)
+      const record = payload as { items?: unknown } | null
+      const items = Array.isArray(record?.items)
+        ? record.items.filter((value): value is string => typeof value === 'string' && value !== '')
+        : []
+      return startWorkspaceTransfer({
+        cwd,
+        mode: requireString(payload, 'mode') as TransferMode,
+        items,
+        targetDir: requireString(payload, 'targetDir'),
+        conflict: requireString(payload, 'conflict') as TransferConflict,
+      })
+    },
+    // One paste job's progress snapshot (unknown/retired id → undefined, and
+    // the client stops polling; the JSON round-trip maps that to `null`).
+    'fs.transferStatus': async (payload) => {
+      return transferStatus(requireString(payload, 'transferId')) ?? null
+    },
+    // Ask one paste job to stop after its current file (best effort, Windows
+    // cancel semantics: the partial result stays partial).
+    'fs.transferCancel': async (payload) => {
+      return { canceled: transferCancel(requireString(payload, 'transferId')) }
     },
     'git.worktrees': async (payload) => {
       const { cwd } = await gitCwdOf(payload)

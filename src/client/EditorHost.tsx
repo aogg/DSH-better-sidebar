@@ -319,12 +319,16 @@ export function EditorHost(props: {
 
   // Tree mutations reconcile the OPEN tabs (both split trees, the bottom
   // panel, free windows): a rename retargets its tab to the new path; a
-  // delete closes tabs at or under the removed path. See tree-mutations.ts.
+  // delete closes tabs at or under the removed path; a cut-paste move
+  // retargets exactly like a rename. See tree-mutations.ts.
   const onPathRenamed = (oldPath: string, newPath: string): void => {
     retargetPathTabs(ctx, store, oldPath, newPath)
   }
   const onPathDeleted = (path: string): void => {
     closePathTabs(ctx, store, path, t('closeUnsavedConfirm'))
+  }
+  const onPathMoved = (from: string, to: string): void => {
+    retargetPathTabs(ctx, store, from, to)
   }
 
   // The viewer's toolbar, hoisted into THIS header: the text editor reports
@@ -592,6 +596,7 @@ export function EditorHost(props: {
           onToggleOpenWithPin={toggleOpenWithPin}
           onReferenceFile={onReferenceFile}
           onPathRenamed={onPathRenamed}
+          onPathMoved={onPathMoved}
           onPathDeleted={onPathDeleted}
           exclude={exclude}
           service={ctx.get('betterSidebar')}
@@ -729,6 +734,7 @@ export function EditorHost(props: {
               onToggleOpenWithPin={toggleOpenWithPin}
               onReferenceFile={onReferenceFile}
               onPathRenamed={onPathRenamed}
+              onPathMoved={onPathMoved}
               onPathDeleted={onPathDeleted}
               exclude={exclude}
               service={ctx.get('betterSidebar')}

@@ -94,6 +94,8 @@ export function TreePanel(props: {
   onPathRenamed?: (oldPath: string, newPath: string) => void
   /** A tree delete landed (passed through to FileTree for tab closing). */
   onPathDeleted?: (path: string, isDir: boolean) => void
+  /** A cut-paste moved one row (passed through to FileTree for tab retargeting). */
+  onPathMoved?: (from: string, to: string, isDir: boolean) => void
   /** Whether the owning tab is on screen: a parked tab stops the tree's git
    *  polling (the shared status store pauses when nothing visible wants it). */
   visible?: boolean
@@ -107,7 +109,7 @@ export function TreePanel(props: {
     sessionId, cwd, expanded, revealed, onToggle, onOpenFile, onOpenFileNewTab, onOpenFileSide,
     openInApp, openWithTargets, openWithPinned, openWithSsh, onOpenWith, onToggleOpenWithPin,
     openWithShowPluginTargets, exclude,
-    onReferenceFile, onPathRenamed, onPathDeleted, visible, full, service,
+    onReferenceFile, onPathRenamed, onPathDeleted, onPathMoved, visible, full, service,
   } = props
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<{ matches: string[]; dirs: string[]; truncated: boolean } | null>(null)
@@ -680,6 +682,7 @@ export function TreePanel(props: {
         onAddToContentSearch={addToContentSearch}
         onPathRenamed={onPathRenamed}
         onPathDeleted={onPathDeleted}
+        onPathMoved={onPathMoved}
         refreshTick={refreshTick}
         onUploadRequest={startUpload}
         busy={busy}

@@ -845,6 +845,42 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
   border-bottom-right-radius: 0;
 }
 
+/* A row sitting on the clipboard as a CUT (复制/剪切黏贴): dimmed like VS
+   Code's pending-cut rows until the paste lands (or the clipboard changes).
+   Opacity, not color — the row keeps its git ink and selection states under
+   the veil. */
+.explorerRowCut {
+  opacity: 0.45;
+}
+
+/* The paste-conflict dialog's same-name chips (Windows "Replace or Skip"):
+   a wrapping chip run, truncated with a dim "and N more" line. */
+.pasteConflictChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pasteConflictChip {
+  padding: 2px 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 1.5;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pasteConflictMore {
+  align-self: center;
+  color: var(--dsw-alias-label-dimmed);
+  font-size: 12px;
+}
+
 /* VSCode-style reveal flash: on every fresh reveal the row lights up in the
    business accent, holds a beat and settles back onto the plain reveal tint
    above (the animation ends where the constant class already paints it, so

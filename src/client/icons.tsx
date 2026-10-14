@@ -56,6 +56,28 @@ export const IconContentSearchOutline16 = ({ size = 16, className }: IconProps) 
   </svg>
 )
 
+/** Cut glyph in the app's outline style: open scissor blades — two finger
+ *  rings and two crossing edges (the file-manager "cut" action). */
+export const IconCutOutline16 = ({ size = 16, className }: IconProps) => (
+  <svg width={size} height={size} className={className} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="4.25" cy="4.25" r="1.75" stroke="currentColor" strokeWidth="1.5" />
+    <circle cx="4.25" cy="11.75" r="1.75" stroke="currentColor" strokeWidth="1.5" />
+    <path d="M5.8 5.4 13.5 12.6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    <path d="M5.8 10.6 13.5 3.4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+  </svg>
+)
+
+/** Paste glyph in the app's outline style: a clipboard (spring clip on top)
+ *  with an arrow dropping INTO the board — the file-manager "paste" action. */
+export const IconPasteOutline16 = ({ size = 16, className }: IconProps) => (
+  <svg width={size} height={size} className={className} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M5.5 3.5H4A1.5 1.5 0 0 0 2.5 5v7A1.5 1.5 0 0 0 4 13.5h8A1.5 1.5 0 0 0 13.5 12V5A1.5 1.5 0 0 0 12 3.5h-1.5" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+    <rect x="5.5" y="1.75" width="5" height="3" rx="1" stroke="currentColor" strokeWidth="1.5" />
+    <path d="M8 6.75v4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    <path d="M6.25 9.5 8 11.25 9.75 9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+)
+
 // ── File-viewer inventory glyphs (Side card settings page) ────────────────
 
 /** Markdown viewer glyph: the classic "M with a down arrow" badge. */

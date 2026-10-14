@@ -125,7 +125,7 @@ describe('resolveTargetCompat (the probing layer)', () => {
   })
 
   it('leaves a non-qualifying target untouched (no prefix, no probes)', async () => {
-    const { root, prefix } = workspace()
+    const { root } = workspace()
     await expect(resolveTargetCompat(root, 'a/missing.md')).resolves.toBe(join(root, 'a', 'missing.md'))
     // `..` traversal keeps its verbatim meaning (lexical collapse only).
     await expect(resolveTargetCompat(root, '../outside.md')).resolves.toBe(resolve(join(root, '..', 'outside.md')))
