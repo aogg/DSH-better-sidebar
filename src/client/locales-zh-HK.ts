@@ -373,6 +373,7 @@ export const zhHK: Record<string, string> = {
   settingsGeneralTitle: '一般',
   startLinksAria: '快速入口',
   startNewTerminal: '新建終端',
+  startSettings: '設定',
   settingsRightbarRatioTitle: '打開側邊欄時寬度比例',
   settingsRightbarRatioDesc: '展開右側欄時套用的寬度佔視窗比例（15%–70%），拖動數字或直接輸入可調整',
   settingsOpenOnNewSessionTitle: '新會話自動打開右側欄',

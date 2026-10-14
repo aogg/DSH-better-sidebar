@@ -356,6 +356,7 @@ export const id: Record<string, string> = {
   settingsGeneralTitle: 'Umum',
   startLinksAria: 'Tautan cepat',
   startNewTerminal: 'Terminal baru',
+  startSettings: 'Pengaturan',
   settingsRightbarRatioTitle: 'Lebar bilah samping saat dibuka',
   settingsRightbarRatioDesc: 'Lebar yang diterapkan saat bilah samping kanan terbuka, sebagai bagian dari jendela (15%–70%); seret atau ketik angka untuk menyesuaikan',
   settingsOpenOnNewSessionTitle: 'Buka bilah samping kanan untuk sesi baru',

@@ -16,22 +16,24 @@
  *   会 throw（ui-sidebar-right README：命令作用于在屏会话），所以终端按钮先读
  *   `ctx.sidebarRight.mounted`，无在屏会话时点击是 no-op——hero 也可能是「无会话」
  *   相位，此时插件 tab 的 openTab 同样因无活动会话而静默返回，两条路径都不会抛。
+ *   「设置」走 settings-entry.ts 的探测链（宿主无公开打开 API，全链静默降级）。
  * - MutationObserver 与 portal root 都由返回的 disposer 清理（ctx.effect，
  *   HMR / 插件停用时反向注销）。
  */
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { ShortcutKeys } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconSettingsOutlineRegular, ShortcutKeys } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Context } from '../../context-types.ts'
 import { changesTabIcon, filesTabIcon, sidechatTabIcon, tasksTabIcon, terminalTabIcon } from '../builtins/tab-icons.tsx'
 import { mountedSessionId } from '../native/surface.ts'
 import { t } from '../locales.ts'
 import type { BetterSidebarService } from '../service.ts'
+import { openSettingsEntry } from './settings-entry.ts'
 import css from './start-links.module.css'
 
 /** 一个入口的展示与动作（kind 也写进 data-dsh-start-link 供测试/样式锚定）。 */
 interface StartLink {
-  kind: 'files' | 'changes' | 'terminal' | 'jobs' | 'sidechat'
+  kind: 'files' | 'changes' | 'terminal' | 'jobs' | 'sidechat' | 'settings'
   label: () => string
   icon: (size: number) => React.ReactNode
   /** 终端按钮的快捷键提示（宿主 catalog 的 unboxed 键帽；探测不到给静态回退）。 */
@@ -99,7 +101,21 @@ export function openStartLink(kind: StartLink['kind'], ctx: Context, service: Be
         // 探测/调用失败：宿主没有这个 kind（或仍未铸出 store），无事可做。
       }
       return
+    case 'settings':
+      // 宿主设置壳没有公开打开 API：结构化探测链（settings-entry.ts），
+      // 全链失败静默 no-op——hero 相位下宿主壳形状可能整体缺席，点击不抛错。
+      openSettingsEntry(ctx)
+      return
   }
+}
+
+/** 「设置」的齿轮 glyph：ui-primitives 官方齿轮（非 tab 类型，ink 令牌上色）。 */
+function settingsStartIcon(size: number): React.ReactNode {
+  return (
+    <span className={css.iconSettings}>
+      <IconSettingsOutlineRegular size={size} />
+    </span>
+  )
 }
 
 /** 入口行本身（portal 内容）。 */
@@ -117,6 +133,7 @@ export function StartLinks(props: { ctx: Context; service: BetterSidebarService;
     },
     { kind: 'jobs', label: () => t('subagent'), icon: tasksTabIcon },
     { kind: 'sidechat', label: () => t('sideChat'), icon: sidechatTabIcon },
+    { kind: 'settings', label: () => t('startSettings'), icon: settingsStartIcon },
   ]
   return (
     <div className={css.row} data-dsh-start-links="" aria-label={t('startLinksAria')}>

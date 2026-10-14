@@ -351,6 +351,7 @@ export const fr: Record<string, string> = {
   settingsGeneralTitle: 'Général',
   startLinksAria: 'Accès rapides',
   startNewTerminal: 'Nouveau terminal',
+  startSettings: 'Paramètres',
   settingsRightbarRatioTitle: 'Largeur de la barre latérale à l’ouverture',
   settingsRightbarRatioDesc: 'Largeur appliquée à l’ouverture de la barre latérale droite, en part de la fenêtre (15 %–70 %) ; faire glisser le chiffre ou le saisir pour ajuster',
   settingsOpenOnNewSessionTitle: 'Ouvrir la barre latérale droite pour les nouvelles sessions',

@@ -356,6 +356,7 @@ export const nl: Record<string, string> = {
   settingsGeneralTitle: 'Algemeen',
   startLinksAria: 'Snelkoppelingen',
   startNewTerminal: 'Nieuwe terminal',
+  startSettings: 'Instellingen',
   settingsRightbarRatioTitle: 'Zijbalkbreedte bij openen',
   settingsRightbarRatioDesc: 'Breedte die wordt toegepast wanneer de rechterzijbalk uitklapt, als deel van het venster (15%–70%); sleep of typ het getal om aan te passen',
   settingsOpenOnNewSessionTitle: 'Rechterzijbalk openen voor nieuwe sessies',

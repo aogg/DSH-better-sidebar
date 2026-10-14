@@ -355,6 +355,7 @@ export const ru: Record<string, string> = {
   settingsGeneralTitle: 'Общие',
   startLinksAria: 'Быстрые ссылки',
   startNewTerminal: 'Новый терминал',
+  startSettings: 'Настройки',
   settingsRightbarRatioTitle: 'Ширина боковой панели при открытии',
   settingsRightbarRatioDesc: 'Ширина, применяемая при разворачивании правой панели, в доле окна (15%–70%); потяните число или введите значение',
   settingsOpenOnNewSessionTitle: 'Открывать правую панель для новых сессий',

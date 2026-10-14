@@ -358,6 +358,7 @@ export const tr: Record<string, string> = {
   settingsGeneralTitle: 'Genel',
   startLinksAria: 'Hızlı bağlantılar',
   startNewTerminal: 'Yeni terminal',
+  startSettings: 'Ayarlar',
   settingsRightbarRatioTitle: 'Açılışta kenar çubuğu genişliği',
   settingsRightbarRatioDesc: 'Sağ kenar çubuğu açıldığında uygulanan genişlik, pencerenin payı olarak (%15–%70); ayarlamak için sayıyı sürükleyin veya yazın',
   settingsOpenOnNewSessionTitle: 'Yeni oturumlarda sağ kenar çubuğunu aç',

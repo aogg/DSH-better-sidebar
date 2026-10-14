@@ -341,6 +341,7 @@ export const pt: Record<string, string> = {
   settingsGeneralTitle: 'Geral',
   startLinksAria: 'Atalhos',
   startNewTerminal: 'Novo terminal',
+  startSettings: 'Configurações',
   settingsRightbarRatioTitle: 'Largura da barra lateral ao abrir',
   settingsRightbarRatioDesc: 'Largura aplicada quando a barra lateral direita se abre, como fração da janela (15%–70%); arraste o número ou digite para ajustar',
   settingsOpenOnNewSessionTitle: 'Abrir a barra lateral direita em novas sessões',

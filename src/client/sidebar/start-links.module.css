@@ -48,6 +48,12 @@
   flex: none;
 }
 
+/* 「设置」齿轮：ink 一档——宿主自己的设置触发/nav 齿轮同为墨色，不抢状态色。 */
+.iconSettings {
+  display: inline-flex;
+  color: var(--dsw-alias-label-primary);
+}
+
 .label {
   white-space: nowrap;
 }

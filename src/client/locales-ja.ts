@@ -358,6 +358,7 @@ export const ja: Record<string, string> = {
   settingsGeneralTitle: '一般',
   startLinksAria: 'クイックリンク',
   startNewTerminal: '新規ターミナル',
+  startSettings: '設定',
   settingsRightbarRatioTitle: 'サイドバーを開くときの幅',
   settingsRightbarRatioDesc: '右サイドバーを開いたときに適用する幅（ウィンドウに対する 15%〜70%）。数値をドラッグまたは入力して調整',
   settingsOpenOnNewSessionTitle: '新規セッションで右サイドバーを自動的に開く',
