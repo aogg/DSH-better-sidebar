@@ -899,6 +899,22 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
   white-space: nowrap;
 }
 
+/* One breadcrumb segment of a folded `a/b/c` row (VSCode "compact folders"):
+   every segment is its own pointer target. Hovering one highlights and
+   underlines JUST that segment — the row's own hover fill keeps painting the
+   whole line; clicking reveals that directory in the tree and a right-click
+   opens the folder menu for the segment's path (the handlers live in
+   DirRow). */
+.explorerSegment {
+  cursor: pointer;
+}
+
+.explorerSegment:hover {
+  color: var(--dsw-alias-state-business-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 /* ── Inline rename / new-folder editor ───────────────────────────────────
    The level's top (or a row) swaps in a plain input (same row metrics: 28px
    height, 6px gap, 12px type); only tokens, no hardcoded colors. */
