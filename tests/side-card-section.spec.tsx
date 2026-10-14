@@ -80,6 +80,15 @@ function pressedCount(html: string, value: string): number {
   return html.match(new RegExp(`aria-pressed="${value}"`, 'g'))?.length ?? 0
 }
 
+/**
+ * Count CHECKED checkboxes (the custom switches). The radio pair on the
+ * new-session row renders `checked=""` too, so a bare `checked=""` count
+ * would read the radios; anchor on the checkbox type within the same tag.
+ */
+function checkedCheckboxCount(html: string): number {
+  return html.match(/type="checkbox"[^>]*checked=""|checked=""[^>]*type="checkbox"/g)?.length ?? 0
+}
+
 describe('SideCardSection declarative inventory', () => {
   it('renders one small card per registered tab: icon + title + type id + pressed state', () => {
     const { store, service } = mount()
@@ -98,9 +107,9 @@ describe('SideCardSection declarative inventory', () => {
     expect(pressedCount(html, 'true')).toBe(3)
     expect(pressedCount(html, 'false')).toBe(0)
     // The custom switches are real checkboxes: the two mobile adaptations are
-    // on by default, agentOpenTools is not.
-    // The two mobile adaptations are on by default.
-    expect(html.match(/checked=""/g)?.length ?? 0).toBe(2)
+    // on by default, agentOpenTools is not (the new-session radio pair is
+    // excluded by the checkbox-anchored count).
+    expect(checkedCheckboxCount(html)).toBe(2)
     expect(html).not.toContain('Auto-open Subagents')
   })
 
@@ -122,11 +131,11 @@ describe('SideCardSection declarative inventory', () => {
     expect(html).toContain('auto-open on narrow screens')
     expect(html).toContain('Default the Tasks page to the tree')
     // Both are ON by default; disarming one shows up as an unchecked box.
-    expect(html).toContain('checked=""')
+    expect(checkedCheckboxCount(html)).toBe(2)
     store.setPrefs({ ...store.getPrefs(), mobileNoAutoOpen: false, mobileDefaultTree: false })
     const off = renderSection(store, service)
     expect(off).toContain('>Mobile</div>')
-    expect(off).not.toContain('checked=""')
+    expect(checkedCheckboxCount(off)).toBe(0)
   })
 
   it('renders one small card per registered viewer: icon + title + exts', () => {
@@ -171,8 +180,8 @@ describe('SideCardSection declarative inventory', () => {
     expect(pressedCount(html, 'false')).toBe(2)
     // The explorer card stays pressed.
     expect(pressedCount(html, 'true')).toBe(1)
-    // The two mobile adaptations are on by default.
-    expect(html.match(/checked=""/g)?.length ?? 0).toBe(2)
+    // The two mobile adaptations are on by default (radios excluded).
+    expect(checkedCheckboxCount(html)).toBe(2)
   })
 
   it('hides the gear of a disabled feature (its related settings are dormant)', () => {
@@ -196,8 +205,9 @@ describe('SideCardSection declarative inventory', () => {
     // Three general-row switches remain (agentOpenTools off by default, plus
     // the two mobile adaptations on) — the removed scheme row was a dropdown.
     expect(html.match(/type="checkbox"/g)?.length).toBe(3)
-    // The two mobile adaptations are on by default (agentOpenTools is not).
-    expect(html.match(/checked=""/g)?.length ?? 0).toBe(2)
+    // The two mobile adaptations are on by default (agentOpenTools is not);
+    // the radio pair on the new-session row is not a checkbox.
+    expect(checkedCheckboxCount(html)).toBe(2)
     // The escape hatch is always reachable: no gear, no scheme gate — the
     // only gear left on the page is the Subagents card's own.
     expect(html).not.toContain('Custom CSS Feature settings')

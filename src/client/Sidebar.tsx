@@ -47,6 +47,7 @@ import { confirmDiscardDraft, dirtyCount, editorDirtyRevision, subscribeEditorDi
 import { createOpenInApp } from './open-in-app.ts'
 import { useCenterColumn } from './sidebar/use-center-column.ts'
 import { useHostFeeds } from './sidebar/use-host-feeds.ts'
+import { useRightbarOpenOnNewSession } from './sidebar/new-session-open.ts'
 import { mountedSessions } from './native/surface.ts'
 import { useRightPanelOpen } from './sidebar/right-panel-open.ts'
 import type { TabDragPayload } from './TabBar.tsx'
@@ -283,6 +284,11 @@ export function Sidebar(props: { ctx: Context; store: SidebarStore }) {
   // the current session. The jump-back ref is the one piece the render side
   // consumes (renderTab's onSubagentJump arms it).
   const { subagentJumpRef } = useHostFeeds({ ctx, store, sessionList, sessionId })
+
+  // 新会话自动展开右栏（rightbarOpenOnNewSession）：对会话列表快照做 id diff，
+  // 只认页面加载后新出现的 id，命中且上屏时展开宿主右栏（宽度随之由
+  // rightbar-width.ts 的展开跳变逻辑应用）。
+  useRightbarOpenOnNewSession(ctx, store, sessionList)
 
   // Center-column tracking (sidebar/use-center-column.ts): the bottom
   // workbench spans ONLY the app shell's center column ("squeezes the agent

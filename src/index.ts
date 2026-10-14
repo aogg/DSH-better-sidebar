@@ -32,9 +32,14 @@ import {
 import { createProbeGate, listDirectory, messageOf, parentOf, requireAbsolute, rootLabel, type SidebarFsEntry } from './fs-tree.ts'
 import { resolveSessionPath } from './session-path.ts'
 import { createWorkspaceFile, mkdirWorkspaceEntry, renameWorkspaceEntry, removeWorkspaceEntry, writeWorkspaceText, writeWorkspaceUpload } from './fs-operations.ts'
-import { ensureWorkspacePath } from './path-security.ts'
+// `ensureWorkspacePath` stays for the WRITE/watch destinations (archive
+// selection, fs-watch registration), which must keep their lexical meaning;
+// the READ routes resolve through `resolveTargetCompat` below.
+import { ensureWorkspacePath, pathExists, resolveTargetCompat } from './path-security.ts'
+import { workspaceDirPrefixRemainder } from './workspace-prefix.ts'
 import { searchFiles } from './fs-search.ts'
-import { compileExcludePatterns } from './exclude-patterns.ts'
+import { contentSearch } from './fs-content-search.ts'
+import { compileExcludePatterns, EXCLUDE_PATTERN_LIMIT, EXCLUDE_PATTERN_MAX_LENGTH } from './exclude-patterns.ts'
 import { decodeHtmlUrl } from './html-route.ts'
 import { isTrustedApiRequest } from './trust-fence.ts'
 import { registerBundleRoute } from './bundle-route.ts'
@@ -182,6 +187,27 @@ function selectedRepoOf(payload: unknown): string | undefined {
   return requireAbsolute(requireString(payload, 'repoRoot'))
 }
 
+/**
+ * One content-search wire list (`include` / `exclude`): strings only, each
+ * trimmed, capped like the pattern compiler the host classifies them with —
+ * past {@link EXCLUDE_PATTERN_LIMIT} entries the rest is dropped, an entry
+ * longer than {@link EXCLUDE_PATTERN_MAX_LENGTH} (or empty) is dropped.
+ * Silent degradation, not a 400: a malformed entry must never break the
+ * search, exactly like a malformed exclude pattern never breaks the tree.
+ */
+function sidebarEntryListOf(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  for (const item of raw) {
+    if (out.length >= EXCLUDE_PATTERN_LIMIT) break
+    if (typeof item !== 'string') continue
+    const entry = item.trim()
+    if (entry === '' || entry.length > EXCLUDE_PATTERN_MAX_LENGTH) continue
+    out.push(entry)
+  }
+  return out
+}
+
 /** One required 1-based line number of a `git blame -L` request. */
 function requireLineNumber(payload: unknown, key: string): number {
   const value = (payload as Record<string, unknown> | null)?.[key]
@@ -198,15 +224,37 @@ function requireLineNumber(payload: unknown, key: string): number {
  * existing path, with the repository root as the fallback. Git's
  * status/diff ROWS deliberately do NOT come through here — they are
  * repository-root-relative by construction, see {@link resolveStatusPath}.
+ *
+ * Between the two sits the workspace-dir-prefix compatibility (chat links
+ * spell `my-ai/dsh/…` under a cwd whose last segment is `my-ai`): an
+ * EXISTENCE-GATED probe of the stripped spelling, tried only after the
+ * literal session-relative reading missed. The probe lives here — the one
+ * layer that can stat — never in a purely lexical one.
  */
 async function resolveGitPath(cwd: string, raw: string, selected?: string): Promise<string> {
-  if (isAbsolute(raw)) return requireAbsolute(resolveSessionPath(cwd, raw))
+  if (isAbsolute(raw)) {
+    // Absolute: verbatim, unless the target is a client-prejoined
+    // `<cwd>/basename(cwd)/…` spelling that misses while the stripped one
+    // exists (same compatibility, one join deeper).
+    const direct = requireAbsolute(resolveSessionPath(cwd, raw))
+    const remainder = workspaceDirPrefixRemainder(cwd, raw)
+    if (remainder === undefined || await pathExists(direct)) return direct
+    const alternate = requireAbsolute(join(cwd, remainder))
+    return (await pathExists(alternate)) ? alternate : direct
+  }
   // Prefer the session-relative interpretation when it names an existing
   // path. Git status reports repository-root-relative names, but the sidebar
   // security boundary is the session workspace; this preference keeps files
   // inside a nested session readable without reopening the repository root.
   const sessionPath = requireAbsolute(join(cwd, raw))
-  if (await stat(sessionPath).then(() => true).catch(() => false)) return sessionPath
+  if (await pathExists(sessionPath)) return sessionPath
+  // The prefixed spelling probes only after the literal reading missed, so a
+  // real same-named subdirectory keeps winning (see workspace-prefix.ts).
+  const remainder = workspaceDirPrefixRemainder(cwd, raw)
+  if (remainder !== undefined) {
+    const strippedPath = requireAbsolute(join(cwd, remainder))
+    if (await pathExists(strippedPath)) return strippedPath
+  }
   const root = await git.repoRoot(cwd, selected).catch(() => cwd)
   return requireAbsolute(join(root, raw))
 }
@@ -684,7 +732,7 @@ function buildApi(
     'fs.tree': async (payload) => {
       const { cwd } = await cwdOf(payload)
       const record = payload as { path?: unknown; exclude?: unknown }
-      const target = record.path === undefined ? cwd : await ensureWorkspacePath(cwd, requireString(payload, 'path'))
+      const target = record.path === undefined ? cwd : await resolveTargetCompat(cwd, requireString(payload, 'path'))
       // The client's explorerExclude pref rides the request (compiled here so
       // the listing and the singleton fold probe share one matcher).
       const exclude = compileExcludePatterns(record.exclude, cwd)
@@ -717,13 +765,14 @@ function buildApi(
       const levels = await Promise.all(paths.map(async (raw): Promise<SidebarFsLevel> => {
         // A session-relative path is accepted here (the tree already carries
         // cwd-relative paths); `fs.tree` itself keeps requiring absolute
-        // input. A `~` target is home-relative (#713) and must reach the
-        // shared resolver UNJOINED — pasting it after the cwd would hide the
-        // marker from the home expansion.
+        // input. The RAW spelling resolves — `resolveTargetCompat` joins it
+        // (a `~` target is home-relative, #713, and reaches the home
+        // expansion unjoined) and probes the workspace-dir-prefix reading.
+        // The failure report keeps the CLIENT's spelling of the level.
         const homeRelative = raw === '~' || raw.startsWith('~/') || raw.startsWith('~\\')
         const requested = isAbsolute(raw) || homeRelative ? raw : `${cwd}${sep}${raw}`
         try {
-          return await listDirectory(await ensureWorkspacePath(cwd, requested), resolved.listLimit, exclude, gate)
+          return await listDirectory(await resolveTargetCompat(cwd, raw), resolved.listLimit, exclude, gate)
         } catch (error) {
           // Per-level failure: the batch itself stays a success (one unreadable
           // directory must not blank the whole tree).
@@ -744,6 +793,26 @@ function buildApi(
       const record = payload as { exclude?: unknown }
       const query = requireString(payload, 'query')
       return searchFiles(cwd, query, { exclude: compileExcludePatterns(record.exclude, cwd) })
+    },
+    // The tree panel's text-CONTENT search. Same session-cwd rooting and
+    // budgets as `fs.search`; the include/exclude entries are raw strings
+    // classified host-side (existing dir → subtree scope/drop, existing file
+    // → single-file scope/drop, otherwise an exclude-patterns glob). The
+    // explorerExclude pref rides `prefExclude` and stacks on top of the
+    // user's `exclude` list, so the content search stays in lockstep with
+    // the tree listing and the name search.
+    'fs.contentSearch': async (payload) => {
+      const { cwd } = await cwdOf(payload)
+      const record = payload as { include?: unknown; exclude?: unknown; prefExclude?: unknown }
+      const query = requireString(payload, 'query')
+      if (query.length > EXCLUDE_PATTERN_MAX_LENGTH) {
+        throw new SidebarError('bad-request', `"query" must not exceed ${EXCLUDE_PATTERN_MAX_LENGTH} characters`)
+      }
+      return contentSearch(cwd, query, {
+        include: sidebarEntryListOf(record.include),
+        exclude: sidebarEntryListOf(record.exclude),
+        prefExclude: compileExcludePatterns(record.prefExclude, cwd),
+      })
     },
     'fs.read': async (payload) => {
       const { cwd } = await cwdOf(payload)
@@ -1631,12 +1700,10 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
         // Resolution is the shared contract's alone: relative joins the
         // session cwd, absolute stays, `~` expands against the home (#713),
         // remote-mirror namespaces project. Pre-joining here would paste a
-        // `~` target after the cwd and hide it from the resolver.
-        // Resolution is the shared contract's alone: relative joins the
-        // session cwd, absolute stays, `~` expands against the home (#713),
-        // remote-mirror namespaces project. Pre-joining here would paste a
-        // `~` target after the cwd and hide it from the resolver.
-        const path = await ensureWorkspacePath(cwd, raw)
+        // `~` target after the cwd and hide it from the resolver. The read
+        // side probes the workspace-dir-prefix reading of a chat-spelled
+        // path (see path-security.resolveTargetCompat).
+        const path = await resolveTargetCompat(cwd, raw)
         const info = await statFileForRoute(path)
         if (!info.isFile()) {
           throw new SidebarError('fs-error', 'not a file', 400)
@@ -1706,7 +1773,7 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
         // real-path guard, with the same semantics as the media route's
         // fallback.
         const cwd = await activeWorktreeRootOf(ctx, sessionId, await sessionCwdOf(ctx, sessionId))
-        const absolute = await ensureWorkspacePath(cwd, path)
+        const absolute = await resolveTargetCompat(cwd, path)
         const info = await statFileForRoute(absolute)
         if (!info.isFile()) {
           throw new SidebarError('fs-error', 'not a file', 400)

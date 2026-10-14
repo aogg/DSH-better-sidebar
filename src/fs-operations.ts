@@ -29,6 +29,7 @@ import { invalidateDirectoryCache, requireAbsolute } from './fs-tree.ts'
 import { ensureWorkspaceWritePath, resolveTarget } from './path-security.ts'
 import { encodeText, fileFormatOf, restoreEol } from './text-encoding.ts'
 import { SidebarError } from './wire.ts'
+import { workspaceDirPrefixRemainder } from './workspace-prefix.ts'
 
 /**
  * The name SHAPE every file mutation shares: one path segment, no separators,
@@ -161,7 +162,24 @@ export interface WorkspaceWriteInput {
  */
 export async function writeWorkspaceText(input: WorkspaceWriteInput): Promise<{ mtimeMs?: number }> {
   const { cwd, path, content, expectedMtimeMs } = input
-  const absolute = await ensureWorkspaceWritePath(cwd, path)
+  let absolute = await ensureWorkspaceWritePath(cwd, path)
+  // Workspace-dir-prefix compatibility, WRITE side — deliberately narrower
+  // than the read side (path-security.resolveTargetCompat). A write is never
+  // redirected by absence alone: a missing destination is the NORMAL case for
+  // a new file, so the strip may only continue an EXISTING file's edit
+  // session. All three guards must hold: the request carries a NUMERIC
+  // baseline (proof the client read an existing file — and the read side
+  // resolved it, so the baseline belongs to the stripped file), the literal
+  // destination is gone, and the stripped destination exists. Anything else
+  // keeps the literal destination, whose absence then fails exactly as the
+  // mtime gate below always has (409, never a silent sibling write).
+  if (expectedMtimeMs !== undefined) {
+    const remainder = workspaceDirPrefixRemainder(cwd, path)
+    if (remainder !== undefined && remainder !== '' && !(await pathExists(absolute))) {
+      const alternate = await ensureWorkspaceWritePath(cwd, remainder)
+      if (await pathExists(alternate)) absolute = alternate
+    }
+  }
   // Detect the byte encoding AND the line ending BEFORE the temp write, so the
   // save round-trips what the file already used.
   const { encoding, eol } = await fileFormatOf(absolute)

@@ -17,6 +17,28 @@ import { useEffect, useState } from 'react'
 /** 复核间隔：与备用入口的位置对齐同一节拍（500ms）。 */
 const POLL_MS = 500
 
+/** 元素此刻是否真的可见（有盒子、非 hidden / display:none）——判读规则只有这一份。 */
+function isVisible(element: Element): boolean {
+  const rect = element.getBoundingClientRect()
+  if (rect.width <= 0 || rect.height <= 0) return false
+  const style = getComputedStyle(element)
+  return style.visibility !== 'hidden' && style.display !== 'none'
+}
+
+/**
+ * 对**可见的** `[data-sidebar-right-expand]`（宿主右栏收起态的角落控件）派发
+ * 一次 click。展开动作的降级路径：宿主 face（`toggleExpanded`）探测不到时，
+ * 点那个按钮和用户手点等价。可见性必须判读（两个角落控件都在文档里，见下），
+ * 命中即返回 true，没有可见控件返回 false。
+ */
+export function clickVisibleRightbarExpand(doc: Document = document): boolean {
+  if (typeof document === 'undefined') return false
+  const target = [...doc.querySelectorAll('[data-sidebar-right-expand]')].find(isVisible)
+  if (target === undefined) return false
+  target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  return true
+}
+
 /**
  * 读取一次宿主右侧面板的展开态。
  *
@@ -29,14 +51,8 @@ const POLL_MS = 500
  */
 function readRightPanelOpen(): boolean {
   if (typeof document === 'undefined') return false
-  const visible = (element: Element): boolean => {
-    const rect = element.getBoundingClientRect()
-    if (rect.width <= 0 || rect.height <= 0) return false
-    const style = getComputedStyle(element)
-    return style.visibility !== 'hidden' && style.display !== 'none'
-  }
-  return [...document.querySelectorAll('[data-sidebar-right-toggle]')].some(visible)
-    && ![...document.querySelectorAll('[data-sidebar-right-expand]')].some(visible)
+  return [...document.querySelectorAll('[data-sidebar-right-toggle]')].some(isVisible)
+    && ![...document.querySelectorAll('[data-sidebar-right-expand]')].some(isVisible)
 }
 
 /**

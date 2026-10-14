@@ -1082,6 +1082,18 @@ interface SettingsDescriptor {
 
 历史背景（`< v0.23.0`）：旧的实现用 realpath 解析后比对工作区前缀，越界回 403，并有一个 `workspaceFence` 开关（默认开）可临时关闭；开启时编辑器/文件树错误面会显示原因 + 一键关闭按钮（`FenceErrorNotice`）。用户要求删除该检查，上述代码路径随之删除（`src/path-security.ts` 现在是纯词法解析）。旧 profile 里遗留的 `workspaceFence` 键只是**未知键**——schemastery 的 object schema 对未知键是容忍的，既不报错也不再有任何效果。
 
+### 8.1.1 路径解析的工作区目录名前缀兼容
+
+模型在聊天正文里写文件链接时，常把它看到的工作区绝对路径的第一段抄进相对路径：cwd 是 `/code/www/my/gitee/my-ai`，它写 `[…](<my-ai/dsh/…/index.md>)`。宿主把该链接原样变成 `dsh-resource://file/…` 地址，侧栏 fs 路由再把它 join 到 cwd 上，得到 `<cwd>/my-ai/dsh/…`（多一层），ENOENT。为兼容这一拼写，**读路径**的解析（`fs.read` / `fs.readPage` / `fs.tree` / `fs.trees` / `/sidebar/file` 媒体 / `/sidebar/html` 预览 / `sidebar_open` 工具）带一条**存在性守卫的回退**（`src/workspace-prefix.ts` 纯词法层 + `path-security.resolveTargetCompat` 探测层，`fs.read`/`fs.readPage` 的回退在 `resolveGitPath` 的「会话相对 → 仓库根」两档之间）：
+
+1. **按字面解析，存在即用**——真实同名子目录永远优先，兼容不改变任何既有命中；
+2. 字面路径**不存在**、路径是相对的（或客户端预 join 出的 `<cwd>/…` 形状）、且**第一段 === `basename(cwd)`**（大小写敏感；Windows 上大小写变体会先命中字面探测）时，改试剥离后的路径，**存在才采用**；
+3. 两者都不存在 → 维持字面解析结果，上游报错原样（ENOENT 指向字面路径）。
+
+不触发剥离的拼写：`..` 出现在任何段（剥离会改变 `..` 的解析结果，故含 `..` 一律不动）、`~` 开头、首段之外的出现（`a/my-ai/b`）、绝对路径且不以 `<cwd>/` 开头、`?`/`#`（仍在地址解析层剥离，先于这一切）。回退放在宿主 fs 层而不是客户端或纯词法层，因为**只有这一层能 stat**——客户端 join 与地址语法解析保持原样。
+
+**写路径不按「不存在」重定向**（新文件不存在是常态，无法与陈旧前缀区分）：`fs.write`（编辑器保存）只在**带数字 `expectedMtimeMs` 基线**（证明这是既有文件的编辑会话，基线属于被读侧解析出的那个文件）、字面目标已不存在、且剥离目标存在这三者同时成立时才落到剥离路径；无基线的写入、`fs.rename` / `fs.mkdir` / `fs.createFile` / `fs.remove` / upload 保持字面语义。tab 的地址（与 contentId）仍带原拼写，读请求每次经路由解析——对消费插件透明，`resolveTarget`/`ensureWorkspaceWritePath` 的词法契约不变。
+
 ---
 
 ## 9. 生命周期与 HMR
@@ -1251,7 +1263,7 @@ better-sidebar 的内置 tab 和 viewer 就是参考实现（"吃狗粮"），�
 - **`src/client/SideCardSection.tsx`**：声明式设置页（注册表驱动清单 + 嵌套设置行 + 开关持久化）
 - **`src/client/api.ts`**：`/sidebar` API 的封装（复制其 fetch 模式到你的插件）
 - **`src/client/plugins-tabs.ts`** / **`plugins-viewers.ts`**：推荐插件目录（「添加插件」弹窗数据源；加一条数据即上架，`tests/plugin-list.spec.ts` 守护）
-- **`src/client/FileTree.tsx`** / **`TreePanel.tsx`** / **`src/fs-search.ts`** / **`src/search-engines.ts`**：文件树 / 树面板 / host 文件搜索（`fs.search`）。查询分三态（#879）：**普通名字**走引擎链——优先探测本机 fd / rg（DSH 自带 ripgrep 优先），缺失或运行失败回退 JS 遍历，两条路径共用同一份 `exclude` 探针（引擎侧是输出后置过滤：匹配条目不出现、被排除目录不下钻）；**带分隔符的相对片段**（如 `records/exp1`，名字永不包含分隔符）由 JS 遍历按根相对路径匹配、不进引擎；**指名单一目标的查询**（绝对路径、`~/…`、`./x`、`../x`）经 `resolveTarget`（与 fs.read 同一解析原语：`~` 展开、会话 cwd 拼接、win32 WSL/dsh-remote 命名空间改写、词法 resolve）stat 直取，命中返回解析后的绝对路径、目标缺失立即空结果（不烧遍历预算，exclude 不作用于显式路径意图）。`dirs` 让目录命中行导航文件树而不是当文件打开；调试插桩 `DSH_SEARCH_DEBUG=1` 写 `$DSH_HOME/search-debug.log`，缺省 `~/.dsh`。host 的 `listDirectory` 给目录行标记 `compact`（仅一个非 symlink 有效子项；POSIX 隐藏与 `explorerExclude` 排除条目不计入），client 的 `file-tree-compact.ts` 把单目录链折叠成 `a/b/c` 面包屑行并整链展开/折叠；`explorerExclude`（VS Code `files.exclude` 风格 glob 子集，见 `exclude-patterns.ts`；editor 卡片的声明式 patterns 行可编辑）把匹配条目从树与搜索中彻底移除，两个界面共用同一 host 侧编译好的 matcher；host 侧目录缓存按「路径 + 行额 + 模式集身份」分键，改排除列表即换键。测试：`tests/fs-tree-compact.spec.ts` / `file-tree-compact.spec.ts` / `fs-tree-exclude.spec.ts` / `exclude-patterns.spec.ts` / `fs-search.spec.ts` / `search-engines.spec.ts`
+- **`src/client/FileTree.tsx`** / **`TreePanel.tsx`** / **`src/fs-search.ts`** / **`src/search-engines.ts`**：文件树 / 树面板 / host 文件搜索（`fs.search`）。查询分三态（#879）：**普通名字**走引擎链——优先探测本机 fd / rg（DSH 自带 ripgrep 优先），缺失或运行失败回退 JS 遍历，两条路径共用同一份 `exclude` 探针（引擎侧是输出后置过滤：匹配条目不出现、被排除目录不下钻）；**带分隔符的相对片段**（如 `records/exp1`，名字永不包含分隔符）由 JS 遍历按根相对路径匹配、不进引擎；**指名单一目标的查询**（绝对路径、`~/…`、`./x`、`../x`）经 `resolveTarget`（与 fs.read 同一解析原语：`~` 展开、会话 cwd 拼接、win32 WSL/dsh-remote 命名空间改写、词法 resolve）stat 直取，命中返回解析后的绝对路径、目标缺失立即空结果（不烧遍历预算，exclude 不作用于显式路径意图）。`dirs` 让目录命中行导航文件树而不是当文件打开；调试插桩 `DSH_SEARCH_DEBUG=1` 写 `$DSH_HOME/search-debug.log`，缺省 `~/.dsh`。host 的 `listDirectory` 给目录行标记 `compact`（仅一个非 symlink 有效子项；POSIX 隐藏与 `explorerExclude` 排除条目不计入），client 的 `file-tree-compact.ts` 把单目录链折叠成 `a/b/c` 面包屑行并整链展开/折叠；折叠行内每一段目录名都是独立交互单元（VSCode compact folders）：hover 某段仅该段高亮+下划线（tooltip=该段完整路径）、点击中间段在该树中 reveal 到该段目录（祖先经 `onToggle` 展开、该目录进入树内选中态、折叠在该处断开成 `a/b` + 下方 `b/c` 行）、右键某段弹出以该段路径为目标的文件夹菜单；末段保持整行原有点击/菜单行为，非折叠行不受影响；`explorerExclude`（VS Code `files.exclude` 风格 glob 子集，见 `exclude-patterns.ts`；editor 卡片的声明式 patterns 行可编辑）把匹配条目从树与搜索中彻底移除，两个界面共用同一 host 侧编译好的 matcher；host 侧目录缓存按「路径 + 行额 + 模式集身份」分键，改排除列表即换键。测试：`tests/fs-tree-compact.spec.ts` / `file-tree-compact.spec.ts` / `fs-tree-exclude.spec.ts` / `exclude-patterns.spec.ts` / `fs-search.spec.ts` / `search-engines.spec.ts`
 - **`src/client/markdown-html.ts`** / **`MarkdownHtml.tsx`** / **`md-toc.tsx`**：markdown 内嵌 HTML 管线与目录大纲（注意 `md-toc.tsx` 头注释的「子组件读父 ref 为 null」时序陷阱）
 - **`src/agent-opens.ts`** / **`/sidebar/ws/agent-opens`**：模型主动打开（`sidebar_open` 工具 + `agentOpenTools` 设置，默认关闭）；文件夹窗口 = `meta.dir: true` 的 editor tab（[设计文档](plans/2026-08-23-agent-open-tools-design.md)）
 - **`tests/service.spec.ts`** / **`tests/builtins.spec.ts`**：注册表生命周期 / 匹配算法 / dedupe / createTab / 启用态 gating；内置清单断言（6 tab + 3 viewer + 声明式元数据，并显式断言 image / pdf / binary-download **不在**内置清单里、但作为公开契约仍可被第三方注册）

@@ -20,6 +20,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
 import { FileTree } from '../src/client/FileTree.tsx'
 import { MAX_COMPACT_DEPTH } from '../src/client/file-tree-compact.ts'
+import css from '../src/client/sidebar.module.css'
 
 import { setupReactAct } from './test-utils.ts'
 setupReactAct()
@@ -175,8 +176,13 @@ function rowByName(container: HTMLElement, name: string): HTMLElement {
 
 /** Right-click one row (the row menu addresses what the row's label names). */
 function openMenu(container: HTMLElement, name: string): void {
+  openMenuOn(rowByName(container, name))
+}
+
+/** Right-click any element (a breadcrumb segment span, a row…). */
+function openMenuOn(target: HTMLElement): void {
   const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 20, clientY: 30 })
-  act(() => { rowByName(container, name).dispatchEvent(event) })
+  act(() => { target.dispatchEvent(event) })
 }
 
 /** Click one row-menu entry by its (English, locale-pinned) label. */
@@ -340,5 +346,128 @@ describe('FileTree breadcrumb folding', () => {
     harness.rerender([], ['node_modules'])
     await flush()
     expect(fsTrees).not.toHaveBeenCalled()
+  })
+})
+
+/** The breadcrumb segment spans of the row labelled `label`, in chain order. */
+function segmentsOf(container: HTMLElement, label: string): HTMLElement[] {
+  return [...rowByLabel(container, label).querySelectorAll<HTMLElement>(`.${css.explorerSegment}`)]
+}
+
+/** Whether a row whose explorerName is exactly `name` is on screen. */
+function hasRow(container: HTMLElement, name: string): boolean {
+  return [...container.querySelectorAll<HTMLElement>('[role="button"]')]
+    .some(row => row.querySelector('[class*="explorerName"]')?.textContent === name)
+}
+
+describe('FileTree breadcrumb segments (per-link interaction)', () => {
+  it('renders every chain link as its own segment span carrying its own path tooltip', async () => {
+    harness = mountTree()
+    await flush()
+
+    const segments = segmentsOf(harness.container, 'a/b/c')
+    expect(segments.map(segment => segment.textContent)).toEqual(['a', 'b', 'c'])
+    // Segment tooltips name each link's FULL path (the row's own title keeps
+    // naming the tail for the pointer positions between segments).
+    expect(segments.map(segment => segment.getAttribute('title'))).toEqual(['/tmp/a', '/tmp/a/b', '/tmp/a/b/c'])
+    // The separators stay plain text: the label reads exactly as before.
+    expect(rowByLabel(harness.container, 'a/b/c').querySelector('[class*="explorerName"]')?.textContent).toBe('a/b/c')
+  })
+
+  it('reveals a MIDDLE segment: ancestors + the segment toggle on, the fold breaks, the segment is selected', async () => {
+    harness = mountTree()
+    await flush()
+
+    // Click segment `b` of `a/b/c`.
+    act(() => { segmentsOf(harness.container, 'a/b/c')[1]!.click() })
+    // Only the links up to `b` were toggled — the whole-chain row toggle did
+    // NOT fire on top of it (the tail `/tmp/a/b/c` would otherwise be here).
+    expect(harness.toggled.sort()).toEqual(['/tmp/a', '/tmp/a/b'].sort())
+
+    // The caller applies the expansion; the fold now breaks at `b`.
+    harness.rerender(['/tmp/a', '/tmp/a/b'])
+    await flush()
+    const labels = rowLabels(harness.container)
+    expect(labels.some(label => label.startsWith('a/b'))).toBe(true)
+    expect(labels.some(label => label.startsWith('a/b/c'))).toBe(false)
+    expect(hasRow(harness.container, 'c')).toBe(true)
+    // The revealed directory is the tree's selection (selected row ink).
+    expect(rowByName(harness.container, 'a/b').className).toContain(css.explorerRowSelected)
+  })
+
+  it('clicking the LAST segment keeps the row behavior: the whole chain toggles', async () => {
+    harness = mountTree()
+    await flush()
+
+    act(() => { segmentsOf(harness.container, 'a/b/c')[2]!.click() })
+    expect(harness.toggled.sort()).toEqual(['/tmp/a', '/tmp/a/b', '/tmp/a/b/c'].sort())
+
+    // Opened as one: still ONE a/b/c row with the tail's children below.
+    harness.rerender(['/tmp/a', '/tmp/a/b', '/tmp/a/b/c'])
+    await flush()
+    expect(rowLabels(harness.container).some(label => label.startsWith('a/b/c'))).toBe(true)
+    expect(hasRow(harness.container, 'c')).toBe(false)
+  })
+
+  it('right-clicking a MIDDLE segment opens the folder menu for that segment path', async () => {
+    harness = mountTree()
+    await flush()
+
+    // Right-click segment `a` (the fold head, path /tmp/a).
+    openMenuOn(segmentsOf(harness.container, 'a/b/c')[0]!)
+    clickMenuitem('Rename')
+    // The editor pre-names `a` — NOT the tail `c` the row menu would target.
+    const input = harness.container.querySelector<HTMLInputElement>('input[class*="explorerRenameInput"]')
+    expect(input).not.toBeNull()
+    expect(input!.value).toBe('a')
+    setNativeValue(input!, 'seg')
+    await act(async () => { pressKey(input!, 'Enter') })
+    expect(fsRename).toHaveBeenCalledWith({ sessionId: 's1', cwd: '/tmp' }, '/tmp/a', 'seg')
+  })
+
+  it('right-clicking the LAST segment keeps the row menu (tail target)', async () => {
+    harness = mountTree()
+    await flush()
+
+    openMenuOn(segmentsOf(harness.container, 'a/b/c')[2]!)
+    clickMenuitem('Rename')
+    const input = harness.container.querySelector<HTMLInputElement>('input[class*="explorerRenameInput"]')
+    expect(input!.value).toBe('c')
+    setNativeValue(input!, 'renamed')
+    await act(async () => { pressKey(input!, 'Enter') })
+    expect(fsRename).toHaveBeenCalledWith({ sessionId: 's1', cwd: '/tmp' }, '/tmp/a/b/c', 'renamed')
+  })
+
+  it('collapsing the broken row re-forms the fold', async () => {
+    harness = mountTree()
+    await flush()
+    act(() => { segmentsOf(harness.container, 'a/b/c')[1]!.click() })
+    harness.rerender(['/tmp/a', '/tmp/a/b'])
+    await flush()
+    expect(hasRow(harness.container, 'c')).toBe(true)
+
+    // Close the broken `a/b` row: both rendered links collapse and the chain
+    // renders whole again. (`toggled` accumulates across this test — the
+    // segment reveal above already logged the same two paths.)
+    act(() => { rowByName(harness.container, 'a/b').click() })
+    expect(harness.toggled.slice(-2).sort()).toEqual(['/tmp/a', '/tmp/a/b'].sort())
+    harness.rerender([])
+    await flush()
+    expect(rowLabels(harness.container).some(label => label.startsWith('a/b/c'))).toBe(true)
+    expect(hasRow(harness.container, 'c')).toBe(false)
+  })
+
+  it('leaves unfolded rows untouched: no segment spans on files or single-segment dirs', async () => {
+    harness = mountTree()
+    await flush()
+
+    expect(rowByLabel(harness.container, 'readme.md').querySelector(`.${css.explorerSegment}`)).toBeNull()
+
+    // After a break, the remaining links render as ordinary rows — the `c`
+    // row is a plain single-segment directory row without segments.
+    act(() => { segmentsOf(harness.container, 'a/b/c')[1]!.click() })
+    harness.rerender(['/tmp/a', '/tmp/a/b'])
+    await flush()
+    expect(rowByName(harness.container, 'c').querySelector(`.${css.explorerSegment}`)).toBeNull()
   })
 })

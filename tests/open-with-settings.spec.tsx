@@ -1,6 +1,7 @@
 /**
- * The editor's "open with" settings panel: the SSH host row and the custom
- * editor list (name + URL template + VSCode-family flag, add/remove). Every
+ * The editor's "open with" settings panel: the SSH host row, the custom
+ * editor list (name + URL template + VSCode-family flag, add/remove) and the
+ * path-mapping list (workspace prefix + target prefix, add/remove). Every
  * edit commits the whole `openWith` blob through the popup's
  * updatePluginSetting; removing an editor also prunes its pinned id.
  */
@@ -48,6 +49,7 @@ const baseConfig = {
     { id: 'a', name: 'Windsurf', urlTemplate: 'windsurf://file/{path}', isVscodeFamily: false },
   ],
   pinned: ['vscode', 'custom:a'],
+  pathMappings: [{ id: 'm1', from: '/code/www', to: 'D:/code/www' }],
 }
 
 describe('OpenWithSettings', () => {
@@ -108,5 +110,62 @@ describe('OpenWithSettings', () => {
     act(() => { checkbox!.click() })
     const blob = harness.update.mock.calls[0]?.[1] as { customEditors: { isVscodeFamily: boolean }[] }
     expect(blob.customEditors[0]?.isVscodeFamily).toBe(true)
+  })
+
+  it('renders the persisted path-mapping rows with both prefix inputs', () => {
+    harness = mountSettings(baseConfig)
+    const from = [...harness.container.querySelectorAll<HTMLInputElement>('input')]
+      .find(input => input.placeholder === 'Workspace prefix')
+    const to = [...harness.container.querySelectorAll<HTMLInputElement>('input')]
+      .find(input => input.placeholder === 'Target prefix')
+    expect(from?.value).toBe('/code/www')
+    expect(to?.value).toBe('D:/code/www')
+    expect(harness.container.textContent).toContain('Path mappings')
+  })
+
+  it('adds a path-mapping row (second Add) and commits it into the blob', () => {
+    harness = mountSettings({ ...baseConfig, pathMappings: [] })
+    const adds = [...harness.container.querySelectorAll<HTMLButtonElement>('button')]
+      .filter(button => button.textContent?.trim() === 'Add')
+    expect(adds).toHaveLength(2)
+    act(() => { adds[1]!.click() })
+    const blob = harness.update.mock.calls[0]?.[1] as {
+      pathMappings: { id: string; from: string; to: string }[]
+      customEditors: unknown[]
+    }
+    expect(blob.pathMappings).toHaveLength(1)
+    expect(blob.pathMappings[0]).toMatchObject({ from: '', to: '' })
+    expect(blob.customEditors).toHaveLength(1)
+  })
+
+  it('edits both prefixes of a mapping and persists them in the same blob', () => {
+    harness = mountSettings({ ...baseConfig, pathMappings: [{ id: 'm1', from: '', to: '' }] })
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    const from = [...harness.container.querySelectorAll<HTMLInputElement>('input')]
+      .find(input => input.placeholder === 'Workspace prefix')!
+    act(() => {
+      setter.call(from, '/code/www')
+      from.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    // The `to` edit lands on the SAME round-tripped row (the local draft
+    // stays authoritative while the popup is open).
+    const to = [...harness.container.querySelectorAll<HTMLInputElement>('input')]
+      .find(input => input.placeholder === 'Target prefix')!
+    act(() => {
+      setter.call(to, 'D:/code/www')
+      to.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const blob = harness.update.mock.calls.at(-1)?.[1] as { pathMappings: { id: string; from: string; to: string }[] }
+    expect(blob.pathMappings).toEqual([{ id: 'm1', from: '/code/www', to: 'D:/code/www' }])
+  })
+
+  it('removes a path-mapping row without touching the custom editors', () => {
+    harness = mountSettings(baseConfig)
+    const removes = harness.container.querySelectorAll<HTMLButtonElement>('button[aria-label="Remove"]')
+    expect(removes).toHaveLength(2) // one editor row + one mapping row
+    act(() => { removes[1]!.click() })
+    const blob = harness.update.mock.calls[0]?.[1] as { pathMappings: unknown[]; customEditors: unknown[] }
+    expect(blob.pathMappings).toHaveLength(0)
+    expect(blob.customEditors).toHaveLength(1)
   })
 })

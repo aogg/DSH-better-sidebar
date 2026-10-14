@@ -8,7 +8,13 @@
  * the refresh affordance — a `refreshTick` bump wipes the level cache so the
  * visible set reloads. Chains of dirs holding exactly one real dir child each
  * fold into one breadcrumb row (`a/b/c`, VSCode "compact folders"); clicking
- * the row toggles the whole chain.
+ * the row toggles the whole chain. Every breadcrumb SEGMENT is also its own
+ * interaction unit: hovering highlights and underlines just that segment
+ * (tooltip = the segment's full path), clicking a middle segment reveals that
+ * directory in the tree (ancestors expand, it is selected, the fold breaks at
+ * it so the row shows `a/b` with `b/c` below), and right-clicking a segment
+ * opens the folder menu for that segment's path. The last segment keeps the
+ * row's own click/menu behavior.
  *
  * Selection (VS Code semantics, no modifier = the old click semantics
  * untouched): Ctrl/Cmd+click toggles a row and sets the anchor, Shift+click
@@ -31,7 +37,10 @@
  * offer "upload here", "new folder" and "new file" (an inline editor at the
  * top of that level; the two creators are mutually exclusive); every row can
  * copy the relative or absolute path (with a brief
- * "copied" label replacing the button after a successful write).
+ * "copied" label replacing the button after a successful write), and every
+ * row offers「添加到搜索中」— a submenu feeding the content-search
+ * include/exclude chips with this row's path (when the caller provides
+ * `onAddToContentSearch`).
  *
  * Rows are memoized components (FileRow / DirRow) fed by stable callbacks and
  * per-row booleans, so a copy flash, a drag target or a selection change only
@@ -42,11 +51,11 @@
  * (VSCode semantics — a drop on a file row targets its parent directory),
  * and `busy` gates new drags while one upload is in flight.
  */
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import {
-  IconArchiveOutlineRegular, IconChevronRightOutlineRegular, IconCloseFillRegular, IconCodeOutlineRegular, IconCopyOutlineRegular,
+  IconArchiveOutlineRegular, IconChevronRightOutlineRegular, IconCloseFillRegular, IconCloseOutlineRegular, IconCodeOutlineRegular, IconCopyOutlineRegular,
   IconDownloadOutlineRegular,
   IconEditOutlineRegular, IconFolderOpenRegular, IconLinkOutlineRegular, IconPlusOutlineRegular, IconTrashOutlineRegular,
   Menu, type MenuEntry, type MenuItem, writeClipboard,
@@ -58,7 +67,7 @@ import { compactChain, compactLoadTargets } from './file-tree-compact.ts'
 import { DEFAULT_FILE_TREE_SORT, sortEntries, type FileTreeSort } from './file-tree-sort.ts'
 import { FS_TREES_MAX_PATHS } from '../fs-batch.ts'
 import { builtinFileIcon, builtinFolderIcon } from './file-icons.tsx'
-import { IconUploadOutline16, IconVscode16 } from './icons.tsx'
+import { IconContentSearchOutline16, IconUploadOutline16, IconVscode16 } from './icons.tsx'
 import { isLikelyImeKey } from './ime-guard.ts'
 import { useSubmenuFlip } from './menu-flip.ts'
 import type { OpenInApp, OpenInAppEntry } from './open-in-app.ts'
@@ -195,6 +204,19 @@ interface ActivateModifiers {
 }
 
 /**
+ * The event shape opening the context menu needs. Structural on purpose: the
+ * menu opener is shared by the row `div`s AND the breadcrumb segment `span`s,
+ * whose synthetic events carry different `currentTarget` types — only the
+ * cursor position and propagation are read.
+ */
+interface ContextMenuTrigger {
+  preventDefault(): void
+  stopPropagation(): void
+  clientX: number
+  clientY: number
+}
+
+/**
  * The stable per-row callback bundle. `FileRow` / `DirRow` are memoized, so
  * every handler here must keep its identity for the life of the tree; each
  * one reads the live props/state through the refs the tree maintains.
@@ -207,7 +229,15 @@ interface RowActions {
    * closes as one row instead of only ever toggling its head.
    */
   activate(event: ActivateModifiers, path: string, isDir: boolean, chain?: readonly FsEntry[]): void
-  contextMenu(event: MouseEvent<HTMLDivElement>, path: string, isDir: boolean): void
+  contextMenu(event: ContextMenuTrigger, path: string, isDir: boolean): void
+  /**
+   * Reveal one MIDDLE segment of a folded breadcrumb row (VSCode's
+   * compact-folders click): expand the chain up to and including the segment,
+   * select that directory, and break the fold at it — the row then renders
+   * `a/b` with the remaining links (`b/c`) as their own row below. `chain` is
+   * the chain slice the row renders and `index` the clicked link inside it.
+   */
+  revealSegment(event: ActivateModifiers, chain: readonly FsEntry[], index: number): void
   reference(path: string, isDir: boolean): void
   dragOver(event: DragEvent<HTMLDivElement>, dir: string): void
   drop(event: DragEvent<HTMLDivElement>, path: string, isDir: boolean): void
@@ -231,6 +261,13 @@ interface FileRowProps {
   service: BetterSidebarService | undefined
   selected: boolean
   revealed: boolean
+  /**
+   * The one-shot reveal-flash class for THIS reveal round (undefined = no
+   * flash): FileTree alternates the class on every fresh reveal so the CSS
+   * animation restarts (a same-name replay would not run again). A primitive
+   * like the other row props, so memo() still bails out.
+   */
+  flash: string | undefined
   /** A drag hovers this row's PARENT directory (upload target). */
   dropTarget: boolean
   copied: boolean
@@ -247,7 +284,7 @@ interface FileRowProps {
 }
 
 const FileRow = memo(function FileRow(props: FileRowProps): ReactNode {
-  const { entry, depth, iconsVersion, service, selected, revealed, dropTarget, copied, gitTone, gitLetter, actions } = props
+  const { entry, depth, iconsVersion, service, selected, revealed, flash, dropTarget, copied, gitTone, gitLetter, actions } = props
   // Referenced so a registry change re-renders the row with its new icon.
   void iconsVersion
   const icon = service !== undefined ? service.fileIcon(entry.path, 14) : builtinFileIcon(entry.path, 14)
@@ -260,6 +297,7 @@ const FileRow = memo(function FileRow(props: FileRowProps): ReactNode {
         selected && css.explorerRowSelected,
         dropTarget && css.explorerRowDropTarget,
         revealed && css.explorerRowRevealed,
+        flash,
       )}
       data-dsh-revealed={revealed ? 'true' : undefined}
       data-dsh-selected={selected ? 'true' : undefined}
@@ -311,8 +349,10 @@ interface DirRowProps {
   /**
    * The fold chain this row renders: `[entry]` for an ordinary directory, or
    * the singleton-dir breadcrumb (`a` → `a/b` → `a/b/c`) VSCode calls
-   * "compact folders". The array identity is stable while the level cache
-   * stands (see the chain cache in the tree body), so memo() still bails out.
+   * "compact folders" — or a PREFIX of one after a breadcrumb-segment reveal
+   * broke the fold (the tree passes the chain slice this row now shows). The
+   * array identity is stable while the level cache stands (see the chain
+   * cache in the tree body), so memo() still bails out.
    */
   chain: readonly FsEntry[]
   depth: number
@@ -331,11 +371,54 @@ interface DirRowProps {
 const DirRow = memo(function DirRow(props: DirRowProps): ReactNode {
   const { entry, chain, depth, expanded, iconsVersion, service, selected, revealed, dropTarget, gitChanged, copied, actions } = props
   void iconsVersion
-  // The row's ACTIONS target the chain's deepest link: that is the directory
-  // the user sees expanded (`a/b/c`), so dropping into it, renaming it or
-  // opening a menu on it must address `c`, not the fold head `a`.
+  // The row's ACTIONS target the chain's deepest RENDERED link: that is the
+  // directory the user sees expanded (`a/b/c`, or `a/b` after a segment
+  // reveal broke the fold), so dropping into it, renaming it or opening a
+  // menu on it must address that link, not the fold head `a`.
   const target = chain[chain.length - 1]!
   const icon = service !== undefined ? service.folderIcon(target.path, expanded, 14) : builtinFolderIcon(expanded, 14)
+  /**
+   * The breadcrumb label. A multi-link chain renders EVERY segment as its own
+   * interactive unit (VSCode's compact folders): hovering a segment highlights
+   * and underlines just that segment (the row's hover fill keeps painting the
+   * whole line), each segment's native tooltip names its full path, clicking a
+   * middle segment reveals that directory in the tree (expand ancestors +
+   * select + the fold breaks there), clicking the LAST segment is the row's
+   * own toggle, and right-clicking any segment opens the folder menu for that
+   * segment's path. All of it stops propagation — the row's own handlers (the
+   * whole-chain toggle and the tail's menu) must not fire from a segment.
+   */
+  const breadcrumb = chain.length > 1
+    ? chain.map((link, index) => (
+      <Fragment key={link.path}>
+        {index > 0 ? '/' : null}
+        <span
+          className={css.explorerSegment}
+          title={link.path}
+          onClick={(event) => {
+            event.stopPropagation()
+            // The last segment IS the row's tail: it keeps the row's own
+            // behavior (toggle the chain it renders). Modifier clicks stay
+            // row-shaped too — multi-select operates on rows, not segments.
+            if (index === chain.length - 1 || event.ctrlKey || event.metaKey || event.shiftKey) {
+              actions.activate(event, entry.path, true, chain)
+              return
+            }
+            actions.revealSegment(event, chain, index)
+          }}
+          onContextMenu={(event) => {
+            // The folder menu for THIS segment's path (the tail segment
+            // reproduces the row's own menu exactly).
+            event.preventDefault()
+            event.stopPropagation()
+            actions.contextMenu(event, link.path, link.isDir)
+          }}
+        >
+          {link.name}
+        </span>
+      </Fragment>
+    ))
+    : entry.name
   return (
     <div
       role="button"
@@ -355,7 +438,9 @@ const DirRow = memo(function DirRow(props: DirRowProps): ReactNode {
       // EVERY directory row carries its full path here — a single-segment row
       // is truncated by the label's ellipsis exactly like the breadcrumb, and
       // the body never scrolls horizontally, so the tooltip is the only way to
-      // read a deep path (the same affordance `FileRow` gives a file).
+      // read a deep path (the same affordance `FileRow` gives a file). Each
+      // SEGMENT span carries its own title on top: the path of the link the
+      // pointer is actually over.
       title={target.path}
       onClick={(event) => { actions.activate(event, entry.path, true, chain) }}
       onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
@@ -370,7 +455,7 @@ const DirRow = memo(function DirRow(props: DirRowProps): ReactNode {
     >
       {icon}
       <span className={clsx(css.explorerName, gitChanged && css.explorerDirChanged)}>
-        {chain.length > 1 ? chain.map(link => link.name).join('/') : entry.name}
+        {breadcrumb}
       </span>
       {entry.isSymlink && <IconLinkOutlineRegular size={12} className={css.explorerSymlink} />}
       {copied
@@ -518,6 +603,13 @@ export function FileTree(props: {
   onToggleOpenWithPin?: (targetId: string) => void
   /** Insert `@<relative path>` into the composer draft (file vs directory). */
   onReferenceFile: (path: string, isDir: boolean) => void
+  /**
+   * Context-menu 「添加到搜索中」: the caller (TreePanel) owns the content-search
+   * chip lists — this tree only reports the right-clicked row's ABSOLUTE path
+   * plus which list the user picked (`include` / `exclude`). Absent → the
+   * whole submenu is not offered (the same contract as the open escapes).
+   */
+  onAddToContentSearch?: (path: string, target: 'include' | 'exclude') => void
   /** The explorerExclude pref patterns: the HOST filters the listing with
    *  them (excluded rows never arrive), so changing the list wipes the level
    *  cache and reloads — the rows themselves need no client-side filter. */
@@ -572,7 +664,7 @@ export function FileTree(props: {
   const {
     sessionId, cwd, expanded, revealed, onOpenFileNewTab, onOpenFileSide,
     openInApp, openWithTargets, openWithPinned, openWithSsh, onOpenWith, onToggleOpenWithPin,
-    openWithShowPluginTargets, exclude,
+    openWithShowPluginTargets, exclude, onAddToContentSearch,
     onPathRenamed, onPathDeleted, refreshTick, onUploadRequest, busy, hidden, visible, service,
   } = props
   const sort = props.sort ?? DEFAULT_FILE_TREE_SORT
@@ -600,6 +692,31 @@ export function FileTree(props: {
   const generationRef = useRef(0)
   /** The row whose path was just copied ("copied" label replaces its button). */
   const [copiedPath, setCopiedPath] = useState<string | null>(null)
+  /**
+   * Bumped on every FRESH reveal (see the effect by the reveal scroll): the
+   * counter's parity picks between two interchangeable flash classes, so a
+   * replay changes the row's animation-name and the CSS animation restarts.
+   * 0 = this tree instance has not seen a reveal yet (no flash).
+   */
+  const [flashSeq, setFlashSeq] = useState(0)
+  /**
+   * Where a folded breadcrumb row's fold is BROKEN by a segment reveal
+   * (VSCode's compact folders): the path of the chain link a breadcrumb
+   * segment click revealed, so the row renders `a/b` and the remaining links
+   * (`b/c`) drop to their own row below. Derived state would be wrong here —
+   * a pre-fold expansion of the head alone must NOT split the row (the whole
+   * chain stays one row, see the fold spec), so the break exists only where a
+   * segment click put it. Cleared when its row collapses (the fold re-forms)
+   * and on a session/cwd swap; a structure change that loses the path leaves
+   * it inert (no chain contains it, so nothing splits).
+   */
+  const [foldBreak, setFoldBreakState] = useState<string | null>(null)
+  /** The break's mirror for the stable callbacks (identity never churns). */
+  const foldBreakRef = useRef<string | null>(null)
+  const setFoldBreak = useCallback((path: string | null): void => {
+    foldBreakRef.current = path
+    setFoldBreakState(path)
+  }, [])
   /** Open context menu: the row path (and whether it is a directory) plus the cursor position. */
   const [rowMenu, setRowMenu] = useState<{ path: string; isDir: boolean; x: number; y: number } | null>(null)
   // The plugin submenu can tower past the viewport; publish its flip geometry
@@ -1053,6 +1170,20 @@ export function FileTree(props: {
     body.scrollTo({ top: Math.min(Math.max(target, 0), max), behavior: 'smooth' })
   }, [revealed, data])
 
+  // The reveal FLASH: `revealPaths` allocates a new `revealed` array on every
+  // call — even for a set that already contains the file — so each reveal
+  // round bumps the counter and the revealed row's flash class alternates
+  // (changing animation-name restarts the animation; replaying the same class
+  // would not). The tree dock unmounts while closed, so the panel-open
+  // gesture replays through this mount bump alone; a reveal into an OPEN
+  // tree ("show in folder"-style callers) replays through the identity
+  // change. Same hidden guard as the scroll above: nothing flashes while the
+  // search panel has parked the tree.
+  useEffect(() => {
+    if (revealed.length === 0 || propsRef.current.hidden === true) return
+    setFlashSeq(seq => seq + 1)
+  }, [revealed])
+
   /** Copy `text`; on success flip the row's copied label for a moment. */
   const copyPath = useCallback((text: string, path: string): void => {
     void writeClipboard(text).then((ok) => {
@@ -1161,6 +1292,8 @@ export function FileTree(props: {
     // editor until the next one — long enough for a blur in this tick to mkdir
     // that dir under the new scope.
     newFolderRef.current = null
+    // A breadcrumb break points at the previous project's paths.
+    setFoldBreak(null)
     setConfirmDelete(null)
     setConfirmDeleteSelected(null)
     // A batch walk of the PREVIOUS session may still be in flight: its flag
@@ -1172,7 +1305,7 @@ export function FileTree(props: {
     setLoadError(null)
     pendingUploadDir.current = undefined
     resetDrop()
-  }, [sessionId, cwd, resetDrop, clearSelection])
+  }, [sessionId, cwd, resetDrop, clearSelection, setFoldBreak])
 
   const copySelectedPaths = useCallback((): void => {
     void writeClipboard([...selectedRef.current].join('\n'))
@@ -1230,12 +1363,43 @@ export function FileTree(props: {
     // close a chain an earlier expansion (before the fold formed) left open.
     const links = chain !== undefined && chain.length > 0 ? chain.map(link => link.path) : [path]
     const open = links.some(link => expandedSetRef.current.has(link))
+    if (open) {
+      // Collapsing the row re-forms its fold: a breadcrumb-segment break dies
+      // with the row it split (the chain renders whole again once closed).
+      const broken = foldBreakRef.current
+      if (broken !== null && links.includes(broken)) setFoldBreak(null)
+    }
     for (const link of links) {
       if (expandedSetRef.current.has(link) === open) propsRef.current.onToggle(link)
     }
-  }, [clearSelection, selectRange, toggleSelect])
+  }, [clearSelection, selectRange, toggleSelect, setFoldBreak])
 
-  const handleContextMenu = useCallback((event: MouseEvent<HTMLDivElement>, path: string, isDir: boolean): void => {
+  /**
+   * A breadcrumb segment click on a folded row (VSCode's compact folders):
+   * reveal the clicked directory IN the tree — expand the chain up to and
+   * including it, select it, and break the fold at it, so the row now shows
+   * `a/b` with the remaining links as their own row below. The ancestors ride
+   * the caller's `onToggle` (flips, so only collapsed links are touched); the
+   * selection is the tree's own; the break is the tree's `foldBreak` state.
+   * Modifier clicks never get here (the row diverts them to its own
+   * activate), so this is the plain-click path only.
+   */
+  const handleRevealSegment = useCallback((_event: ActivateModifiers, chain: readonly FsEntry[], index: number): void => {
+    const link = chain[index]
+    if (link === undefined) return
+    for (let at = 0; at <= index; at += 1) {
+      const path = chain[at]!.path
+      if (!expandedSetRef.current.has(path)) propsRef.current.onToggle(path)
+    }
+    anchorRef.current = link.path
+    kindRef.current.set(link.path, link.isDir)
+    setSelection(new Set([link.path]))
+    // A break AT the head would be a no-op split (the head row IS the fold's
+    // top — nothing renders above it), so only deeper links actually break.
+    if (index > 0) setFoldBreak(link.path)
+  }, [setFoldBreak, setSelection])
+
+  const handleContextMenu = useCallback((event: ContextMenuTrigger, path: string, isDir: boolean): void => {
     event.preventDefault()
     event.stopPropagation()
     // VSCode semantics: right-clicking outside the selection collapses it
@@ -1258,10 +1422,11 @@ export function FileTree(props: {
   const actions = useMemo<RowActions>(() => ({
     activate: handleActivate,
     contextMenu: handleContextMenu,
+    revealSegment: handleRevealSegment,
     reference: handleReference,
     dragOver: handleRowDragOver,
     drop: handleDrop,
-  }), [handleActivate, handleContextMenu, handleReference, handleRowDragOver, handleDrop])
+  }), [handleActivate, handleContextMenu, handleRevealSegment, handleReference, handleRowDragOver, handleDrop])
 
   // ── New folder ─────────────────────────────────────────────────────────
   const newFolderRef = useRef(newFolder)
@@ -1672,6 +1837,33 @@ export function FileTree(props: {
     return []
   }
 
+  /**
+   * The「添加到搜索中」submenu: feed the content-search section's
+   * include/exclude chip lists with the right-clicked row. The tree only
+   * REPORTS the row (absolute path + which list); TreePanel owns the chip
+   * lists and derives the chip shape — see TreePanel's addToContentSearch.
+   * The parent row copies the open-with submenu's label contract verbatim:
+   * the primitives Menu draws no chevron for submenu parents, so the
+   * trailing arrow rides inside the label (full-width flex row, right
+   * aligned). Rows: files AND directories alike (a directory names a
+   * subtree scope, a file names itself); the breadcrumb/compact rows and
+   * the workspace root reuse the same builder, which is expected.
+   */
+  const addToSearchSubmenu = (): MenuItem => ({
+    id: 'add-to-search',
+    label: (
+      <span className={css.openWithLabel}>
+        <span className={css.openWithName}>{t('addToSearch')}</span>
+        <IconChevronRightOutlineRegular size={14} className={css.openWithChevron} aria-hidden />
+      </span>
+    ),
+    icon: <IconContentSearchOutline16 size={14} />,
+    submenu: [
+      { id: 'add-to-search:include', label: t('addToSearchInclude'), icon: <IconPlusOutlineRegular size={14} /> },
+      { id: 'add-to-search:exclude', label: t('addToSearchExclude'), icon: <IconCloseOutlineRegular size={14} /> },
+    ],
+  })
+
   /** Download a file through the host route (raw bytes, binary-safe). */
   const downloadFile = (path: string): void => {
     const url = downloadUrl({ sessionId, cwd }, path)
@@ -1833,6 +2025,10 @@ export function FileTree(props: {
   const expandedSet = useMemo(() => new Set(expanded), [expanded])
   const revealedSet = useMemo(() => new Set(revealed), [revealed])
   expandedSetRef.current = expandedSet
+  /** This reveal round's flash class (parity-picked, see `flashSeq`). */
+  const flashClass = flashSeq === 0
+    ? undefined
+    : flashSeq % 2 === 1 ? css.explorerRowFlashA : css.explorerRowFlashB
 
   /** The tree's shared git status (the changes page reads the same snapshot);
    *  a parked tab unsubscribes from the poll. */
@@ -1855,6 +2051,28 @@ export function FileTree(props: {
       return chain
     }
   }, [data])
+
+  /**
+   * The chain a row RENDERS: the fold chain, sliced at the breadcrumb break
+   * when one lands inside it (`a/b/c` with a break at `b` renders as `a/b`).
+   * The slice is cached per (path, break index) alongside `chainFor`, so the
+   * memoized `DirRow` still sees a stable array identity across renders.
+   */
+  const resolveChain = useMemo(() => {
+    const slices = new Map<string, readonly FsEntry[]>()
+    return (entry: FsEntry): { full: readonly FsEntry[]; rendered: readonly FsEntry[]; broken: boolean } => {
+      const full = chainFor(entry)
+      const at = foldBreak === null ? -1 : full.findIndex(link => link.path === foldBreak)
+      if (at <= 0) return { full, rendered: full, broken: false }
+      const key = `${entry.path}\u0000${at}`
+      let rendered = slices.get(key)
+      if (rendered === undefined) {
+        rendered = full.slice(0, at + 1)
+        slices.set(key, rendered)
+      }
+      return { full, rendered, broken: true }
+    }
+  }, [chainFor, foldBreak])
 
   /**
    * One level's rows in the caller's chosen order, resolved ONCE per
@@ -1886,18 +2104,19 @@ export function FileTree(props: {
       if (level?.entries === undefined) return
       for (const entry of entriesFor(dir)) {
         // A folded row IS one row: its identity is the chain head (the level
-        // entry the walk is on), and it descends into the chain TAIL — the
-        // same shape `renderLevel` draws, so a Shift range covers what the
-        // user sees.
+        // entry the walk is on), and it descends into the RENDERED chain's
+        // tail — the full chain's tail normally, or the break link when a
+        // breadcrumb segment reveal split the row — the same shape
+        // `renderLevel` draws, so a Shift range covers what the user sees.
         rows.push({ path: entry.path, isDir: entry.isDir })
         if (!entry.isDir) continue
-        const chain = chainFor(entry)
-        if (chain.some(link => expandedSet.has(link.path))) walk(chain[chain.length - 1]!.path)
+        const { rendered } = resolveChain(entry)
+        if (rendered.some(link => expandedSet.has(link.path))) walk(rendered[rendered.length - 1]!.path)
       }
     }
     if (root !== undefined) walk(root)
     return rows
-  }, [chainFor, data, entriesFor, expandedSet, root])
+  }, [data, entriesFor, expandedSet, resolveChain, root])
   visibleRowsRef.current = visibleRows
 
   /**
@@ -2073,16 +2292,19 @@ export function FileTree(props: {
           // exactly one real dir child each renders as ONE `a/b/c` row; the
           // chain pauses at whatever the level cache has loaded. Resolved for
           // directories only, and through the per-revision cache so DirRow's
-          // memoization survives an unrelated re-render.
-          const chain = entry.isDir ? chainFor(entry) : undefined
+          // memoization survives an unrelated re-render. A breadcrumb
+          // segment reveal slices the chain at the break (`a/b/c` → `a/b` +
+          // a `b/c` row below).
+          const resolved = entry.isDir ? resolveChain(entry) : undefined
           // The row being renamed renders as its editor (no button semantics:
           // an editor is not a click target — and a nested interactive inside
           // role="button" would be invalid anyway). A folded row's menu
           // addressed its TAIL, so any chain link puts the whole row here.
-          if (renaming !== null && (renaming.path === entry.path || chain?.some(link => link.path === renaming.path) === true)) {
+          if (renaming !== null && (renaming.path === entry.path || resolved?.full.some(link => link.path === renaming.path) === true)) {
             return renderRenameRow(entry, depth)
           }
-          if (chain !== undefined) {
+          if (resolved !== undefined) {
+            const chain = resolved.rendered
             const tail = chain[chain.length - 1]!
             const isOpen = chain.some(link => expandedSet.has(link.path))
             return (
@@ -2094,7 +2316,11 @@ export function FileTree(props: {
                   expanded={isOpen}
                   iconsVersion={iconsVersion}
                   service={service}
-                  selected={selected.has(entry.path)}
+                  // Selected when the row's HEAD or its rendered TAIL is in
+                  // the selection: the row's menu (and a breadcrumb segment
+                  // click) address the tail, and the highlight must follow
+                  // the path the interaction actually named.
+                  selected={selected.has(entry.path) || selected.has(tail.path)}
                   // Reveal-anchor: a reveal names a specific directory, which
                   // may be a MID-chain link — mark the row that renders it.
                   revealed={chain.some(link => revealedSet.has(link.path))}
@@ -2117,6 +2343,7 @@ export function FileTree(props: {
               service={service}
               selected={selected.has(entry.path)}
               revealed={revealedSet.has(entry.path)}
+              flash={revealedSet.has(entry.path) ? flashClass : undefined}
               dropTarget={dropTarget === parentOf(entry.path)}
               gitTone={git?.tone}
               gitLetter={git?.letter}
@@ -2304,6 +2531,10 @@ export function FileTree(props: {
             : []),
           // 5: ZIP of the current selection (≥2 rows, or one lone directory).
           ...(rowMenu === null ? [] : zipEntries(rowMenu)),
+          // 5.5:「添加到搜索中」— feed the content-search include/exclude
+          // chips with this row (every row kind; the caller decides whether
+          // the submenu is offered at all).
+          ...(rowMenu !== null && onAddToContentSearch !== undefined ? [addToSearchSubmenu()] : []),
           // 6: copy, then the mutations (never on the workspace root row).
           { id: 'relative', label: t('copyRelative'), icon: <IconCopyOutlineRegular size={14} /> },
           { id: 'absolute', label: t('copyAbsolute'), icon: <IconCopyOutlineRegular size={14} /> },
@@ -2355,6 +2586,12 @@ export function FileTree(props: {
           }
           if (id === 'archive-selection') {
             downloadArchive([...selected])
+            return
+          }
+          // 「添加到搜索中」submenu: hand the row + the picked list to the
+          // caller (TreePanel owns the chips; the id suffix IS the list).
+          if (id.startsWith('add-to-search:')) {
+            onAddToContentSearch?.(target.path, id === 'add-to-search:include' ? 'include' : 'exclude')
             return
           }
           if (id === 'download') {

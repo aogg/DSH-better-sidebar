@@ -1,9 +1,12 @@
 /**
  * The editor tab's custom settings panel ("打开方式"): the file tree's
  * "open with" configuration — the optional SSH host marking the workspace as
- * remote, and the user-defined editors (name + URL template with `{path}` +
- * whether they speak the VSCode URL dialect). Persisted as the editor
- * blob's `openWith` key through the settings popup's `updatePluginSetting`.
+ * remote, the user-defined editors (name + URL template with `{path}` +
+ * whether they speak the VSCode URL dialect), and the path-prefix mappings
+ * (workspace prefix → target-machine prefix, e.g. `/code/www` →
+ * `D:/code/www`, applied to URL targets outside SSH mode). Persisted as the
+ * editor blob's `openWith` key through the settings popup's
+ * `updatePluginSetting`.
  *
  * The popup renders the declarative rows (the editorExplorer picker) ABOVE
  * this panel — SettingsBody renders the custom panel after the row list, so
@@ -17,6 +20,7 @@ import {
   parseOpenWithConfig,
   type CustomEditor,
   type OpenWithConfig,
+  type PathMapping,
 } from './open-with.ts'
 import { t } from './locales.ts'
 import css from './SideCardSection.module.css'
@@ -59,6 +63,27 @@ export function OpenWithSettings(props: {
     commit({
       ...draft,
       customEditors: [...draft.customEditors, { id: newCustomEditorId(), name: '', urlTemplate: '', isVscodeFamily: false }],
+    })
+  }
+
+  const patchMapping = (id: string, patch: Partial<PathMapping>): void => {
+    commit({
+      ...draft,
+      pathMappings: draft.pathMappings.map(mapping => mapping.id === id ? { ...mapping, ...patch } : mapping),
+    })
+  }
+
+  const removeMapping = (id: string): void => {
+    commit({
+      ...draft,
+      pathMappings: draft.pathMappings.filter(mapping => mapping.id !== id),
+    })
+  }
+
+  const addMapping = (): void => {
+    commit({
+      ...draft,
+      pathMappings: [...draft.pathMappings, { id: newCustomEditorId(), from: '', to: '' }],
     })
   }
 
@@ -130,6 +155,44 @@ export function OpenWithSettings(props: {
           {t('openWithSettingsInvalidHint')}
         </div>
       )}
+      <div className={css.popupRow}>
+        <span className={css.rowText}>
+          <span className={css.title}>{t('openWithSettingsPathMapTitle')}</span>
+          <span className={css.desc}>{t('openWithSettingsPathMapDesc')}</span>
+        </span>
+        <span className={css.control}>
+          <button type="button" className={css.done} onClick={addMapping}>
+            {t('openWithSettingsAdd')}
+          </button>
+        </span>
+      </div>
+      {draft.pathMappings.map(mapping => (
+        <div key={mapping.id} className={css.openWithPathRow}>
+          <input
+            className={css.openWithEditorInput}
+            value={mapping.from}
+            placeholder={t('openWithSettingsPathMapFrom')}
+            spellCheck={false}
+            onChange={(event) => { patchMapping(mapping.id, { from: event.target.value }) }}
+          />
+          <input
+            className={css.openWithEditorInput}
+            value={mapping.to}
+            placeholder={t('openWithSettingsPathMapTo')}
+            spellCheck={false}
+            onChange={(event) => { patchMapping(mapping.id, { to: event.target.value }) }}
+          />
+          <button
+            type="button"
+            className={css.openWithRemove}
+            aria-label={t('openWithSettingsRemove')}
+            title={t('openWithSettingsRemove')}
+            onClick={() => { removeMapping(mapping.id) }}
+          >
+            <IconCloseOutlineRegular size={14} />
+          </button>
+        </div>
+      ))}
     </div>
   )
 }

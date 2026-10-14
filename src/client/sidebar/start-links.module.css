@@ -1,0 +1,64 @@
+/*
+ * Hero 快捷入口行（src/client/sidebar/start-links.tsx）。
+ *
+ * 皮肤契约（指南 §12）：颜色一律走 `--dsw-alias-*` 令牌，本模块零字面量；
+ * `tests/theme.spec.ts` 抓 `color:` 的令牌解析。胶囊几何对齐宿主 guide 卡片
+ * 的大圆角观感（R20 族），hover/focus 态用插件的交互令牌。
+ */
+
+.row {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px 24px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 20px;
+  background: var(--dsw-alias-bg-layer-3);
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.pill:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  border-color: var(--dsw-alias-label-dimmed);
+  color: var(--dsw-alias-label-primary);
+}
+
+.pill:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l4);
+  outline-offset: 1px;
+}
+
+.icon {
+  display: inline-flex;
+  flex: none;
+}
+
+/* 「设置」齿轮：ink 一档——宿主自己的设置触发/nav 齿轮同为墨色，不抢状态色。 */
+.iconSettings {
+  display: inline-flex;
+  color: var(--dsw-alias-label-primary);
+}
+
+.label {
+  white-space: nowrap;
+}
+
+/* 宿主 ShortcutKeys 的 unboxed 键帽行（kbd 由 primitive 自带上色）。 */
+.keys {
+  margin-left: 2px;
+}

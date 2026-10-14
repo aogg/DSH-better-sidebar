@@ -12,6 +12,7 @@ import type { api } from './api.ts'
 import {
   EXPLORER_EXCLUDE_DEFAULTS,
   SIDEBAR_PREFS_DEFAULTS,
+  clampRightbarRatio,
   type SidebarPrefs,
 } from '../prefs-shared.ts'
 
@@ -74,6 +75,12 @@ export function parsePrefs(value: unknown): SidebarPrefs {
     htmlViewerDefaultUnsafe: typeof record.htmlViewerDefaultUnsafe === 'boolean'
       ? record.htmlViewerDefaultUnsafe
       : SIDEBAR_PREFS_DEFAULTS.htmlViewerDefaultUnsafe,
+    rightbarOpenOnNewSession: typeof record.rightbarOpenOnNewSession === 'boolean'
+      ? record.rightbarOpenOnNewSession
+      : SIDEBAR_PREFS_DEFAULTS.rightbarOpenOnNewSession,
+    rightbarOpenRatio: clampRightbarRatio(
+      typeof record.rightbarOpenRatio === 'number' ? record.rightbarOpenRatio : Number.NaN,
+    ),
     tabsEnabled: booleanMapOf(record.tabsEnabled),
     viewersEnabled: booleanMapOf(record.viewersEnabled),
     pluginSettings: pluginSettingsMapOf(record.pluginSettings),
@@ -180,4 +187,67 @@ export async function loadBootDecision(settings: SidebarSettingsClient): Promise
   } catch {
     return { prefs: { ...SIDEBAR_PREFS_DEFAULTS }, suspended: false }
   }
+}
+
+/**
+ * A background writer for the side card preferences: the same fenced settings
+ * route the settings section uses, wrapped in the bookkeeping a NON-UI writer
+ * needs (a serialized queue, a cached revision, and one conflict retry).
+ * Module-scoped writers must be created per consumer (the factory rule — no
+ * module-level singletons); the returned function never throws: a failed
+ * write answers `false` and the next one starts from a fresh revision read.
+ *
+ * It deliberately does NOT share state with SideCardSection's in-component
+ * revision cache: a settings page open at the same moment as a background
+ * write can still lose a race, but the route's 409 turns that into a visible
+ * settings-section error or a retried background write — never a silent
+ * overwrite.
+ */
+export interface PrefsWriter {
+  /** Queue one patch; resolves `true` when the document took it. */
+  (patch: Record<string, unknown>): Promise<boolean>
+  /** Drop the cached revision (the caller's subscription is going away). */
+  dispose(): void
+}
+
+export function createPrefsWriter(
+  settings: SidebarSettingsClient,
+  onPrefs?: (prefs: SidebarPrefs) => void,
+): PrefsWriter {
+  let revision: number | undefined
+  let queue: Promise<unknown> = Promise.resolve()
+  let disposed = false
+  const write = async (patch: Record<string, unknown>): Promise<boolean> => {
+    if (disposed) return false
+    try {
+      // A first write (or a retry after disposal of the cache) reads the
+      // document for its revision — one extra round trip only when needed.
+      if (revision === undefined) {
+        revision = (await settings.settingsGet()).revision
+      }
+      const view = await settings.settingsUpdate({ ...patch }, revision)
+      revision = view.revision
+      const next = parsePrefs(view.value)
+      onPrefs?.(next)
+      return true
+    } catch (error) {
+      // A revision mismatch is the one recoverable shape: re-read and retry
+      // once so a settings page that saved between our read and write does
+      // not silently drop a drag's final width.
+      revision = undefined
+      if (error instanceof Error && 'code' in error && (error as { code?: unknown }).code === 'settings-conflict') {
+        return write(patch)
+      }
+      return false
+    }
+  }
+  const writer = (patch: Record<string, unknown>): Promise<boolean> => {
+    const run = queue.then(() => write(patch))
+    // A failed write must not poison the queue for later ones.
+    queue = run.then(() => undefined, () => undefined)
+    return run
+  }
+  return Object.assign(writer, {
+    dispose: (): void => { disposed = true },
+  })
 }

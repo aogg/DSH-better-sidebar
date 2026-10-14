@@ -9,6 +9,23 @@
 /** The user-settings namespace holding the side card preferences. */
 export const SIDEBAR_PREFS_NS = 'dsh-better-sidebar'
 
+/**
+ * The right sidebar's open width as a RATIO of the viewport (0.15–0.7):
+ * applied once per expansion (a `rightbarShown` false → true transition) by
+ * the client's width sync, and written back (rounded to 0.001) after the user
+ * drags the host's width handle. The host's own memory-only default is 45% of
+ * the viewport on first open; this preference makes the width survive reloads.
+ */
+export const RIGHTBAR_RATIO_MIN = 0.15
+export const RIGHTBAR_RATIO_MAX = 0.7
+export const RIGHTBAR_RATIO_DEFAULT = 0.35
+
+/** Clamp one raw ratio into the declared range (non-finite falls to the default). */
+export function clampRightbarRatio(value: number): number {
+  if (!Number.isFinite(value)) return RIGHTBAR_RATIO_DEFAULT
+  return Math.min(RIGHTBAR_RATIO_MAX, Math.max(RIGHTBAR_RATIO_MIN, value))
+}
+
 /** User-facing side card preferences. */
 export interface SidebarPrefs {
   /**
@@ -106,6 +123,18 @@ export interface SidebarPrefs {
    */
   htmlViewerDefaultUnsafe: boolean
   /**
+   * Whether a NEWLY CREATED session (an id that appears after this page
+   * loaded) auto-expands the host's right sidebar when it comes on screen.
+   * Sessions restored at page load never trigger — only ids the page saw
+   * appear.
+   */
+  rightbarOpenOnNewSession: boolean
+  /**
+   * The right sidebar's open width as a ratio of the viewport — see
+   * {@link RIGHTBAR_RATIO_DEFAULT} and friends for the contract.
+   */
+  rightbarOpenRatio: number
+  /**
    * Per-tab enable switches, keyed by tab descriptor id (`'explorer'`,
    * `'my-plugin:db'`). An ABSENT key means enabled — only an explicit
    * `false` disables a tab type (hidden from the + menu, `openTab` refuses,
@@ -152,6 +181,8 @@ export const SIDEBAR_PREFS_DEFAULTS: SidebarPrefs = {
   customCss: '',
   htmlViewerNoSandbox: false,
   htmlViewerDefaultUnsafe: false,
+  rightbarOpenOnNewSession: true,
+  rightbarOpenRatio: RIGHTBAR_RATIO_DEFAULT,
   tabsEnabled: {},
   viewersEnabled: {},
   pluginSettings: {},

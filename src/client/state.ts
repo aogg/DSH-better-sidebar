@@ -597,6 +597,26 @@ export function ancestorDirs(cwd: string | undefined, files: readonly string[]):
 }
 
 /**
+ * Whether `path` names something INSIDE the explorer root `cwd` (pure lexical
+ * comparison, both path dialects): a reveal may only expand directories the
+ * tree can actually render. `ancestorDirs` anchors at the root's depth, so an
+ * out-of-tree path (cwd `/w`, file `/other/a/b.ts`) would yield the foreign
+ * chain `/other/a` — expanding phantom rows that never exist. The root itself
+ * is not "within" (a file equal to the root is a directory, not a reveal).
+ * @param cwd - the explorer's root (session working directory).
+ * @param path - absolute path to test.
+ */
+export function pathWithinCwd(cwd: string | undefined, path: string): boolean {
+  if (cwd === undefined || cwd === '' || path === '') return false
+  const split = (value: string): string[] =>
+    value.split(/[\\/]+/).filter(part => part !== '' && part !== '.')
+  const rootParts = split(cwd)
+  const fileParts = split(path)
+  if (fileParts.length <= rootParts.length) return false
+  return rootParts.every((part, index) => part === fileParts[index])
+}
+
+/**
  * Reveal files in the explorer: expand every ancestor directory between the
  * explorer root and each file (so the lazy tree actually shows the row) and
  * record the paths for highlighting. The reveal set is transient —

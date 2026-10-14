@@ -437,6 +437,29 @@ export const api = {
    *  tree; a pasted direct-open path is explicit intent and skips it). */
   fsSearch: (scope: SessionScope, query: string, exclude?: readonly string[], signal?: AbortSignal) =>
     call<{ matches: string[]; dirs: string[]; truncated: boolean }>('fs.search', scopePayload(scope, { query, exclude }), signal),
+  /** Global recursive CONTENT search rooted at the session cwd (the tree
+   *  panel's "文本内容搜索" section). `query` is a case-insensitive literal
+   *  substring of the file CONTENTS; `include`/`exclude` are raw entry
+   *  strings the HOST classifies — an existing directory scopes/drops that
+   *  subtree, an existing file scopes/drops that one file, anything else is
+   *  a glob in the exclude-patterns subset grammar. Only FILES come back
+   *  (root-relative, '/'-separated). `prefExclude` is the explorerExclude
+   *  preference, stacked host-side on top of `exclude` exactly like the name
+   *  search and the tree listing. */
+  fsContentSearch: (
+    scope: SessionScope,
+    query: string,
+    include: readonly string[],
+    exclude: readonly string[],
+    prefExclude?: readonly string[],
+    signal?: AbortSignal,
+  ) =>
+    call<{ matches: string[]; truncated: boolean }>('fs.contentSearch', scopePayload(scope, {
+      query,
+      include: [...include],
+      exclude: [...exclude],
+      ...(prefExclude !== undefined && prefExclude.length > 0 ? { prefExclude: [...prefExclude] } : {}),
+    }), signal),
   fsRead: (scope: SessionScope, path: string, signal?: AbortSignal) =>
     call<FsReadResult>('fs.read', scopePayload(scope, { path }), signal),
   /** One page of a large text file, for the read-only paged preview.
