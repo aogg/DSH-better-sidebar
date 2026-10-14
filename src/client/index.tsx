@@ -2,11 +2,12 @@
  * Client half of dsh-better-sidebar: resolves the user's "Side card"
  * preferences through the plugin's own fenced settings route, mounts the
  * right sidebar portal (inside an error boundary so a rendering failure
- * shows an error strip instead of a blank panel), and contributes the Side
- * card settings section to the DSH Settings shell. Requires the runtime's
- * slots and sessions services; the bundle itself is a module-table consumer
- * only (react + ui-primitives, all provided or inlined — the editor and
- * mermaid libraries arrive as lazy chunks).
+ * shows an error strip instead of a blank panel), and renders the Side card
+ * settings page INSIDE the hero start page (the「设置」pill in the quick-entry
+ * row; the DSH Settings shell carries no section of ours any more). Requires
+ * the runtime's slots and sessions services; the bundle itself is a
+ * module-table consumer only (react + ui-primitives, all provided or
+ * inlined — the editor and mermaid libraries arrive as lazy chunks).
  */
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -24,12 +25,10 @@ import { registerStartLinks } from './sidebar/start-links.tsx'
 import { createNativeSurface } from './native/surface.ts'
 import { isTargetAvailable, openInterceptedLink, registerLinkInterception, shouldTakeOverLink } from './link-intercept.ts'
 import { registerImeGuard } from './ime-guard.ts'
-import { registerSettingsNavIcon } from './settings-nav-icon.ts'
 import { createPrefsWriter, loadBootDecision } from './prefs.ts'
 import { createRightbarWidthSync } from './sidebar/rightbar-width.ts'
-import { SideCardSection } from './SideCardSection.tsx'
 import { api } from './api.ts'
-import { LOCALE_NS, attachLocale, attachBetterLocale, t, zh, en } from './locales.ts'
+import { LOCALE_NS, attachLocale, attachBetterLocale, zh, en } from './locales.ts'
 import { loadChunk } from './chunk-loader.ts'
 import css from './sidebar.module.css'
 import './layout.css'
@@ -191,12 +190,16 @@ export function apply(ctx: Context): void {
     () => registerBottomToggle(ctx, sidebarStore),
     'dsh-better-sidebar: bottom-workbench toggle',
   )
-  // The hero (start page) quick-entry row: a MutationObserver over the host's
-  // conversation slot phase marker portals one row of capsule links into the
-  // hero root while the phase is 'hero' (observer + portal cleaned up by the
-  // effect disposer).
+  // The hero (start page) quick-entry row + its built-in settings page: a
+  // MutationObserver over the host's conversation slot phase marker portals
+  // one row of capsule links into the hero root while the phase is 'hero';
+  // the「设置」pill opens the IN-PAGE settings panel (the Side card section
+  // itself, sharing this store). The DSH Settings shell no longer carries a
+  // "Side card" section — the start page's settings page IS the surface (the
+  // user asked for the shell's card to go). Observer + portal cleaned up by
+  // the effect disposer.
   ctx.effect(
-    () => registerStartLinks(ctx, service),
+    () => registerStartLinks(ctx, service, sidebarStore),
     'dsh-better-sidebar: hero start links',
   )
   // The right sidebar's open-width ratio: applies the configured width once per
@@ -443,29 +446,6 @@ export function apply(ctx: Context): void {
       },
       'dsh-better-sidebar: IME composition guard',
     )
-
-    // DSH 0.1.x does not yet carry an icon through the settings.section
-    // registration contract: its shell renders a generic gear for every
-    // external section. Mark only this plugin's localized nav row so
-    // layout.css can paint the requested Side card SVG; the disposer clears
-    // the marker for HMR / plugin disable.
-    ctx.effect(
-      () => registerSettingsNavIcon(() => t('settingsNav')),
-      'dsh-better-sidebar: settings navigation icon',
-    )
-
-    // The "Side card" settings section: appears in the DSH Settings shell
-    // once the shell's declaration is on the ledger (slots.inject waits for
-    // it); the section reads/writes the prefs through the plugin's own
-    // fenced settings route, keeps the shared store in sync, and renders the
-    // declarative enable/disable inventory from the tab/viewer registry.
-    ctx.slots.inject('settings.section', () => ctx.slots.register({
-      name: 'settings.section',
-      id: 'better-sidebar',
-      order: 100,
-      label: () => t('settingsNav'),
-      inject: () => ({ store: sidebarStore, service }),
-    }, SideCardSection))
   } catch (error) {
     fail('load', error)
   }
