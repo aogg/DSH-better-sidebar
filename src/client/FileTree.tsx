@@ -42,6 +42,20 @@
  * include/exclude chips with this row's path (when the caller provides
  * `onAddToContentSearch`).
  *
+ * Clipboard (Windows file-manager semantics): 复制 / 剪切 take the WHOLE
+ * current selection (right-clicking outside it first collapses the selection
+ * onto the row) into the page-wide clipboard (tree-clipboard.ts — one
+ * clipboard shared by every tree instance); cut rows render dimmed. 黏贴
+ * lands in the right-clicked directory (a file row pastes into its parent,
+ * the root row into the workspace root) and is disabled while the clipboard
+ * is empty or from another workspace. Before any bytes move, the target
+ * level is listed once: same-named entries open the Windows-style dialog —
+ * 替换 (overwrite) / 跳过 (keep them, paste the rest) / 取消. The paste
+ * itself is an async HOST job (`fs.transfer`) with a top-right progress
+ * card (transfer-client.ts + TransferToast.tsx); a cut-paste clears the
+ * clipboard once the job is ACCEPTED, and every moved row retargets the
+ * open tabs through `onPathMoved` (the caller wires retargetPathTabs).
+ *
  * Rows are memoized components (FileRow / DirRow) fed by stable callbacks and
  * per-row booleans, so a copy flash, a drag target or a selection change only
  * re-renders the rows it touches — not the whole tree.
@@ -55,10 +69,10 @@ import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import {
-  IconArchiveOutlineRegular, IconChevronRightOutlineRegular, IconCloseFillRegular, IconCloseOutlineRegular, IconCodeOutlineRegular, IconCopyOutlineRegular,
+  Button, IconArchiveOutlineRegular, IconChevronRightOutlineRegular, IconCloseFillRegular, IconCloseOutlineRegular, IconCodeOutlineRegular, IconCopyOutlineRegular,
   IconDownloadOutlineRegular,
   IconEditOutlineRegular, IconFolderOpenRegular, IconLinkOutlineRegular, IconPlusOutlineRegular, IconTrashOutlineRegular,
-  Menu, type MenuEntry, type MenuItem, writeClipboard,
+  Menu, Modal, type MenuEntry, type MenuItem, writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { SiCursor, SiZedindustries } from 'react-icons/si'
 import { VscFolderOpened, VscLinkExternal, VscPin, VscPinned } from 'react-icons/vsc'
@@ -67,7 +81,7 @@ import { compactChain, compactLoadTargets } from './file-tree-compact.ts'
 import { DEFAULT_FILE_TREE_SORT, sortEntries, type FileTreeSort } from './file-tree-sort.ts'
 import { FS_TREES_MAX_PATHS } from '../fs-batch.ts'
 import { builtinFileIcon, builtinFolderIcon } from './file-icons.tsx'
-import { IconContentSearchOutline16, IconUploadOutline16, IconVscode16 } from './icons.tsx'
+import { IconContentSearchOutline16, IconCutOutline16, IconPasteOutline16, IconUploadOutline16, IconVscode16 } from './icons.tsx'
 import { isLikelyImeKey } from './ime-guard.ts'
 import { useSubmenuFlip } from './menu-flip.ts'
 import type { OpenInApp, OpenInAppEntry } from './open-in-app.ts'
@@ -75,6 +89,8 @@ import type { OpenWithTarget } from './open-with.ts'
 import { relativeTo } from './paths.ts'
 import { t } from './locales.ts'
 import type { BetterSidebarService } from './service.ts'
+import { getTreeClipboard, setTreeClipboard, subscribeTreeClipboard, type TreeClipboardEntry } from './tree-clipboard.ts'
+import { startTransfer } from './transfer-client.ts'
 import {
   Chip, ConfirmDialog, IconButton, Notice, StatusBadge, useGitStatus,
   type GitTone, type StatusTone,
@@ -271,6 +287,8 @@ interface FileRowProps {
   /** A drag hovers this row's PARENT directory (upload target). */
   dropTarget: boolean
   copied: boolean
+  /** The row is on the clipboard as a CUT (dimmed until pasted or replaced). */
+  cut: boolean
   /**
    * The row's git state as PRIMITIVES, never the store's status object: the
    * shared store rebuilds its per-path objects on every poll, so passing the
@@ -284,7 +302,7 @@ interface FileRowProps {
 }
 
 const FileRow = memo(function FileRow(props: FileRowProps): ReactNode {
-  const { entry, depth, iconsVersion, service, selected, revealed, flash, dropTarget, copied, gitTone, gitLetter, actions } = props
+  const { entry, depth, iconsVersion, service, selected, revealed, flash, dropTarget, copied, cut, gitTone, gitLetter, actions } = props
   // Referenced so a registry change re-renders the row with its new icon.
   void iconsVersion
   const icon = service !== undefined ? service.fileIcon(entry.path, 14) : builtinFileIcon(entry.path, 14)
@@ -297,6 +315,7 @@ const FileRow = memo(function FileRow(props: FileRowProps): ReactNode {
         selected && css.explorerRowSelected,
         dropTarget && css.explorerRowDropTarget,
         revealed && css.explorerRowRevealed,
+        cut && css.explorerRowCut,
         flash,
       )}
       data-dsh-revealed={revealed ? 'true' : undefined}
@@ -365,11 +384,13 @@ interface DirRowProps {
   /** A change exists at or below this directory (tinted, never lettered). */
   gitChanged: boolean
   copied: boolean
+  /** The row is on the clipboard as a CUT (dimmed until pasted or replaced). */
+  cut: boolean
   actions: RowActions
 }
 
 const DirRow = memo(function DirRow(props: DirRowProps): ReactNode {
-  const { entry, chain, depth, expanded, iconsVersion, service, selected, revealed, dropTarget, gitChanged, copied, actions } = props
+  const { entry, chain, depth, expanded, iconsVersion, service, selected, revealed, dropTarget, gitChanged, copied, cut, actions } = props
   void iconsVersion
   // The row's ACTIONS target the chain's deepest RENDERED link: that is the
   // directory the user sees expanded (`a/b/c`, or `a/b` after a segment
@@ -428,6 +449,7 @@ const DirRow = memo(function DirRow(props: DirRowProps): ReactNode {
         selected && css.explorerRowSelected,
         dropTarget && css.explorerRowDropTarget,
         revealed && css.explorerRowRevealed,
+        cut && css.explorerRowCut,
       )}
       data-dsh-revealed={revealed ? 'true' : undefined}
       data-dsh-selected={selected ? 'true' : undefined}
@@ -618,6 +640,12 @@ export function FileTree(props: {
   onPathRenamed?: (oldPath: string, newPath: string) => void
   /** A delete landed: the caller closes tabs at or under the removed path. */
   onPathDeleted?: (path: string, isDir: boolean) => void
+  /**
+   * A cut-paste moved one row (`from` → `to`): the caller retargets the open
+   * tabs exactly like a rename (a directory takes its subtree with it).
+   * Copy-pastes announce nothing — the source stays.
+   */
+  onPathMoved?: (from: string, to: string, isDir: boolean) => void
   /** Bump to wipe the level cache and reload the visible set. */
   refreshTick: number
   /** Upload into `dir` (absolute, inside the workspace); runs in the caller. */
@@ -744,6 +772,28 @@ export function FileTree(props: {
   const [deletingSelected, setDeletingSelected] = useState(false)
   /** The last mutation failure (dismissable strip above the tree). */
   const [actionError, setActionError] = useState<string | null>(null)
+  /**
+   * The page-wide clipboard mirror (tree-clipboard.ts): 复制/剪切 write it,
+   * 黏贴 reads it, and the cut rows dim off the mirror. useSyncExternalStore
+   * would re-render on EVERY external write; a plain subscription keeps the
+   * re-render local to the trees that show a clipboard at all (same
+   * shape as the shared git-status store's usage below).
+   */
+  const [clipboard, setClipboard] = useState<{ cwd: string; mode: 'copy' | 'cut'; entries: readonly TreeClipboardEntry[] } | null>(() => getTreeClipboard())
+  useEffect(() => subscribeTreeClipboard(() => { setClipboard(getTreeClipboard()) }), [])
+  /**
+   * The Windows-style paste-conflict dialog: the batch (already filtered of
+   * self-contains), the target directory, and the target level's same-named
+   * entries. Open only when the pre-paste listing found conflicts — a clean
+   * paste starts the transfer straight away.
+   */
+  const [pasteDialog, setPasteDialog] = useState<{
+    scope: FsScope
+    mode: 'copy' | 'cut'
+    entries: readonly TreeClipboardEntry[]
+    targetDir: string
+    conflicts: readonly string[]
+  } | null>(null)
   /** A failed re-list that kept the previous rows on screen (hint line). */
   const [loadError, setLoadError] = useState<string | null>(null)
   /** The multi-selection (absolute paths) and its Shift anchor. */
@@ -1310,6 +1360,116 @@ export function FileTree(props: {
   const copySelectedPaths = useCallback((): void => {
     void writeClipboard([...selectedRef.current].join('\n'))
   }, [])
+
+  // ── 复制 / 剪切 / 黏贴（Windows file-manager semantics）────────────────
+  // The clipboard itself lives in tree-clipboard.ts (one page-wide instance);
+  // cut rows dim off the `clipboard` mirror above; the paste lands through the
+  // host's async fs.transfer job (progress in the top-right card).
+
+  /** Whether `candidate` is `dir` itself or anywhere inside it (lexical). */
+  const isInsideOrSelf = (dir: string, candidate: string): boolean =>
+    candidate === dir || candidate.startsWith(`${dir}/`) || candidate.startsWith(`${dir}\\`)
+
+  /** Store the WHOLE current selection into the clipboard (复制 or 剪切). */
+  const clipSelection = useCallback((mode: 'copy' | 'cut'): void => {
+    const live = propsRef.current
+    if (live.cwd === undefined) return
+    const paths = [...selectedRef.current]
+    if (paths.length === 0) return
+    setTreeClipboard({
+      cwd: live.cwd,
+      mode,
+      entries: paths.map(path => ({ path, isDir: kindRef.current.get(path) ?? false })),
+    })
+  }, [])
+
+  /** Fire the async host job for one paste batch and settle the tree after. */
+  const runPaste = useCallback((
+    scope: FsScope,
+    mode: 'copy' | 'cut',
+    entries: readonly TreeClipboardEntry[],
+    targetDir: string,
+    conflict: 'replace' | 'skip',
+  ): void => {
+    void startTransfer(
+      scope,
+      // The wire mode is copy/move; the clipboard's 剪切 IS a move.
+      mode === 'cut' ? 'move' : 'copy',
+      entries.map(entry => entry.path),
+      targetDir,
+      conflict,
+      (outcome) => {
+        // 'error' = nothing dependable happened; the card shows the message.
+        if (outcome.state === 'error') return
+        const live = propsRef.current
+        if (!sameScope(scope, scopeOf(live))) return
+        retryDir(targetDir)
+        if (mode !== 'cut' || outcome.state !== 'done') return
+        // A completed move retargets the open tabs (rename semantics: a
+        // directory takes its subtree) and drops the stale source rows.
+        for (const entry of entries) {
+          pruneTree(entry.path)
+          live.onPathMoved?.(entry.path, joinChild(targetDir, baseName(entry.path)), entry.isDir)
+        }
+      },
+    ).then(() => {
+      setActionError(null)
+    }).catch((error: unknown) => {
+      // The job never started (bad shape, or an OLD host without the route —
+      // e.g. DSH not restarted since the feature landed). The wire message is
+      // the truth the strip shows.
+      setActionError(error instanceof Error ? error.message : String(error))
+    })
+  }, [retryDir, pruneTree])
+
+  /**
+   * 黏贴 into `target`'s directory (a directory row pastes into itself, a
+   * file row into its parent, the workspace root row into the root). Drops
+   * rows the paste would fold into themselves, lists the target level ONCE
+   * for the conflict check, and either starts the job straight away (nothing
+   * collides) or opens the Windows-style 替换/跳过 dialog.
+   */
+  const beginPaste = useCallback((target: { path: string; isDir: boolean }): void => {
+    const live = propsRef.current
+    const clip = getTreeClipboard()
+    if (clip === null || live.cwd === undefined || clip.cwd !== live.cwd) return
+    const armed = scopeOf(live)
+    if (armed === undefined) return
+    const targetDir = target.isDir ? target.path : parentOf(target.path)
+    const entries = clip.entries.filter(entry => !isInsideOrSelf(entry.path, targetDir))
+    if (entries.length === 0) {
+      setActionError(t('clipPasteBlocked'))
+      return
+    }
+    // A clean paste skips nothing (nothing collides); the same call serves
+    // the dialog's 跳过 pick (the HOST skips the conflicting top-level items).
+    const run = (conflict: 'replace' | 'skip'): void => {
+      runPaste(armed, clip.mode, entries, targetDir, conflict)
+      // 剪切黏贴 empties the clipboard once the job is ACCEPTED (Windows
+      // clears the cut marks as soon as the paste begins).
+      if (clip.mode === 'cut') setTreeClipboard(null)
+    }
+    void api.fsTrees(armed, [targetDir]).then((result) => {
+      const level = result.levels[0]
+      // An unreadable target level: let the host job surface the real error.
+      if (level === undefined || level.error !== undefined) {
+        run('skip')
+        return
+      }
+      const names = new Set(level.entries.map(entry => entry.name))
+      const conflicts = entries
+        .filter(entry => names.has(baseName(entry.path)))
+        .map(entry => baseName(entry.path))
+      if (conflicts.length === 0) {
+        run('skip')
+        return
+      }
+      setPasteDialog({ scope: armed, mode: clip.mode, entries, targetDir, conflicts })
+    }).catch(() => {
+      // The listing itself failed (workspace gone): same delegation.
+      run('skip')
+    })
+  }, [runPaste])
 
   /**
    * Run the confirmed single-row delete: fs.remove + settle + close tabs.
@@ -2097,6 +2257,16 @@ export function FileTree(props: {
   // rows in the SAME order `renderLevel` draws them (the sort choice), then
   // depth-first, expanded state decides. Recomputed with the level cache,
   // never rendered.
+  /**
+   * The CUT rows (clipboard mode `cut`): one Set consulted per row render —
+   * a primitive `cut` boolean reaches the memoized rows, so flipping the
+   * clipboard re-renders exactly the rows it dims (the per-row-boolean rule).
+   */
+  const cutPaths = useMemo(
+    () => new Set(clipboard?.mode === 'cut' ? clipboard.entries.map(entry => entry.path) : []),
+    [clipboard],
+  )
+
   const visibleRows = useMemo(() => {
     const rows: { path: string; isDir: boolean }[] = []
     const walk = (dir: string): void => {
@@ -2327,6 +2497,7 @@ export function FileTree(props: {
                   dropTarget={dropTarget === tail.path}
                   gitChanged={gitStatus.dirHasChanges(entry.path)}
                   copied={copiedPath === entry.path}
+                  cut={cutPaths.has(entry.path) || cutPaths.has(tail.path)}
                   actions={actions}
                 />
                 {isOpen && renderLevel(tail.path, depth + 1)}
@@ -2348,6 +2519,7 @@ export function FileTree(props: {
               gitTone={git?.tone}
               gitLetter={git?.letter}
               copied={copiedPath === entry.path}
+              cut={cutPaths.has(entry.path)}
               actions={actions}
             />
           )
@@ -2535,6 +2707,26 @@ export function FileTree(props: {
           // chips with this row (every row kind; the caller decides whether
           // the submenu is offered at all).
           ...(rowMenu !== null && onAddToContentSearch !== undefined ? [addToSearchSubmenu()] : []),
+          // 5.6: the Windows clipboard trio. 复制/剪切 take the WHOLE current
+          // selection (a right-click outside it already collapsed onto the
+          // row) — never on the workspace root row, the root itself is not a
+          // clipboard row. 黏贴 targets the row's directory (a file row → its
+          // parent, the root → the workspace) and is DISABLED while the
+          // clipboard is empty or from another workspace (same-tree only in
+          // v1 — a cross-project paste would need path remapping).
+          ...(rowMenu !== null && rowMenu.path !== cwd
+            ? [
+                { id: 'clip-copy', label: t('clipCopy'), icon: <IconCopyOutlineRegular size={14} /> },
+                { id: 'clip-cut', label: t('clipCut'), icon: <IconCutOutline16 size={14} /> },
+              ]
+            : []),
+          {
+            id: 'clip-paste',
+            label: t('clipPaste'),
+            icon: <IconPasteOutline16 size={14} />,
+            disabled: clipboard === null || clipboard.cwd !== cwd,
+          },
+          { id: 'clip-sep', type: 'separator' } as MenuEntry,
           // 6: copy, then the mutations (never on the workspace root row).
           { id: 'relative', label: t('copyRelative'), icon: <IconCopyOutlineRegular size={14} /> },
           { id: 'absolute', label: t('copyAbsolute'), icon: <IconCopyOutlineRegular size={14} /> },
@@ -2586,6 +2778,20 @@ export function FileTree(props: {
           }
           if (id === 'archive-selection') {
             downloadArchive([...selected])
+            return
+          }
+          // The clipboard trio: 复制/剪切 store the (collapsed) selection,
+          // 黏贴 runs the pre-flight and — on conflicts — opens the dialog.
+          if (id === 'clip-copy') {
+            clipSelection('copy')
+            return
+          }
+          if (id === 'clip-cut') {
+            clipSelection('cut')
+            return
+          }
+          if (id === 'clip-paste') {
+            beginPaste(target)
             return
           }
           // 「添加到搜索中」submenu: hand the row + the picked list to the
@@ -2669,6 +2875,56 @@ export function FileTree(props: {
         }}
         onClose={() => { setConfirmDeleteSelected(null) }}
       />
+
+      {/* The Windows-style paste-conflict dialog: fired BEFORE the transfer
+          when the target level already holds same-named entries. 替换 runs
+          the job with `replace` (files overwrite, directories MERGE —
+          Explorer semantics), 跳过 keeps the conflicts and pastes the rest
+          (the HOST skips per top-level item), 取消 closes without moving a
+          byte. Modal/Button are the primitives (same chrome as the Side card
+          popups); the conflicting names show as chips, truncated with an
+          "and N more" line. */}
+      {pasteDialog !== null && (
+        <Modal
+          open
+          onClose={() => { setPasteDialog(null) }}
+          title={t('clipConflictTitle')}
+          description={t('clipConflictDesc')}
+          closeLabel={t('clipCancel')}
+          footer={(
+            <>
+              <Button variant="outline" onClick={() => { setPasteDialog(null) }}>
+                {t('clipCancel')}
+              </Button>
+              <Button variant="outline" onClick={() => {
+                const pending = pasteDialog
+                setPasteDialog(null)
+                runPaste(pending.scope, pending.mode, pending.entries, pending.targetDir, 'skip')
+              }}>
+                {t('clipSkip')}
+              </Button>
+              <Button variant="primary" onClick={() => {
+                const pending = pasteDialog
+                setPasteDialog(null)
+                runPaste(pending.scope, pending.mode, pending.entries, pending.targetDir, 'replace')
+              }}>
+                {t('clipReplace')}
+              </Button>
+            </>
+          )}
+        >
+          <div className={css.pasteConflictChips} data-dsh-paste-conflicts="">
+            {pasteDialog.conflicts.slice(0, 8).map(name => (
+              <span key={name} className={css.pasteConflictChip}>{name}</span>
+            ))}
+            {pasteDialog.conflicts.length > 8 && (
+              <span className={css.pasteConflictMore}>
+                {t('clipConflictMore', { count: pasteDialog.conflicts.length - 8 })}
+              </span>
+            )}
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }

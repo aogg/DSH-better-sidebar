@@ -497,6 +497,32 @@ export const api = {
    *  characters and Windows device names a file name may not use). */
   fsCreateFile: (scope: SessionScope, path: string, name: string) =>
     call<{ path: string }>('fs.createFile', scopePayload(scope, { path, name })),
+  /**
+   * Start one paste job (the file tree's 复制/剪切黏贴落盘): `mode` picks copy
+   * vs move, `conflict` is the dialog's replace/skip choice. The answer
+   * carries the PRE-WALKED totals; the job keeps running host-side — poll
+   * {@link fsTransferStatus} for progress and stop it with
+   * {@link fsTransferCancel}.
+   */
+  fsTransfer: (
+    scope: SessionScope,
+    mode: 'copy' | 'move',
+    items: readonly string[],
+    targetDir: string,
+    conflict: 'replace' | 'skip',
+  ) =>
+    call<{ transferId: string; totalFiles: number; totalBytes: number }>('fs.transfer', scopePayload(scope, {
+      mode,
+      items: [...items],
+      targetDir,
+      conflict,
+    })),
+  /** One paste job's progress snapshot; `null` for an unknown/retired id. */
+  fsTransferStatus: (transferId: string) =>
+    call<{ transferId: string; mode: 'copy' | 'move'; state: 'running' | 'canceling' | 'done' | 'error' | 'canceled'; totalFiles: number; totalBytes: number; filesDone: number; bytesDone: number; itemErrors: string[]; error?: string } | null>('fs.transferStatus', { transferId }),
+  /** Ask one paste job to stop after its current file (best effort). */
+  fsTransferCancel: (transferId: string) =>
+    call<{ canceled: boolean }>('fs.transferCancel', { transferId }),
   /** Upload one file's raw bytes into `dir` (keeps the folder tree via
    *  `relativePath`); the host streams it under the session workspace. */
   uploadFile: (scope: SessionScope, dir: string, relativePath: string, body: Blob, signal?: AbortSignal) =>
