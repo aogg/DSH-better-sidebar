@@ -27,6 +27,7 @@ import { isTargetAvailable, openInterceptedLink, registerLinkInterception, shoul
 import { registerImeGuard } from './ime-guard.ts'
 import { createPrefsWriter, loadBootDecision } from './prefs.ts'
 import { createRightbarWidthSync } from './sidebar/rightbar-width.ts'
+import { registerTransferToast } from './TransferToast.tsx'
 import { api } from './api.ts'
 import { LOCALE_NS, attachLocale, attachBetterLocale, zh, en } from './locales.ts'
 import { loadChunk } from './chunk-loader.ts'
@@ -201,6 +202,14 @@ export function apply(ctx: Context): void {
   ctx.effect(
     () => registerStartLinks(ctx, service, sidebarStore),
     'dsh-better-sidebar: hero start links',
+  )
+  // The paste-progress card (文件树黏贴): one top-right body-level portal for
+  // the whole page, driven by the transfer-client store — the tree only
+  // STARTS jobs (transfer-client), the card's rendering lives here so exactly
+  // ONE card exists no matter how many trees are mounted.
+  ctx.effect(
+    () => registerTransferToast(),
+    'dsh-better-sidebar: paste transfer toast',
   )
   // The right sidebar's open-width ratio: applies the configured width once per
   // host expansion (a hidden → tracked transition) and writes the dragged width
