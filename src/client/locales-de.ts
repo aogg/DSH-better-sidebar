@@ -344,6 +344,7 @@ export const de: Record<string, string> = {
   settingsGeneralTitle: 'Allgemein',
   startLinksAria: 'Schnellzugriffe',
   startNewTerminal: 'Neues Terminal',
+  startSettings: 'Einstellungen',
   settingsRightbarRatioTitle: 'Seitenleisten-Breite beim Öffnen',
   settingsRightbarRatioDesc: 'Breite beim Aufklappen der rechten Seitenleiste als Anteil des Fensters (15 %–70 %); zum Anpassen die Zahl ziehen oder eingeben',
   settingsOpenOnNewSessionTitle: 'Rechte Seitenleiste für neue Sitzungen öffnen',

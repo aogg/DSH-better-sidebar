@@ -358,6 +358,7 @@ export const th: Record<string, string> = {
   settingsGeneralTitle: 'ทั่วไป',
   startLinksAria: 'ลิงก์ด่วน',
   startNewTerminal: 'เทอร์มินัลใหม่',
+  startSettings: 'การตั้งค่า',
   settingsRightbarRatioTitle: 'ความกว้างแถบข้างตอนเปิด',
   settingsRightbarRatioDesc: 'ความกว้างที่ใช้เมื่อแถบข้างขวากางออก เป็นสัดส่วนของหน้าต่าง (15%–70%) ลากตัวเลขหรือพิมพ์เพื่อปรับ',
   settingsOpenOnNewSessionTitle: 'เปิดแถบข้างขวาเมื่อมีเซสชันใหม่',

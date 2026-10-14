@@ -341,6 +341,7 @@ export const sv: Record<string, string> = {
   settingsGeneralTitle: 'Allmänt',
   startLinksAria: 'Genvägar',
   startNewTerminal: 'Ny terminal',
+  startSettings: 'Inställningar',
   settingsRightbarRatioTitle: 'Sidopanelsbredd vid öppning',
   settingsRightbarRatioDesc: 'Bredd som används när den högra sidopanelen fälls ut, som andel av fönstret (15 %–70 %); dra i talet eller skriv för att justera',
   settingsOpenOnNewSessionTitle: 'Öppna högra sidopanelen för nya sessioner',

@@ -360,6 +360,7 @@ export const pl: Record<string, string> = {
   settingsGeneralTitle: 'Ogólne',
   startLinksAria: 'Szybkie linki',
   startNewTerminal: 'Nowy terminal',
+  startSettings: 'Ustawienia',
   settingsRightbarRatioTitle: 'Szerokość panelu przy otwieraniu',
   settingsRightbarRatioDesc: 'Szerokość stosowana przy rozwijaniu prawego panelu, jako udział okna (15%–70%); przeciągnij liczbę lub wpisz, aby zmienić',
   settingsOpenOnNewSessionTitle: 'Otwieraj prawy panel dla nowych sesji',

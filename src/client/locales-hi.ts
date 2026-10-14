@@ -358,6 +358,7 @@ export const hi: Record<string, string> = {
   settingsGeneralTitle: 'सामान्य',
   startLinksAria: 'त्वरित लिंक',
   startNewTerminal: 'नया टर्मिनल',
+  startSettings: 'सेटिंग्स',
   settingsRightbarRatioTitle: 'खुलने पर साइडबार की चौड़ाई',
   settingsRightbarRatioDesc: 'दाहिना साइडबार खुलने पर लागू चौड़ाई, विंडो के अनुपात में (15%–70%); समायोजित करने के लिए संख्या खींचें या टाइप करें',
   settingsOpenOnNewSessionTitle: 'नए सेशन के लिए दाहिना साइडबार खोलें',

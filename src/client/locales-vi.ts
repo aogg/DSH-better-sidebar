@@ -358,6 +358,7 @@ export const vi: Record<string, string> = {
   settingsGeneralTitle: 'Chung',
   startLinksAria: 'Liên kết nhanh',
   startNewTerminal: 'Terminal mới',
+  startSettings: 'Cài đặt',
   settingsRightbarRatioTitle: 'Chiều rộng thanh bên khi mở',
   settingsRightbarRatioDesc: 'Chiều rộng áp dụng khi thanh bên phải mở ra, theo tỉ lệ cửa sổ (15%–70%); kéo con số hoặc nhập để điều chỉnh',
   settingsOpenOnNewSessionTitle: 'Tự mở thanh bên phải cho phiên mới',

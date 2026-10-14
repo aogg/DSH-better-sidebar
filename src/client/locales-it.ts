@@ -349,6 +349,7 @@ export const it: Record<string, string> = {
   settingsGeneralTitle: 'Generali',
   startLinksAria: 'Collegamenti rapidi',
   startNewTerminal: 'Nuovo terminale',
+  startSettings: 'Impostazioni',
   settingsRightbarRatioTitle: 'Larghezza della barra laterale all’apertura',
   settingsRightbarRatioDesc: 'Larghezza applicata all’apertura della barra laterale destra, come quota della finestra (15%–70%); trascina il numero o digita per regolare',
   settingsOpenOnNewSessionTitle: 'Apri la barra laterale destra per le nuove sessioni',

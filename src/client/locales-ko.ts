@@ -350,6 +350,7 @@ export const ko: Record<string, string> = {
   settingsGeneralTitle: '일반',
   startLinksAria: '빠른 링크',
   startNewTerminal: '새 터미널',
+  startSettings: '설정',
   settingsRightbarRatioTitle: '열 때 사이드바 너비',
   settingsRightbarRatioDesc: '오른쪽 사이드바가 펼쳐질 때 적용되는 너비(창의 15%–70%); 숫자를 드래그하거나 입력해 조정',
   settingsOpenOnNewSessionTitle: '새 세션에서 오른쪽 사이드바 자동 열기',

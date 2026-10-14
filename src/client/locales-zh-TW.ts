@@ -373,6 +373,7 @@ export const zhTW: Record<string, string> = {
   settingsGeneralTitle: '一般',
   startLinksAria: '快速入口',
   startNewTerminal: '新增終端機',
+  startSettings: '設定',
   settingsRightbarRatioTitle: '開啟側邊欄時寬度占比',
   settingsRightbarRatioDesc: '展開右側欄時套用的寬度占視窗比例（15%–70%），拖曳數字或直接輸入可調整',
   settingsOpenOnNewSessionTitle: '新工作階段自動開啟右側欄',

@@ -359,6 +359,7 @@ export const ar: Record<string, string> = {
   settingsGeneralTitle: 'عام',
   startLinksAria: 'روابط سريعة',
   startNewTerminal: 'طرفية جديدة',
+  startSettings: 'الإعدادات',
   settingsRightbarRatioTitle: 'عرض الشريط الجانبي عند الفتح',
   settingsRightbarRatioDesc: 'العرض المطبق عند توسيع الشريط الجانبي الأيمن كنسبة من النافذة (15%–70%)؛ اسحب الرقم أو اكتب للتعديل',
   settingsOpenOnNewSessionTitle: 'فتح الشريط الجانبي تلقائيًا للجلسات الجديدة',
