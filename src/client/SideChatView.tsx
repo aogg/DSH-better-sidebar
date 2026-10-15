@@ -1436,7 +1436,7 @@ export function SideChatView(props: {
                       sidechatWindows.open({
                         threadId,
                         sessionId: scope.sessionId,
-                        cwd: scope.cwd,
+                        cwd: scope.cwd ?? '',
                         title: summary?.displayTitle !== undefined
                           ? threadDisplayTitle(summary.displayTitle)
                           : t('sideChatUntitled'),
