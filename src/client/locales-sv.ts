@@ -437,6 +437,8 @@ export const sv: Record<string, string> = {
   sideChatQueued: 'I kö',
   sideChatSending: 'Skickar…',
   sideChatDequeue: 'Ta bort från kön',
+  sideChatPopOut: 'Öppna i flytande fönster (jämsides med sidopanelen; flera samtidigt)',
+  sideChatDockBack: 'Tillbaka till sidopanelen',
   sideChatRunError: 'Körning misslyckades: {message}',
   sideChatModel: 'Modell',
   sideChatModelInherit: 'Ärv huvudsamtalet (ingen modellkatalog tillgänglig)',

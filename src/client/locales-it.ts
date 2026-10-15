@@ -445,6 +445,8 @@ export const it: Record<string, string> = {
   sideChatQueued: 'In coda',
   sideChatSending: 'Invio…',
   sideChatDequeue: 'Rimuovi dalla coda',
+  sideChatPopOut: 'Apri in una finestra flottante (convive con la barra laterale; più finestre insieme)',
+  sideChatDockBack: 'Torna alla barra laterale',
   sideChatRunError: 'Esecuzione non riuscita: {message}',
   sideChatModel: 'Modello',
   sideChatModelInherit: 'Eredita la conversazione principale (catalogo modelli non disponibile)',

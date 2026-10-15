@@ -452,6 +452,8 @@ export const ru: Record<string, string> = {
   sideChatQueued: 'В очереди',
   sideChatSending: 'Отправка…',
   sideChatDequeue: 'Убрать из очереди',
+  sideChatPopOut: 'Открыть в плавающем окне (рядом с боковой панелью; несколько сразу)',
+  sideChatDockBack: 'Вернуть на боковую панель',
   sideChatRunError: 'Сбой выполнения: {message}',
   sideChatModel: 'Модель',
   sideChatModelInherit: 'Наследовать основной диалог (каталог моделей недоступен)',

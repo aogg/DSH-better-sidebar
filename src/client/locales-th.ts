@@ -454,6 +454,8 @@ export const th: Record<string, string> = {
   sideChatQueued: 'อยู่ในคิว',
   sideChatSending: 'กำลังส่ง…',
   sideChatDequeue: 'ลบออกจากคิว',
+  sideChatPopOut: 'เปิดเป็นหน้าต่างลอย (ใช้ควบคู่กับแถบด้านข้างได้ เปิดหลายหน้าต่างพร้อมกัน)',
+  sideChatDockBack: 'กลับไปที่แถบด้านข้าง',
   sideChatRunError: 'ทำงานล้มเหลว: {message}',
   sideChatModel: 'โมเดล',
   sideChatModelInherit: 'สืบทอดบทสนทนาหลัก (ไม่มีแค็ตตาล็อกโมเดล)',

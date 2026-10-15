@@ -456,6 +456,8 @@ export const pl: Record<string, string> = {
   sideChatQueued: 'W kolejce',
   sideChatSending: 'Wysyłanie…',
   sideChatDequeue: 'Usuń z kolejki',
+  sideChatPopOut: 'Otwórz w oknie pływającym (obok panelu bocznego; wiele naraz)',
+  sideChatDockBack: 'Wróć do panelu bocznego',
   sideChatRunError: 'Wykonanie nie powiodło się: {message}',
   sideChatModel: 'Model',
   sideChatModelInherit: 'Dziedzicz główną rozmowę (brak katalogu modeli)',

@@ -469,6 +469,8 @@ export const zhTW: Record<string, string> = {
   sideChatQueued: '排隊中',
   sideChatSending: '傳送中…',
   sideChatDequeue: '從佇列移除',
+  sideChatPopOut: '彈出為浮窗（可與側欄並存，可多開）',
+  sideChatDockBack: '收回側欄',
   sideChatRunError: '執行失敗：{message}',
   sideChatModel: '模型',
   sideChatModelInherit: '繼承主對話（宿主未提供模型目錄）',

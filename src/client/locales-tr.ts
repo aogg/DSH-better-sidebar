@@ -454,6 +454,8 @@ export const tr: Record<string, string> = {
   sideChatQueued: 'Kuyrukta',
   sideChatSending: 'Gönderiliyor…',
   sideChatDequeue: 'Kuyruktan kaldır',
+  sideChatPopOut: 'Yüzen pencerede aç (kenar çubuğuyla birlikte; aynı anda birden çok)',
+  sideChatDockBack: 'Kenar çubuğuna geri al',
   sideChatRunError: 'Çalıştırma başarısız: {message}',
   sideChatModel: 'Model',
   sideChatModelInherit: 'Ana sohbeti devral (model kataloğu yok)',

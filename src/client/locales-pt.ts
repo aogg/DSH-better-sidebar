@@ -437,6 +437,8 @@ export const pt: Record<string, string> = {
   sideChatQueued: 'Na fila',
   sideChatSending: 'Enviando…',
   sideChatDequeue: 'Remover da fila',
+  sideChatPopOut: 'Abrir em janela flutuante (convive com a barra lateral; várias ao mesmo tempo)',
+  sideChatDockBack: 'Voltar para a barra lateral',
   sideChatRunError: 'Falha na execução: {message}',
   sideChatModel: 'Modelo',
   sideChatModelInherit: 'Herdar a conversa principal (catálogo de modelos indisponível)',

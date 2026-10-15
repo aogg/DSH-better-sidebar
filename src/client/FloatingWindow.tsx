@@ -74,6 +74,13 @@ export interface FloatingWindowProps {
    * row that opened it). Omitted / off-screen anchors centre it.
    */
   anchor?: HTMLElement | null
+  /**
+   * A fixed nudge applied to the mount-time origin, BEFORE viewport
+   * clamping. Multi-window surfaces cascade their windows with it (each
+   * open shifts by its slot) so a second window never lands pixel-exact on
+   * the first; geometry stays the window's own afterwards.
+   */
+  offset?: { x: number; y: number }
   /** Header controls, left of the close button (a job's copy action). */
   actions?: ReactNode
   /** Bottom action row (a job's follow switch + stop control). */
@@ -119,6 +126,7 @@ function initialBox(
   size: { width: number; height: number } | undefined,
   min: { width: number; height: number },
   viewport: { width: number; height: number },
+  offset?: { x: number; y: number },
 ): WindowBox {
   const width = clamp(
     size?.width ?? viewport.width * DEFAULT_WIDTH_RATIO,
@@ -132,11 +140,11 @@ function initialBox(
   )
   const rect = anchor?.getBoundingClientRect()
   const left = rect === undefined
-    ? (viewport.width - width) / 2
-    : clamp(rect.left, VIEWPORT_MARGIN, viewport.width - width - VIEWPORT_MARGIN)
+    ? (viewport.width - width) / 2 + (offset?.x ?? 0)
+    : clamp(rect.left + (offset?.x ?? 0), VIEWPORT_MARGIN, viewport.width - width - VIEWPORT_MARGIN)
   const top = rect === undefined
-    ? Math.max(VIEWPORT_MARGIN, (viewport.height - height) / 2)
-    : clamp(rect.bottom + 6, VIEWPORT_MARGIN, viewport.height - height - VIEWPORT_MARGIN)
+    ? Math.max(VIEWPORT_MARGIN, (viewport.height - height) / 2 + (offset?.y ?? 0))
+    : clamp(rect.bottom + 6 + (offset?.y ?? 0), VIEWPORT_MARGIN, viewport.height - height - VIEWPORT_MARGIN)
   return {
     left: Math.round(left),
     top: Math.round(top),
@@ -152,7 +160,7 @@ function initialBox(
  */
 export function FloatingWindow(props: FloatingWindowProps): ReactNode {
   const {
-    title, onClose, initialSize, minSize, anchor, actions, footer, bodyRef, bodyLayout, children,
+    title, onClose, initialSize, minSize, anchor, offset, actions, footer, bodyRef, bodyLayout, children,
   } = props
   const min = useMemo(() => ({
     width: minSize?.width ?? DEFAULT_MIN_WIDTH,
@@ -174,7 +182,7 @@ export function FloatingWindow(props: FloatingWindowProps): ReactNode {
     setBox(initialBox(anchor, initialSize, min, {
       width: window.innerWidth,
       height: window.innerHeight,
-    }))
+    }, offset))
     // Mount-only on purpose: see the comment above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

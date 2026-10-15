@@ -455,6 +455,8 @@ export const ar: Record<string, string> = {
   sideChatQueued: 'في قائمة الانتظار',
   sideChatSending: 'يُرسَل…',
   sideChatDequeue: 'إزالة من قائمة الانتظار',
+  sideChatPopOut: 'فتح في نافذة عائمة (يتعايش مع الشريط الجانبي؛ يمكن فتح عدة نوافذ)',
+  sideChatDockBack: 'العودة إلى الشريط الجانبي',
   sideChatRunError: 'فشل التشغيل: {message}',
   sideChatModel: 'الطراز',
   sideChatModelInherit: 'وراثة المحادثة الرئيسية (لا يتوفر كتالوج للطرازات)',

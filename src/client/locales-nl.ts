@@ -452,6 +452,8 @@ export const nl: Record<string, string> = {
   sideChatQueued: 'In wachtrij',
   sideChatSending: 'Versturen…',
   sideChatDequeue: 'Uit wachtrij verwijderen',
+  sideChatPopOut: 'Openen in zwevend venster (naast de zijbalk; meerdere tegelijk)',
+  sideChatDockBack: 'Terug naar de zijbalk',
   sideChatRunError: 'Uitvoering mislukt: {message}',
   sideChatModel: 'Model',
   sideChatModelInherit: 'Hoofdgesprek overnemen (geen modelcatalogus beschikbaar)',

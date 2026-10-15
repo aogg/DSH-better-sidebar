@@ -37,6 +37,7 @@ import { DiffTab } from '../DiffTab.tsx'
 import { SettingsPage } from '../SettingsPage.tsx'
 import { SubagentView } from '../SubagentView.tsx'
 import { consumeSidechatSeed, SideChatView, sidechatThreadIdOf } from '../SideChatView.tsx'
+import { isSidechatFloating } from '../sidechat-windows.ts'
 import { LazyTerminalBottom } from '../terminal-lazy.tsx'
 import { INSTANCE_FIELD, closeBottomTerminal, webTerminals } from '../terminal-client.ts'
 import { api } from '../api.ts'
@@ -235,9 +236,12 @@ export function builtinTabs(ctx: Context): readonly TabDescriptor[] {
       dedupeKey: (tab) => sidechatThreadIdOf(tab),
       // Closing the tab releases the thread's live agent; the session and
       // its history stay persisted (reopen from any thread's header menu).
+      // A thread that is currently POPPED OUT keeps its agent: the floating
+      // window is still a live surface for it, so a tab close must not kill
+      // the conversation the window is showing.
       onClose: (tab) => {
         const threadId = sidechatThreadIdOf(tab)
-        if (threadId !== undefined) {
+        if (threadId !== undefined && !isSidechatFloating(threadId)) {
           void api.sidechatDispose(threadId).catch(() => {})
         }
       },

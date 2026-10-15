@@ -446,6 +446,8 @@ export const ko: Record<string, string> = {
   sideChatQueued: '대기 중',
   sideChatSending: '전송 중…',
   sideChatDequeue: '대기열에서 제거',
+  sideChatPopOut: '플로팅 창으로 열기 (사이드바와 함께 사용 가능, 여러 개 동시에 열기)',
+  sideChatDockBack: '사이드바로 돌려놓기',
   sideChatRunError: '실행 실패: {message}',
   sideChatModel: '모델',
   sideChatModelInherit: '기본 대화 상속(모델 카탈로그를 사용할 수 없음)',

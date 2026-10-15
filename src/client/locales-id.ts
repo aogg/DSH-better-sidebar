@@ -452,6 +452,8 @@ export const id: Record<string, string> = {
   sideChatQueued: 'Dalam antrean',
   sideChatSending: 'Mengirim…',
   sideChatDequeue: 'Hapus dari antrean',
+  sideChatPopOut: 'Buka di jendela mengambang (berdampingan dengan bilah samping; bisa beberapa sekaligus)',
+  sideChatDockBack: 'Kembali ke bilah samping',
   sideChatRunError: 'Eksekusi gagal: {message}',
   sideChatModel: 'Model',
   sideChatModelInherit: 'Warisi percakapan utama (katalog model tidak tersedia)',

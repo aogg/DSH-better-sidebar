@@ -440,6 +440,8 @@ export const de: Record<string, string> = {
   sideChatQueued: 'In der Warteschlange',
   sideChatSending: 'Wird gesendet…',
   sideChatDequeue: 'Aus der Warteschlange entfernen',
+  sideChatPopOut: 'In schwebendem Fenster öffnen (neben der Seitenleiste; mehrere gleichzeitig)',
+  sideChatDockBack: 'Zurück in die Seitenleiste',
   sideChatRunError: 'Ausführung fehlgeschlagen: {message}',
   sideChatModel: 'Modell',
   sideChatModelInherit: 'Hauptunterhaltung übernehmen (kein Modellkatalog verfügbar)',

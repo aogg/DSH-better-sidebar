@@ -447,6 +447,8 @@ export const fr: Record<string, string> = {
   sideChatQueued: 'En attente',
   sideChatSending: 'Envoi…',
   sideChatDequeue: 'Retirer de la file',
+  sideChatPopOut: 'Ouvrir dans une fenêtre flottante (coexiste avec la barre latérale ; plusieurs à la fois)',
+  sideChatDockBack: 'Revenir à la barre latérale',
   sideChatRunError: 'Échec de l’exécution : {message}',
   sideChatModel: 'Modèle',
   sideChatModelInherit: 'Hériter de la conversation principale (aucun catalogue de modèles disponible)',

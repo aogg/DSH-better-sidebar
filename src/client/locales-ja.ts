@@ -454,6 +454,8 @@ export const ja: Record<string, string> = {
   sideChatQueued: '待機中',
   sideChatSending: '送信中…',
   sideChatDequeue: 'キューから削除',
+  sideChatPopOut: 'フローティングウィンドウで開く（サイドバーと併用でき、複数同時オープン可）',
+  sideChatDockBack: 'サイドバーに戻す',
   sideChatRunError: '実行失敗：{message}',
   sideChatModel: 'モデル',
   sideChatModelInherit: 'メイン会話を継承（モデルカタログを取得できません）',

@@ -454,6 +454,8 @@ export const vi: Record<string, string> = {
   sideChatQueued: 'Đang xếp hàng',
   sideChatSending: 'Đang gửi…',
   sideChatDequeue: 'Xóa khỏi hàng đợi',
+  sideChatPopOut: 'Mở thành cửa sổ nổi (song song với thanh bên; mở nhiều cùng lúc)',
+  sideChatDockBack: 'Trả về thanh bên',
   sideChatRunError: 'Chạy thất bại: {message}',
   sideChatModel: 'Mô hình',
   sideChatModelInherit: 'Kế thừa hội thoại chính (không có danh mục mô hình)',

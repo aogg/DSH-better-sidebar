@@ -454,6 +454,8 @@ export const hi: Record<string, string> = {
   sideChatQueued: 'कतार में',
   sideChatSending: 'भेजा जा रहा है…',
   sideChatDequeue: 'कतार से हटाएँ',
+  sideChatPopOut: 'फ़्लोटिंग विंडो में खोलें (साइडबार के साथ साथ; एक साथ कई)',
+  sideChatDockBack: 'साइडबार पर वापस',
   sideChatRunError: 'निष्पादन विफल: {message}',
   sideChatModel: 'मॉडल',
   sideChatModelInherit: 'मुख्य वार्ता विरासत में लें (मॉडल सूची उपलब्ध नहीं)',

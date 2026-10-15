@@ -46,9 +46,11 @@ import {
   IconCopyOutlineRegular,
   IconEditOutlineRegular,
   IconNewChatOutlineRegular,
+  IconPanelLeftOutlineRegular,
   IconPlusOutlineRegular,
   IconSearchOutlineRegular,
   IconSendOutlineRegular,
+  IconShareOutlineRegular,
   IconSparkleRegular,
   IconStopFillRegular,
   MarkdownText,
@@ -92,6 +94,7 @@ import {
 import { api } from './api.ts'
 import { usePolling } from './use-polling.ts'
 import { useSidechatPush } from './use-sidechat-push.ts'
+import { sidechatWindows } from './sidechat-windows.ts'
 import { t } from './locales.ts'
 import type { SessionScope } from './api.ts'
 import type { SidebarTab } from './state.ts'
@@ -568,14 +571,22 @@ function renderRow(row: SidechatTranscriptRow, labels: RowLabels, rewrite: (text
   }
 }
 
-/** One side conversation tab (one thread per tab, Codex-style). */
+/** One side conversation tab (one thread per tab, Codex-style). The same
+ *  component also renders INSIDE a floating window (see SidechatWindows):
+ *  `floating` then flips the composer bar's pop-out action into the
+ *  dock-back action and mutes the tab-title sync (the synthetic tab id is
+ *  not a real sidebar tab). */
 export function SideChatView(props: {
   ctx: Context
   scope: SessionScope
   tab: SidebarTab
   visible: boolean
+  /** Rendering inside a popped-out floating window (not a sidebar tab). */
+  floating?: boolean
+  /** Take the window back to the sidebar (close the window, focus the tab). */
+  onDockBack?: () => void
 }): React.ReactNode {
-  const { ctx, scope, tab, visible } = props
+  const { ctx, scope, tab, visible, floating = false, onDockBack } = props
   const rowLabels = useMemo<RowLabels>(() => {
     // Shared Block chrome: copy buttons reuse the sidebar's copy pair, the
     // collapse/expand family is common to every Block kind.
@@ -759,8 +770,11 @@ export function SideChatView(props: {
   }, [threadId, scope.sessionId])
 
   // The tab title follows the thread's durable label (the first prompt
-  // renames the thread; the strip picks it up here).
+  // renames the thread; the strip picks it up here). A floating window
+  // renders on a synthetic tab id — the real tab (if open) does its own
+  // rename, so the window stays out of it.
   useEffect(() => {
+    if (floating) return
     const display = summary?.displayTitle
     if (display === undefined) return
     const title = threadDisplayTitle(display)
@@ -771,7 +785,7 @@ export function SideChatView(props: {
         // A stale title is cosmetic; the thread keeps working.
       }
     }
-  }, [summary, tab.id, tab.title, ctx, scope.sessionId])
+  }, [summary, tab.id, tab.title, ctx, scope.sessionId, floating])
 
   /** One transcript pull: the thread's own events beyond the cached tail
    *  (first attach = the whole seed-cut slice; polls = afterSeq deltas),
@@ -1401,6 +1415,40 @@ export function SideChatView(props: {
                 <IconArchiveOutlineRegular size={16} />
               </button>
             </ComposerTip>
+            {floating ? (
+              <ComposerTip label={t('sideChatDockBack')}>
+                <button
+                  type="button"
+                  className={css.sidechatIconBtn}
+                  onClick={() => { onDockBack?.() }}
+                  aria-label={t('sideChatDockBack')}
+                >
+                  <IconPanelLeftOutlineRegular size={16} />
+                </button>
+              </ComposerTip>
+            ) : (
+              threadId !== undefined && (
+                <ComposerTip label={t('sideChatPopOut')}>
+                  <button
+                    type="button"
+                    className={css.sidechatIconBtn}
+                    onClick={() => {
+                      sidechatWindows.open({
+                        threadId,
+                        sessionId: scope.sessionId,
+                        cwd: scope.cwd,
+                        title: summary?.displayTitle !== undefined
+                          ? threadDisplayTitle(summary.displayTitle)
+                          : t('sideChatUntitled'),
+                      })
+                    }}
+                    aria-label={t('sideChatPopOut')}
+                  >
+                    <IconShareOutlineRegular size={16} />
+                  </button>
+                </ComposerTip>
+              )
+            )}
           </div>
           <span className={css.sidechatComposerSpacer} />
           <ComposerTip

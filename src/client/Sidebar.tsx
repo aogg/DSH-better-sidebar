@@ -43,6 +43,7 @@ import { Workbench, type WorkbenchActions } from './split-pane.tsx'
 import { useViewportSize } from './breakpoints.ts'
 import { bottomPushHeight } from './layout-push.ts'
 import { TabContent, buildNewTabOptions } from './sidebar/TabContent.tsx'
+import { SidechatWindows } from './SidechatWindows.tsx'
 import { confirmDiscardDraft, dirtyCount, editorDirtyRevision, subscribeEditorDirty } from './editor-dirty.ts'
 import { createOpenInApp } from './open-in-app.ts'
 import { useCenterColumn } from './sidebar/use-center-column.ts'
@@ -774,6 +775,10 @@ export function Sidebar(props: { ctx: Context; store: SidebarStore }) {
           />
         </div>
       </div>
+      {/* Popped-out side conversations: the window layer lives at the root so
+          the windows survive every tab switch (they portal to document.body
+          anyway — this only owns their React lifetime). */}
+      <SidechatWindows ctx={ctx} store={store} />
     </div>
   )
 }
