@@ -444,6 +444,7 @@ export const tr: Record<string, string> = {
   sideChatCreating: 'Yan sohbet oluşturuluyor…',
   sideChatRetry: 'Yeniden dene',
   sideChatThreads: 'İş parçacığını değiştir / yeni',
+  sideChatHistory: 'Sohbet geçmişi',
   sideChatSave: 'Yeni oturum olarak kaydet',
   sideChatSaveTitle: 'Bu iş parçacığını ana oturum listesinde üst düzey oturuma yükselt',
   sideChatArchive: 'Bu yan sohbeti arşivle (oturum listesindeki “Arşivlenenleri göster” ile tekrar bulabilirsiniz)',

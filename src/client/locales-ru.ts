@@ -442,6 +442,7 @@ export const ru: Record<string, string> = {
   sideChatCreating: 'Создание бокового диалога…',
   sideChatRetry: 'Повторить',
   sideChatThreads: 'Сменить поток / новый',
+  sideChatHistory: 'История бесед',
   sideChatSave: 'Сохранить как новую сессию',
   sideChatSaveTitle: 'Повысить поток до сессии верхнего уровня в основном списке сессий',
   sideChatArchive: 'Архивировать этот боковой диалог (найти снова можно через «Показать архивированные» в списке сессий)',

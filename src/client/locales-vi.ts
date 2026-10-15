@@ -444,6 +444,7 @@ export const vi: Record<string, string> = {
   sideChatCreating: 'Đang tạo cuộc trò chuyện bên…',
   sideChatRetry: 'Thử lại',
   sideChatThreads: 'Chuyển luồng / mới',
+  sideChatHistory: 'Lịch sử hội thoại',
   sideChatSave: 'Lưu thành phiên mới',
   sideChatSaveTitle: 'Nâng luồng này thành phiên cấp cao nhất, xuất hiện trong danh sách phiên chính',
   sideChatArchive: 'Lưu trữ cuộc trò chuyện bên này (tìm lại qua “Hiện mục đã lưu trữ” trong danh sách phiên)',

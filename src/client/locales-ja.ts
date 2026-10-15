@@ -444,6 +444,7 @@ export const ja: Record<string, string> = {
   sideChatCreating: 'サイド会話を作成中…',
   sideChatRetry: '再試行',
   sideChatThreads: 'スレッド切替 / 新規',
+  sideChatHistory: 'チャット履歴',
   sideChatSave: '新規会話として保存',
   sideChatSaveTitle: 'このスレッドをトップレベルの会話に昇格、メイン会話リストに表示',
   sideChatArchive: 'このサイド会話をアーカイブ（セッションリストの「アーカイブを表示」から再表示できます）',

@@ -437,6 +437,7 @@ export const fr: Record<string, string> = {
   sideChatCreating: 'Création de la discussion latérale…',
   sideChatRetry: 'Réessayer',
   sideChatThreads: 'Changer de fil / nouveau',
+  sideChatHistory: 'Historique des conversations',
   sideChatSave: 'Enregistrer comme nouvelle session',
   sideChatSaveTitle: 'Promouvoir ce fil en session de premier niveau, visible dans la liste des sessions principales',
   sideChatArchive: 'Archiver cette conversation latérale (la retrouver via « Afficher les archivées » dans la liste des sessions)',

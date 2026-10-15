@@ -427,6 +427,7 @@ export const sv: Record<string, string> = {
   sideChatCreating: 'Skapar sidokonversation…',
   sideChatRetry: 'Försök igen',
   sideChatThreads: 'Byt tråd / ny',
+  sideChatHistory: 'Chathistorik',
   sideChatSave: 'Spara som ny session',
   sideChatSaveTitle: 'Höj denna tråd till en toppnivå-session i huvudsessionslistan',
   sideChatArchive: 'Arkivera den här sidkonversationen (hitta den igen via ”Visa arkiverade” i sessionslistan)',

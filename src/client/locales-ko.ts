@@ -436,6 +436,7 @@ export const ko: Record<string, string> = {
   sideChatCreating: '사이드 대화를 만드는 중…',
   sideChatRetry: '다시 시도',
   sideChatThreads: '스레드 전환 / 새로 만들기',
+  sideChatHistory: '대화 기록',
   sideChatSave: '새 세션으로 저장',
   sideChatSaveTitle: '이 스레드를 최상위 세션으로 승격하여 주 세션 목록에 표시합니다',
   sideChatArchive: '이 사이드 대화 보관(세션 목록의 "보관됨 표시"에서 다시 찾을 수 있습니다)',

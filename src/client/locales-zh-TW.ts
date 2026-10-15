@@ -459,6 +459,7 @@ export const zhTW: Record<string, string> = {
   sideChatCreating: '正在建立側邊對話…',
   sideChatRetry: '重試',
   sideChatThreads: '切換執行緒 / 新增',
+  sideChatHistory: '歷史對話',
   sideChatSave: '儲存為新工作階段',
   sideChatSaveTitle: '把該執行緒提升為頂層工作階段，出現在主工作階段列表中',
   sideChatArchive: '歸檔這條側邊對話（在工作階段列表的「顯示已歸檔」裡可找回）',

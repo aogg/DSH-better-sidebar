@@ -427,6 +427,7 @@ export const pt: Record<string, string> = {
   sideChatCreating: 'Criando conversa lateral…',
   sideChatRetry: 'Tentar novamente',
   sideChatThreads: 'Alternar tópico / novo',
+  sideChatHistory: 'Histórico de conversas',
   sideChatSave: 'Salvar como nova sessão',
   sideChatSaveTitle: 'Promover este tópico a uma sessão de nível superior na lista principal de sessões',
   sideChatArchive: 'Arquivar esta conversa lateral (encontre-a novamente em “Mostrar arquivadas” na lista de sessões)',

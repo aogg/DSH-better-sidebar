@@ -444,6 +444,7 @@ export const hi: Record<string, string> = {
   sideChatCreating: 'साइड वार्तालाप बन रहा…',
   sideChatRetry: 'पुनः प्रयास',
   sideChatThreads: 'थ्रेड स्विच / नया',
+  sideChatHistory: 'चैट इतिहास',
   sideChatSave: 'नए सत्र के रूप में सहेजें',
   sideChatSaveTitle: 'इस थ्रेड को मुख्य सत्र सूची में शीर्ष-स्तरीय सत्र में प्रमोट करें',
   sideChatArchive: 'इस साइड बातचीत को संग्रहित करें (सत्र सूची में “संग्रहित दिखाएँ” से दोबारा पा सकते हैं)',

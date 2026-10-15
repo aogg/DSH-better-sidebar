@@ -9,7 +9,9 @@
  * at creation, and the thread earns its real label — and the tab its
  * title — from that first message). Closing the tab releases the thread's
  * live agent (its history stays persisted); the composer bar's thread menu
- * reopens any existing thread into a tab (deduped by threadId).
+ * and the page's top-right history list reopen any existing thread into a
+ * tab (deduped by threadId). An unseeded open is ALWAYS a new thread: tabs
+ * never re-absorb an older conversation on their own.
  *
  * Each side thread is a child session the plugin created itself with a
  * custom seed (the parent's full log up to the click moment — see
@@ -69,6 +71,7 @@ import {
 import { markdownTextProps } from './markdown-labels.tsx'
 import { useMarkdownSurface } from './use-markdown-surface.ts'
 import { IconHistoryOutline16, IconSaveOutline16 } from './icons.tsx'
+import { AnchoredPopover } from './AnchoredPopover.tsx'
 import type { Context, SidebarHistoryEntry, SidebarSessionEvent } from '../context-types.ts'
 import {
   SIDE_LABEL_PREFIX,
@@ -95,7 +98,7 @@ import { api } from './api.ts'
 import { usePolling } from './use-polling.ts'
 import { useSidechatPush } from './use-sidechat-push.ts'
 import { sidechatWindows } from './sidechat-windows.ts'
-import { t } from './locales.ts'
+import { t, relativeTime } from './locales.ts'
 import type { SessionScope } from './api.ts'
 import type { SidebarTab } from './state.ts'
 import css from './SideChatView.module.css'
@@ -141,60 +144,6 @@ export function consumeSidechatSeed(): string | undefined {
 /** In-flight thread creations keyed by tab id (double-mount guard: React
  *  StrictMode / HMR must not mint two threads for one tab). */
 const inFlightStarts = new Set<string>()
-
-/** Where the last side-chat thread of each main session is remembered (the
- *  client store's own key space, like the diff pane's redaction flag). */
-const LAST_THREAD_KEY = 'dsh-sidebar:v1:sidechat-thread'
-
-/** The in-memory mirror of {@link LAST_THREAD_KEY}. */
-const lastThreadBySession = new Map<string, string>()
-
-/** Whether the localStorage mirror has been read into the map yet. */
-let lastThreadsLoaded = false
-
-/**
- * A native tab's record and its navigation params live in the host's memory
- * only, so collapsing the sidebar (or restarting DSH) remounts the tab with
- * NO thread bound — the autoCreate path — and the reader would land in a
- * brand-new empty thread instead of the one they were in. Remembering the
- * last thread per session is what makes the reattach below possible; the
- * storage is best-effort (a denied or unparseable entry just means the
- * reattach falls back to the newest thread).
- */
-function loadLastThreads(): void {
-  if (lastThreadsLoaded) return
-  lastThreadsLoaded = true
-  try {
-    const raw = localStorage.getItem(LAST_THREAD_KEY)
-    if (raw === null) return
-    const parsed: unknown = JSON.parse(raw)
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return
-    for (const [sessionId, threadId] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof threadId === 'string') lastThreadBySession.set(sessionId, threadId)
-    }
-  } catch {
-    // No storage (or unreadable JSON): nothing was remembered.
-  }
-}
-
-/** The thread a session's side-chat tab was last bound to, if any. */
-function lastSidechatThread(sessionId: string): string | undefined {
-  loadLastThreads()
-  return lastThreadBySession.get(sessionId)
-}
-
-/** Remember the side-chat thread a session is bound to (also across reloads). */
-function rememberSidechatThread(sessionId: string, threadId: string): void {
-  loadLastThreads()
-  if (lastThreadBySession.get(sessionId) === threadId) return
-  lastThreadBySession.set(sessionId, threadId)
-  try {
-    localStorage.setItem(LAST_THREAD_KEY, JSON.stringify(Object.fromEntries(lastThreadBySession)))
-  } catch {
-    // A full or denied storage keeps the in-memory binding: reattaching
-    // within this page still works, only a reload loses it.
-  }
-}
 
 /** Per-thread transcript cache: thread-own events merged by seq (polls ride
  * the afterSeq delta and never re-download what they already hold). */
@@ -640,19 +589,25 @@ export function SideChatView(props: {
     return sideThreadRows(list.byId, scope.sessionId).filter(row => !archived.has(row.id))
   }, [list, scope.sessionId, archivedIds])
 
-  /** The newest thread of `candidates`: the session list carries the thread
-   *  rows but not their age, so the creation order comes from the host's
-   *  subagent catalog. An untouched "new thread" placeholder only wins when
+  /** Creation time of each side thread (host subagent catalog, epoch ms).
+   *  The session list carries the thread rows but not their age, so BOTH
+   *  consumers of the creation order — the newest-thread rank below and the
+   *  top-right history list — read this one map. */
+  const threadCreatedAt = useMemo(() => {
+    const catalog = list.projectionsBySession?.[scope.sessionId]?.values.subagentCatalog
+    return new Map((catalog ?? []).map(entry => [entry.id, entry.createdAt]))
+  }, [list, scope.sessionId])
+
+  /** The newest thread of `candidates`: ranked by the catalog's creation
+   *  times above. An untouched "new thread" placeholder only wins when
    *  nothing else is left. */
   const newestThreadId = useCallback((candidates: readonly SideThreadRow[]): string | undefined => {
-    const catalog = list.projectionsBySession?.[scope.sessionId]?.values.subagentCatalog
-    const createdAt = new Map((catalog ?? []).map(entry => [entry.id, entry.createdAt]))
-    const rank = (id: string): number => createdAt.get(id) ?? 0
+    const rank = (id: string): number => threadCreatedAt.get(id) ?? 0
     const real = candidates.filter(row => row.title !== SIDE_NEW_THREAD_TITLE)
     const pool = real.length > 0 ? real : candidates
     if (pool.length === 0) return undefined
     return pool.reduce((newest, row) => (rank(row.id) > rank(newest.id) ? row : newest)).id
-  }, [list, scope.sessionId])
+  }, [threadCreatedAt])
 
   // The thread this tab is bound to rides tab.meta (refresh-restored).
   const threadId = sidechatThreadIdOf(tab)
@@ -666,6 +621,9 @@ export function SideChatView(props: {
   const [info, setInfo] = useState<SidechatThreadInfo | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
+  /** The top-right history popover: the anchor button element while open,
+   *  null when closed (AnchoredPopover renders nothing on null). */
+  const [historyOpen, setHistoryOpen] = useState<HTMLElement | null>(null)
   const [catalog, setCatalog] = useState<SidechatModelCatalog | null>(null)
   /** Local echo of the message just sent: shown until the host reports it
    *  pending or logs it durably (see the drop effect below). `seq` is the
@@ -730,41 +688,18 @@ export function SideChatView(props: {
     }
   }, [ctx, scope.sessionId, tab.id])
 
-  /**
-   * The existing thread an unbound side chat should reattach to: the binding
-   * this session was last in (kept only while the thread is still listed — a
-   * deleted or archived thread must not be revived), then the newest thread
-   * that already carries a real first prompt.
-   */
-  const reattachTarget = useCallback((): string | undefined => {
-    const remembered = lastSidechatThread(scope.sessionId)
-    if (remembered !== undefined && (threads.length === 0 || threads.some(row => row.id === remembered))) {
-      return remembered
-    }
-    return newestThreadId(threads)
-  }, [newestThreadId, scope.sessionId, threads])
-
-  // Codex-style immediate create: an autoCreate tab spawns its thread as soon
-  // as it first renders. A tab that LOST its binding (a panel collapse or a
-  // restart — the host holds navigation params in memory only, see
-  // loadLastThreads) reattaches to the thread the session was last in instead
-  // of leaving yet another orphan "Side: New thread" session behind.
+  // Codex-style immediate create: an autoCreate tab spawns a FRESH thread as
+  // soon as it first renders — every unseeded open (the start-page capsule, a
+  // plain `service.openTab({ type: 'sidechat' })`) means "a new conversation",
+  // so several side-chat tabs can be open at once, each on its own thread.
+  // Older threads stay reachable through the composer-bar thread menu and the
+  // top-right history list, never re-absorbed into a fresh tab. A tab that
+  // kept its binding (tab.meta rides the persisted sidebar state across
+  // reloads) skips this effect entirely and stays on its thread.
   useEffect(() => {
     if (threadId !== undefined || !autoCreate || !visible) return
-    const reattach = reattachTarget()
-    if (reattach !== undefined) {
-      // Name the seat session: the same native id names a tab in every session.
-      ctx.get('betterSidebar')?.updateTab(tab.id, { meta: { threadId: reattach } }, scope.sessionId)
-      return
-    }
     void startThread()
-  }, [threadId, autoCreate, visible, startThread, reattachTarget, ctx, tab.id, scope.sessionId])
-
-  // Remember the thread this tab holds, so reopening the panel (or a restart)
-  // reattaches it instead of minting another one.
-  useEffect(() => {
-    if (threadId !== undefined) rememberSidechatThread(scope.sessionId, threadId)
-  }, [threadId, scope.sessionId])
+  }, [threadId, autoCreate, visible, startThread])
 
   // The tab title follows the thread's durable label (the first prompt
   // renames the thread; the strip picks it up here). A floating window
@@ -1003,7 +938,6 @@ export function SideChatView(props: {
     setError(null)
     try {
       const { childId } = await api.sidechatStart(scope.sessionId)
-      rememberSidechatThread(scope.sessionId, childId)
       parkSidechatReopen(childId)
       ctx.get('betterSidebar')?.openTab({ type: 'sidechat' }, scope)
     } catch (cause) {
@@ -1013,14 +947,96 @@ export function SideChatView(props: {
     }
   }
 
-  /** Switch to an existing thread: parked for createTab, deduped to the
-   *  already-open tab when there is one. */
-  const openExistingThread = (id: string): void => {
-    setMenuOpen(false)
+  /** Reopen an existing thread into its tab: the id is parked for createTab
+   *  (a deterministic `sidechat:<threadId>` tab), and the open dedupes to the
+   *  already-open tab when there is one. The composer-bar thread menu and the
+   *  top-right history list both route through here — the menu wrapper just
+   *  closes the menu first. */
+  const reopenThread = (id: string): void => {
     if (id === threadId) return
     parkSidechatReopen(id)
     ctx.get('betterSidebar')?.openTab({ type: 'sidechat' }, scope)
   }
+
+  const openExistingThread = (id: string): void => {
+    setMenuOpen(false)
+    reopenThread(id)
+  }
+
+  /** The history popover's rows: every listed side thread of this session,
+   *  newest first (the catalog's creation times; an undated thread sorts
+   *  last). Same feed the composer-bar menu reads — a CLOSED tab stays listed
+   *  because closing only disposes the live agent, the thread session (and
+   *  its history) persists on the host. */
+  const historyRows = useMemo(
+    () => [...threads].sort((a, b) => (threadCreatedAt.get(b.id) ?? 0) - (threadCreatedAt.get(a.id) ?? 0)),
+    [threads, threadCreatedAt],
+  )
+
+  /** One history row's time cell: the thread's creation moment as the shared
+   *  relative label (刚刚 / N 分钟前 / 昨天 / date). A thread the host catalog
+   *  does not date shows no time at all — an absent cell beats a fake one. */
+  const threadTimeLabel = (id: string): string | undefined => {
+    const createdAt = threadCreatedAt.get(id)
+    return createdAt === undefined ? undefined : relativeTime(new Date(createdAt).toISOString())
+  }
+
+  /** The top-right history control: a quiet button pinned over the
+   *  transcript's corner — the overlay wrapper never catches pointers, so
+   *  scrolled content under it stays fully interactive — and its anchored
+   *  popover listing every side thread of this session. A row click reopens
+   *  that thread through the same park + openTab + dedupe path the
+   *  composer-bar thread menu uses; the row bound to THIS tab is marked and
+   *  re-clicking it is a no-op (no second tab for the same thread). */
+  const historyControl = (
+    <>
+      <div className={css.sidechatHistoryOverlay}>
+        <Tooltip label={t('sideChatHistory')} side="bottom" portal delayMs={TIP_DELAY_MS} maxWidth={220}>
+          <button
+            type="button"
+            className={css.sidechatHistoryBtn}
+            onClick={event => {
+              // Capture the anchor synchronously: React nulls currentTarget
+              // once the event finishes dispatching.
+              const anchor = event.currentTarget
+              setHistoryOpen(current => (current === null ? anchor : null))
+            }}
+            aria-label={t('sideChatHistory')}
+          >
+            <IconHistoryOutline16 />
+          </button>
+        </Tooltip>
+      </div>
+      <AnchoredPopover anchor={historyOpen} onClose={() => { setHistoryOpen(null) }} width={280}>
+        <div className={css.sidechatHistoryCard}>
+          <div className={css.sidechatHistoryHead}>{t('sideChatHistory')}</div>
+          {historyRows.length === 0 && (
+            <div className={css.sidechatHistoryEmpty}>{t('sideChatEmpty')}</div>
+          )}
+          {historyRows.map(row => {
+            const time = threadTimeLabel(row.id)
+            return (
+              <button
+                key={row.id}
+                type="button"
+                className={clsx(css.sidechatHistoryRow, row.id === threadId && css.sidechatHistoryRowCurrent)}
+                onClick={() => { setHistoryOpen(null); reopenThread(row.id) }}
+              >
+                <span className={css.sidechatHistoryTitle}>{threadDisplayTitle(row.title)}</span>
+                <span className={css.sidechatHistoryMeta}>
+                  <span className={css.sidechatHistoryState}>
+                    {row.running && <StateDot state="ongoing" size={8} />}
+                    {row.running ? t('sideChatBlockRunning') : t('subagentInactive')}
+                  </span>
+                  {time !== undefined && <span>{time}</span>}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </AnchoredPopover>
+    </>
+  )
 
   const menuItems = useMemo<MenuEntry[]>(() => {
     const items: MenuEntry[] = [
@@ -1236,6 +1252,7 @@ export function SideChatView(props: {
   if (threadId === undefined) {
     return (
       <div className={css.sidechat}>
+        {historyControl}
         <div className={css.sidechatHero}>
           <IconNewChatOutlineRegular />
           <div
@@ -1275,6 +1292,7 @@ export function SideChatView(props: {
           onReconnect={() => { ctx.connection?.reconnect() }}
         />
       )}
+      {historyControl}
       <div ref={transcriptRef} className={css.sidechatScroll}>
         {/* The host delegate is what makes a local markdown link in a row
             clickable at all (see use-markdown-surface), scoped to this

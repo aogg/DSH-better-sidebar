@@ -445,6 +445,7 @@ export const ar: Record<string, string> = {
   sideChatCreating: 'جارٍ إنشاء محادثة جانبية…',
   sideChatRetry: 'إعادة المحاولة',
   sideChatThreads: 'تبديل خيط / جديد',
+  sideChatHistory: 'سجل المحادثات',
   sideChatSave: 'حفظ كجلسة جديدة',
   sideChatSaveTitle: 'ترقية هذا الخيط إلى جلسة عالية المستوى في قائمة الجلسات الرئيسية',
   sideChatArchive: 'أرشفة هذه المحادثة الجانبية (يمكن العثور عليها مجددًا عبر «إظهار المؤرشفة» في قائمة الجلسات)',

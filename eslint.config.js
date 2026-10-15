@@ -24,6 +24,9 @@ export default tseslint.config(
       'node_modules/',
       '.worktrees/',
       '.delta/',
+      // 部署流程在发布克隆里留下的发布前备份目录（.pre-deploy-backup-<日期>/，
+      // 内含整份旧构建产物）：同样不参与 lint，理由同上。
+      '.pre-deploy-backup-*/',
     ],
   },
 

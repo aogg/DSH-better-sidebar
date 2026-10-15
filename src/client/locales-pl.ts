@@ -446,6 +446,7 @@ export const pl: Record<string, string> = {
   sideChatCreating: 'Tworzenie rozmowy bocznej…',
   sideChatRetry: 'Ponów',
   sideChatThreads: 'Przełącz wątek / nowy',
+  sideChatHistory: 'Historia rozmów',
   sideChatSave: 'Zapisz jako nową sesję',
   sideChatSaveTitle: 'Promuj ten wątek do sesji najwyższego poziomu na głównej liście sesji',
   sideChatArchive: 'Zarchiwizuj tę rozmowę boczną (znajdziesz ją ponownie przez „Pokaż zarchiwizowane” na liście sesji)',

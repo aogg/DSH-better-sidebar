@@ -442,6 +442,7 @@ export const nl: Record<string, string> = {
   sideChatCreating: 'Side-conversatie aanmaken…',
   sideChatRetry: 'Opnieuw proberen',
   sideChatThreads: 'Thread wisselen / nieuw',
+  sideChatHistory: 'Chatgeschiedenis',
   sideChatSave: 'Opslaan als nieuwe sessie',
   sideChatSaveTitle: 'Promoveer deze thread naar een top-level sessie in de hoofd-sessielijst',
   sideChatArchive: 'Dit zijgesprek archiveren (terug te vinden via “Gearchiveerd tonen” in de sessielijst)',

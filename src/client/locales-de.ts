@@ -430,6 +430,7 @@ export const de: Record<string, string> = {
   sideChatCreating: 'Seitenunterhaltung wird erstellt…',
   sideChatRetry: 'Erneut versuchen',
   sideChatThreads: 'Thread wechseln / neu',
+  sideChatHistory: 'Chat-Verlauf',
   sideChatSave: 'Als neue Sitzung speichern',
   sideChatSaveTitle: 'Diesen Thread in der Hauptsitzungsliste zu einer Top-Level-Sitzung erheben',
   sideChatArchive: 'Diese Nebenunterhaltung archivieren (über „Archivierte anzeigen“ in der Sitzungsliste wiederzufinden)',

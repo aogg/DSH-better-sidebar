@@ -444,6 +444,7 @@ export const th: Record<string, string> = {
   sideChatCreating: 'กำลังสร้างแชทด้านข้าง…',
   sideChatRetry: 'ลองอีกครั้ง',
   sideChatThreads: 'สลับเธรด / ใหม่',
+  sideChatHistory: 'ประวัติการสนทนา',
   sideChatSave: 'บันทึกเป็นเซสชันใหม่',
   sideChatSaveTitle: 'เลื่อนเธรดนี้เป็นเซสชันระดับบนสุดในรายการเซสชันหลัก',
   sideChatArchive: 'เก็บถาวรบทสนทนาข้างนี้ (ค้นหาอีกครั้งได้จาก “แสดงรายการที่เก็บถาวร” ในรายการเซสชัน)',

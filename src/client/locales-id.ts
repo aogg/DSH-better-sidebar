@@ -442,6 +442,7 @@ export const id: Record<string, string> = {
   sideChatCreating: 'Membuat obrolan samping…',
   sideChatRetry: 'Coba lagi',
   sideChatThreads: 'Beralih thread / baru',
+  sideChatHistory: 'Riwayat obrolan',
   sideChatSave: 'Simpan sebagai sesi baru',
   sideChatSaveTitle: 'Promosikan thread ini ke sesi tingkat atas dalam daftar sesi utama',
   sideChatArchive: 'Arsipkan percakapan samping ini (temukan lagi lewat “Tampilkan yang diarsipkan” di daftar sesi)',

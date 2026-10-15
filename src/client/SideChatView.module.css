@@ -15,6 +15,128 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* Anchor of the top-right history overlay (absolute inside this box). */
+  position: relative;
+}
+
+/* ── top-right history control (every side thread of this session, one
+ * click to reopen) ───────────────────────────────────────────────────── */
+
+/* The floating corner wrapper: it paints nothing and catches NO pointers
+ * (pointer-events: none), so transcript rows scrolling beneath the button
+ * keep their selection/click behavior; only the button re-enables them. */
+.sidechatHistoryOverlay {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  z-index: 4;
+  display: flex;
+  pointer-events: none;
+}
+
+.sidechatHistoryBtn {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--dsw-alias-hairline);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base));
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  box-shadow: var(--dsw-shadow-lv1, none);
+  transition: background-color 100ms ease-out, color 100ms ease-out;
+}
+
+.sidechatHistoryBtn:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The anchored card (AnchoredPopover): same surface family as the Tasks
+ * page's popCard — raised layer, hairline edge, one caps head band. */
+.sidechatHistoryCard {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 8px 8px;
+  max-height: min(420px, 60vh);
+  overflow-y: auto;
+  background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 4px;
+  box-shadow: var(--dsw-shadow-lv3);
+  box-sizing: border-box;
+  animation: sidechatFadeIn 140ms ease-out;
+}
+
+.sidechatHistoryHead {
+  padding: 0 6px 6px;
+  font: var(--dsw-font-xxs-12);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dsw-alias-label-tertiary);
+  user-select: none;
+}
+
+.sidechatHistoryEmpty {
+  padding: 8px 6px 6px;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* One thread row: title on the first line, state · time on the second. A
+ * button (not a menu entry) so the whole two-line surface is clickable. */
+.sidechatHistoryRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 100ms ease-out;
+}
+
+.sidechatHistoryRow:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.sidechatHistoryRowCurrent .sidechatHistoryTitle {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.sidechatHistoryRowCurrent .sidechatHistoryState {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.sidechatHistoryTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--dsw-font-s-14);
+}
+
+.sidechatHistoryMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-tertiary);
+  user-select: none;
+}
+
+.sidechatHistoryState {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* ── composer-bar controls (model picker · thread menu · save · archive):
@@ -584,7 +706,8 @@
   .sidechatStatus,
   .sidechatSendBtn,
   .sidechatModelBtn,
-  .sidechatDequeueBtn {
+  .sidechatDequeueBtn,
+  .sidechatHistoryCard {
     animation: none;
     transition: none;
   }

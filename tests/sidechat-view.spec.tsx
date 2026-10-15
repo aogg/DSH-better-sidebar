@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { renderRoot, setupReactAct } from './test-utils.ts'
-import { SideChatView } from '../src/client/SideChatView.tsx'
+import { SideChatView, consumeSidechatSeed } from '../src/client/SideChatView.tsx'
 import { attachLocale } from '../src/client/locales.ts'
 import type { Context, SidebarSessionList } from '../src/context-types.ts'
 import type { SidebarTab } from '../src/client/state.ts'
@@ -236,6 +236,8 @@ beforeEach(() => {
   attachLocale(new FakeLocale())
   FakeSocket.instances = []
   vi.stubGlobal('WebSocket', FakeSocket)
+  // A parked reopen seed is module state: never let it leak between tests.
+  consumeSidechatSeed()
   eventsPulls = 0
   eventsValue = EVENTS
   pendingValue = []
@@ -734,6 +736,155 @@ describe('SideChatView queue, echo and model picker', () => {
     expect(items).toHaveLength(1)
     expect(items[0]?.disabled).toBe(true)
     expect(items[0]?.textContent).toContain('继承主对话')
+    unmount()
+  })
+})
+
+describe('SideChatView fresh open (no reattach)', () => {
+  /** An unbound autoCreate tab — what a plain openTab without a parked seed
+   *  mints (start-page capsule, service.openTab, …). */
+  function autoCreateProps(ctx: Context) {
+    const tab: SidebarTab = { id: 'tab-fresh', type: 'sidechat', title: '新对话', meta: { autoCreate: true } }
+    return { ctx, scope: { sessionId: 'root', cwd: '/p' }, tab, visible: true }
+  }
+
+  it('a fresh open starts a NEW thread even when older threads exist', async () => {
+    const host = makeArchiveHost()
+    const { unmount } = renderRoot(createElement(SideChatView, autoCreateProps(makeArchiveCtx(threadStore(), host))))
+    await act(async () => {})  // flush the start request
+
+    // One sidechat.start — the old thread must NOT be reabsorbed into this
+    // tab (the deleted reattach path used to bind the remembered/newest one).
+    expect(startCalls).toBe(1)
+    expect(host.betterSidebar.updateTab).toHaveBeenCalledTimes(1)
+    expect(host.betterSidebar.updateTab).toHaveBeenCalledWith('tab-fresh', { meta: { threadId: 'session-new' } }, 'root')
+    unmount()
+  })
+
+  it('a fresh open in a session without threads starts one too', async () => {
+    const host = makeArchiveHost()
+    const store = makeStore({ byId: { root: { id: 'root', displayTitle: '主会话', running: false } } })
+    const { container, unmount } = renderRoot(createElement(SideChatView, autoCreateProps(makeArchiveCtx(store, host))))
+    await act(async () => {})
+
+    expect(startCalls).toBe(1)
+    // The creating hero shows while the seat is being named.
+    expect(container.textContent ?? '').toContain('正在创建侧边对话…')
+    unmount()
+  })
+
+  it('a bound tab never re-creates: the start effect is the autoCreate path only', async () => {
+    const host = makeArchiveHost()
+    const { unmount } = renderRoot(createElement(SideChatView, viewProps(makeArchiveCtx(threadStore(), host))))
+    await act(async () => {})  // flush the initial transcript pull
+
+    expect(startCalls).toBe(0)
+    expect(host.betterSidebar.updateTab).not.toHaveBeenCalled()
+    unmount()
+  })
+})
+
+describe('SideChatView top-right history list', () => {
+  /** Two threads with catalog creation times: t2 is newer and RUNNING, t1 is
+   *  the tab's bound (idle) thread. */
+  function historyStore(): ReturnType<typeof makeStore> {
+    return makeStore({
+      byId: {
+        root: { id: 'root', displayTitle: '主会话', running: false },
+        t1: { id: 't1', displayTitle: 'Side: 线程一', origin: 'subagent', parentId: 'root', running: false },
+        t2: { id: 't2', displayTitle: 'Side: 线程二', origin: 'subagent', parentId: 'root', running: true },
+      },
+      projectionsBySession: {
+        root: {
+          values: {
+            subagentCatalog: [
+              { id: 't1', createdAt: Date.now() - 300_000, mode: 'continuable', label: 'Side: 线程一' },
+              { id: 't2', createdAt: Date.now() - 30_000, mode: 'continuable', label: 'Side: 线程二' },
+            ],
+          },
+          state: 'ready',
+          error: null,
+        },
+      },
+    })
+  }
+
+  /** Open the history popover and return its card (portaled to body). */
+  async function openHistory(container: HTMLElement): Promise<HTMLElement> {
+    const trigger = container.querySelector<HTMLButtonElement>('button[aria-label="历史对话"]')
+    if (trigger === null) throw new Error('the top-right history button is absent')
+    await act(async () => { trigger.click() })
+    const card = document.body.querySelector<HTMLElement>('[role="dialog"]')
+    if (card === null) throw new Error('the history popover must open')
+    return card
+  }
+
+  it('renders the corner button on the bound page and lists threads newest first', async () => {
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(historyStore()))))
+    await act(async () => {})  // flush the initial transcript pull
+
+    const card = await openHistory(container)
+    const text = card.textContent ?? ''
+    expect(text).toContain('历史对话')
+    // Newest first: t2 (30s old → 刚刚) before t1 (5min old → 5 分钟前).
+    const first = card.querySelector('button')?.textContent ?? ''
+    expect(first).toContain('线程二')
+    expect(text).toContain('刚刚')
+    expect(text).toContain('5 分钟前')
+    // The running thread carries the state word, the idle one the idle word.
+    expect(text).toContain('运行中')
+    expect(text).toContain('空闲')
+    unmount()
+  })
+
+  it('reopens a closed thread from a row through park + openTab (dedupe path)', async () => {
+    const host = makeArchiveHost()
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeArchiveCtx(historyStore(), host))))
+    await act(async () => {})
+
+    const card = await openHistory(container)
+    const row = [...card.querySelectorAll<HTMLButtonElement>('button')]
+      .find(candidate => candidate.textContent?.includes('线程二'))
+    expect(row).toBeDefined()
+    await act(async () => { row?.click() })
+
+    // The popover closed, the seed is parked for createTab (a second consume
+    // reads undefined — exactly one park per click), and the plain sidechat
+    // openTab was issued: the descriptor turns it into `sidechat:t2`.
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull()
+    expect(consumeSidechatSeed()).toBe('t2')
+    expect(consumeSidechatSeed()).toBeUndefined()
+    expect(host.betterSidebar.openTab).toHaveBeenCalledTimes(1)
+    expect(host.betterSidebar.openTab).toHaveBeenCalledWith({ type: 'sidechat' }, { sessionId: 'root', cwd: '/p' })
+    unmount()
+  })
+
+  it('re-clicking the CURRENT thread\'s row opens nothing', async () => {
+    const host = makeArchiveHost()
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeArchiveCtx(historyStore(), host))))
+    await act(async () => {})
+
+    const card = await openHistory(container)
+    const row = [...card.querySelectorAll<HTMLButtonElement>('button')]
+      .find(candidate => candidate.textContent?.includes('线程一'))
+    expect(row).toBeDefined()
+    await act(async () => { row?.click() })
+
+    expect(host.betterSidebar.openTab).not.toHaveBeenCalled()
+    expect(consumeSidechatSeed()).toBeUndefined()
+    unmount()
+  })
+
+  it('shows the empty state when the session has no side threads yet', async () => {
+    const store = makeStore({ byId: { root: { id: 'root', displayTitle: '主会话', running: false } } })
+    const tab: SidebarTab = { id: 'tab-fresh', type: 'sidechat', title: '新对话', meta: { autoCreate: true } }
+    const { container, unmount } = renderRoot(createElement(SideChatView, {
+      ctx: makeCtx(store), scope: { sessionId: 'root', cwd: '/p' }, tab, visible: true,
+    }))
+    await act(async () => {})
+
+    const card = await openHistory(container)
+    expect(card.textContent ?? '').toContain('暂无侧边对话')
     unmount()
   })
 })
