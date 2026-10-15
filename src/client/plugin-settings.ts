@@ -12,6 +12,7 @@
  */
 import { api } from './api.ts'
 import { parsePrefs } from './prefs.ts'
+import { PROJECT_SETTINGS_KEY } from '../prefs-shared.ts'
 import type { SidebarStore } from './state.ts'
 
 let queue: Promise<void> = Promise.resolve()
@@ -45,10 +46,13 @@ export function updatePluginSettings(
 /**
  * Merge one WORKSPACE settings blob and persist it — the project-scoped
  * sibling of {@link updatePluginSettings}: same queue, same last-write-wins
- * route, but the patch lands under `projectSettings[cwd]` instead of a
- * descriptor id. `cwd` is the workspace root's absolute path (the same string
- * `api.sessionCwd` reports); an empty/undefined cwd is refused silently —
- * there is no project to scope to, and the menu degrades to the global blob.
+ * route, but the patch lands under the reserved `pluginSettings['__project']`
+ * map, keyed by the workspace root, instead of a descriptor id. `cwd` is that
+ * root's absolute path (the same string `api.sessionCwd` reports); an
+ * empty/undefined cwd is refused silently — there is no project to scope to,
+ * and the menu degrades to the global blob. The reserved key lives inside
+ * the volatile-open `pluginSettings` subtree, so hosts running the previous
+ * schema accept the write too (the seam refuses any NEW top-level field).
  */
 export function updateProjectSettings(
   store: SidebarStore,
@@ -58,10 +62,11 @@ export function updateProjectSettings(
   if (cwd === undefined || cwd === '') return
   queue = queue.then(async () => {
     const prefs = store.getPrefs()
-    const blob = prefs.projectSettings[cwd] ?? {}
+    const map = prefs.pluginSettings[PROJECT_SETTINGS_KEY] ?? {}
+    const blob = map[cwd] ?? {}
     const next = updater({ ...blob })
     const view = await api.settingsUpdate({
-      projectSettings: { ...prefs.projectSettings, [cwd]: next },
+      pluginSettings: { ...prefs.pluginSettings, [PROJECT_SETTINGS_KEY]: { ...map, [cwd]: next } },
     })
     store.setPrefs(parsePrefs(view.value))
   }).catch((error: unknown) => {

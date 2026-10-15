@@ -158,23 +158,30 @@ export interface SidebarPrefs {
    * here — an open map, so third-party keys need no host PrefsSchema field.
    * Values are JSON-serializable (the row controls produce strings /
    * numbers / booleans; custom panels are responsible for their own).
+   *
+   * One RESERVED key is not a descriptor id: `__project` (v0.26.0+, see
+   * {@link PROJECT_SETTINGS_KEY}) holds the per-workspace blobs,
+   * `{ [workspaceRoot]: { openWith: … } }`. It lives under this open map —
+   * not a top-level field — because the settings seam's write validation
+   * refuses fields the schema does not declare, while this whole subtree is
+   * volatile-open: old and new hosts accept the write alike.
    */
   pluginSettings: Record<string, Record<string, unknown>>
-  /**
-   * Per-workspace ("project") settings blobs (v0.26.0+), keyed by the
-   * workspace root's ABSOLUTE path as the host reports it (`useSessionRoot` /
-   * `api.sessionCwd`): each active workspace carries its own open map of
-   * JSON-serializable values. Today the one blob is `openWith` — the file
-   * tree's 打开方式 configuration (SSH host, custom editors, path-prefix
-   * mappings, pinned ids) — which the editor composes with the GLOBAL
-   * `pluginSettings['editor'].openWith` blob (project wins on conflicts, see
-   * `mergeOpenWithConfigs`). A workspace with no entry falls back to the
-   * global configuration unchanged. An empty object under a key is
-   * meaningful (it shadows nothing; it exists so the settings page's project
-   * tab can seed a fresh edit without waiting for a first write).
-   */
-  projectSettings: Record<string, Record<string, unknown>>
 }
+
+/**
+ * The reserved `pluginSettings` key holding the per-workspace ("project")
+ * settings blobs (v0.26.0+): `{ [workspaceRoot]: { openWith: … } }`, keyed
+ * by the workspace root's ABSOLUTE path as the host reports it
+ * (`api.sessionCwd`). Today the one blob is `openWith` — the file tree's
+ * 打开方式 configuration (SSH host, custom editors, path-prefix mappings,
+ * pinned ids) — which the editor composes with the GLOBAL
+ * `pluginSettings['editor'].openWith` blob (project wins on conflicts, see
+ * `mergeOpenWithConfigs`). A workspace with no entry falls back to the
+ * global configuration unchanged. The key cannot collide with a descriptor
+ * id: registration ids never start with the double underscore.
+ */
+export const PROJECT_SETTINGS_KEY = '__project'
 
 /** The stock exclude list (VS Code ships a similar files.exclude default). */
 export const EXPLORER_EXCLUDE_DEFAULTS: readonly string[] = ['.DS_Store', 'Thumbs.db']
@@ -200,5 +207,4 @@ export const SIDEBAR_PREFS_DEFAULTS: SidebarPrefs = {
   tabsEnabled: {},
   viewersEnabled: {},
   pluginSettings: {},
-  projectSettings: {},
 }

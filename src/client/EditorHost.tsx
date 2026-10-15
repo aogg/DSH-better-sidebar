@@ -37,6 +37,7 @@ import { openClaimedNativeFile, openSidebarFile } from './sidebar-file.ts'
 import { mergeOpenWithConfigs, openWithPinScope, openWithSshActive, openWithUrl, parseOpenWithConfig, resolveOpenWithTargets } from './open-with.ts'
 import { fileOpKey, useFileOpStream } from './ops-stream.ts'
 import { updatePluginSettings, updateProjectSettings } from './plugin-settings.ts'
+import { PROJECT_SETTINGS_KEY } from '../prefs-shared.ts'
 import { createOpenInApp } from './open-in-app.ts'
 import { TreePanel } from './TreePanel.tsx'
 import { t } from './locales.ts'
@@ -203,14 +204,17 @@ export function EditorHost(props: {
     useCallback((callback: () => void) => store.subscribe(callback), [store]),
     useCallback(() => store.getSnapshot().prefs.pluginSettings['editor'] ?? EMPTY_PLUGIN_BLOB, [store]),
   )
-  // The WORKSPACE-scoped open-with blob (`projectSettings[cwd]`): the project
-  // tab of the settings page edits it, this window composes it OVER the
-  // global one — no entry (or no cwd) means the global config stands alone.
+  // The WORKSPACE-scoped open-with blob (the reserved
+  // `pluginSettings['__project'][cwd]`): the project tab of the settings
+  // page edits it, this window composes it OVER the global one — no entry
+  // (or no cwd) means the global config stands alone.
   const projectBlob = useSyncExternalStore(
     useCallback((callback: () => void) => store.subscribe(callback), [store]),
-    useCallback(() => (
-      scope.cwd === undefined ? EMPTY_PLUGIN_BLOB : store.getSnapshot().prefs.projectSettings[scope.cwd] ?? EMPTY_PLUGIN_BLOB
-    ), [store, scope.cwd]),
+    useCallback((): Record<string, unknown> => {
+      if (scope.cwd === undefined) return EMPTY_PLUGIN_BLOB
+      const map = store.getSnapshot().prefs.pluginSettings[PROJECT_SETTINGS_KEY]
+      return (map?.[scope.cwd] as Record<string, unknown> | undefined) ?? EMPTY_PLUGIN_BLOB
+    }, [store, scope.cwd]),
   )
   const openWithConfig = useMemo(
     () => mergeOpenWithConfigs(parseOpenWithConfig(editorBlob.openWith), parseOpenWithConfig(projectBlob.openWith)),

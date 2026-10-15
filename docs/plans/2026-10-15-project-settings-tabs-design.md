@@ -13,15 +13,21 @@
 
 ## 存储
 
-- 全局文档（DSH 设置服务 `dsh-better-sidebar` 命名空间）新增顶层开放字段：
+- 全局文档（DSH 设置服务 `dsh-better-sidebar` 命名空间）的开放 map 里，用**保留键**存项目 blob：
 
   ```
-  projectSettings: { [工作区根绝对路径]: { openWith?: … } }
+  pluginSettings: {
+    editor: { openWith: …, openWithPluginTargets: … },   // 全局（既有）
+    __project: {                                          // 保留键，v0.26.0+
+      [工作区根绝对路径]: { openWith?: … },
+    },
+  }
   ```
 
   - key = `api.sessionCwd` 报告的会话工作区根（host 权威，会跟随 linked worktree）。
-  - schema（config.ts）`z.dict(z.dict(z.any())).default({})`，随 `PrefsSchema.dict` 自动 volatile（偏好编辑走 loader/volatile-update，不重挂插件）。
-  - `SidebarPrefs.projectSettings` + `parsePrefs` 容错解析（复用 `pluginSettingsMapOf`）。
+  - **为什么放在 `pluginSettings` 下而不是新顶层字段**：dsh-settings 的写入校验（`validatePaths`）拒绝 schema 未声明的字段（`Config field … is not volatile`），运行中的旧宿主会拒掉新顶层字段的写入；而 `pluginSettings` 整个子树是 volatile 开放 map，校验在首层即跳过——新旧宿主都接受。客户端纯改动，client-hmr 部署即完整生效，无需重启 dsh。
+  - `__project` 不可能与描述符 id 冲突（注册 id 不用双下划线开头）。
+  - 客户端 `PROJECT_SETTINGS_KEY`（prefs-shared.ts）常量引用；schema（config.ts）零改动，`parsePrefs` 零改动。
 
 ## 合并语义（`mergeOpenWithConfigs`）
 
@@ -34,14 +40,14 @@
 
 ## 钉选写入落点（`openWithPinScope`）
 
-项目自定义编辑器的 pin、以及**已存在于项目 pin 列表的 id**（内置 target 也一样，否则永远解不开）→ 写 `projectSettings[cwd]`；其余（内置、仅全局的自定义编辑器）→ 写 `pluginSettings['editor']`。两个作用域互不串写。
+项目自定义编辑器的 pin、以及**已存在于项目 pin 列表的 id**（内置 target 也一样，否则永远解不开）→ 写 `pluginSettings['__project'][cwd]`；其余（内置、仅全局的自定义编辑器）→ 写 `pluginSettings['editor']`。两个作用域互不串写。
 
 ## UI
 
 - tab 栏：`role=tablist` 分段控件，`localStorage['dsh-sidebar:settings-tab']` 记住停留；SSR 安全（无 localStorage → 全局）。
 - 项目 tab：
   - 无活动会话 → `data-dsh-project-empty` 空态提示；
-  - 有 → 工作区头（目录名 + 完整根路径）+ 合并语义提示 + `OpenWithSettings` 面板（同一组件，绑定项目 blob，`updatePluginSetting('openWith', …)` 经 `writeProjectBlob` 走同一套乐观更新 + revision 防并发管线写 `projectSettings`）。
+  - 有 → 工作区头（目录名 + 完整根路径）+ 合并语义提示 + `OpenWithSettings` 面板（同一组件，绑定项目 blob，`updatePluginSetting('openWith', …)` 经 `writeProjectBlob` 走同一套乐观更新 + revision 防并发管线写保留键）。
 - 全局 tab：原版全部内容原样（编辑器卡片齿轮里仍保留全局「打开方式」面板——两边都配）。
 
 ## 消费点（EditorHost）
@@ -52,8 +58,7 @@
 ## 测试
 
 - `tests/open-with-merge.spec.ts`：合并八例（空项目=恒等、ssh 覆盖/回落、编辑器按 id 归并、pin 去重并集、路径映射双作用域生效+等长项目胜+更长全局仍胜）、pin 归属四例。
-- `tests/side-card-scope-tabs.spec.tsx`：默认全局、切项目解析 cwd + 面板渲染 + localStorage 记忆、SSH 输入只写 `projectSettings[cwd]`、无会话空态、记住 tab。
-- 既有 `prefs.spec` 全量对象断言补 `projectSettings: {}`。
+- `tests/side-card-scope-tabs.spec.tsx`：默认全局、切项目解析 cwd + 面板渲染 + localStorage 记忆、SSH 输入只写保留键（全局 editor blob 不被触碰）、无会话空态、记住 tab。
 
 ## 明确不做（用户裁定）
 

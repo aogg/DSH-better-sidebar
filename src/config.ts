@@ -112,13 +112,17 @@ export const PrefsSchema: z<SidebarPrefs> = z.object({
   // Plugin-owned settings blobs (v0.12.0+) are an OPEN nested map: any
   // descriptor id may carry any JSON-serializable values. This is the
   // "settings seam" opening — without it the seam would drop third-party
-  // keys as unknown schema fields.
+  // keys as unknown schema fields. The reserved `__project` key (NOT a
+  // descriptor id; nothing can register it) carries the per-workspace blobs
+  // (v0.26.0+): `{ [workspaceRoot]: { openWith: … } }`, which the client
+  // composes OVER the global `pluginSettings['editor']` configuration. It
+  // deliberately lives UNDER this open map instead of a new top-level
+  // field: the settings seam's write validation refuses any field the
+  // schema does not declare ("not volatile"), so a freshly added top-level
+  // field would be rejected by a host still running the previous schema —
+  // whereas the whole `pluginSettings` subtree is volatile-open and
+  // accepted by old and new hosts alike (client-hmr deploys stay complete).
   pluginSettings: z.dict(z.dict(z.any())).default({}),
-  // Per-workspace settings blobs (v0.26.0+) are an OPEN nested map keyed by
-  // the workspace root's absolute path — same opening as `pluginSettings`,
-  // one scope finer: each active workspace carries its own blob (today only
-  // `openWith`) that the client composes OVER the global configuration.
-  projectSettings: z.dict(z.dict(z.any())).default({}),
 })
 
 // ── The Loader row schema ───────────────────────────────────────────────────

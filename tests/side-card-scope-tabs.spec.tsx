@@ -3,7 +3,7 @@
  * over both surfaces, the choice persists in localStorage, the project tab
  * resolves the ACTIVE session's workspace root through api.sessionCwd, shows
  * the no-workspace hint without one, and its open-with panel writes the
- * `projectSettings[cwd]` blob (not `pluginSettings['editor']`) through the
+ * reserved `pluginSettings["__project"][cwd]` blob (not the global editor blob) through the
  * same revision-guarded route. api is module-mocked (the
  * side-card-rightbar-settings手法); settingsUpdate records the patch.
  */
@@ -122,7 +122,7 @@ describe('SideCardSection 作用域 tab', () => {
     }
   })
 
-  it('项目面板的 SSH 输入写入 projectSettings[cwd].openWith（不动全局 editor blob）', async () => {
+  it('项目面板的 SSH 输入写入保留键 pluginSettings.__project[cwd].openWith（不动全局 editor blob）', async () => {
     const store = createSidebarStore()
     store.setSession('s1')
     const { unmount } = mount(store)
@@ -136,10 +136,12 @@ describe('SideCardSection 作用域 tab', () => {
       await settle()
       const patch = vi.mocked(api.settingsUpdate).mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined
       expect(patch).toBeDefined()
-      const projectSettings = patch?.projectSettings as Record<string, Record<string, unknown>> | undefined
-      const openWith = projectSettings?.[DEMO_CWD]?.openWith as Record<string, unknown> | undefined
+      const pluginSettings = patch?.pluginSettings as Record<string, Record<string, unknown>> | undefined
+      const projectMap = pluginSettings?.['__project'] as Record<string, Record<string, unknown>> | undefined
+      const openWith = projectMap?.[DEMO_CWD]?.openWith as Record<string, unknown> | undefined
       expect(openWith?.sshHost).toBe('prod')
-      expect(patch?.pluginSettings).toBeUndefined()
+      // 全局 editor blob 不被项目写入触碰。
+      expect(pluginSettings?.['editor']).toBeUndefined()
     } finally {
       unmount()
     }

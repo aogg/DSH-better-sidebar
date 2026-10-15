@@ -54,7 +54,7 @@ import clsx from 'clsx'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SidebarPrefs } from '../prefs-shared.ts'
-import { RIGHTBAR_RATIO_MAX, RIGHTBAR_RATIO_MIN } from '../prefs-shared.ts'
+import { PROJECT_SETTINGS_KEY, RIGHTBAR_RATIO_MAX, RIGHTBAR_RATIO_MIN } from '../prefs-shared.ts'
 import { api } from './api.ts'
 import { parsePrefs } from './prefs.ts'
 import { AddPluginModal, type PluginKind } from './add-plugin-modal.tsx'
@@ -170,20 +170,21 @@ function initialScopeTab(): SettingsScopeTab {
 const EMPTY_PROJECT_BLOB: Record<string, unknown> = {}
 
 /**
- * Map one plugin-owned setting into a WORKSPACE blob map (pure, v0.26.0+):
- * the project-scoped sibling of {@link mergePluginSetting} — sequential
- * merges are additive, so building from the latest optimistic map keeps
- * earlier keys (and other workspaces' blobs) intact.
+ * Map one plugin-owned setting into the reserved `__project` workspace map
+ * (pure, v0.26.0+): the project-scoped sibling of {@link mergePluginSetting}
+ * — sequential merges are additive, so building from the latest optimistic
+ * map keeps earlier keys (and other workspaces' blobs) intact.
  */
 export function mergeProjectSetting(
-  projectSettings: Record<string, Record<string, unknown>>,
+  pluginSettings: Record<string, Record<string, unknown>>,
   cwd: string,
   key: string,
   value: unknown,
 ): Record<string, Record<string, unknown>> {
+  const map = pluginSettings[PROJECT_SETTINGS_KEY] ?? {}
   return {
-    ...projectSettings,
-    [cwd]: { ...(projectSettings[cwd] ?? {}), [key]: value },
+    ...pluginSettings,
+    [PROJECT_SETTINGS_KEY]: { ...map, [cwd]: { ...(map[cwd] ?? {}), [key]: value } },
   }
 }
 
@@ -838,7 +839,8 @@ export function SideCardSection({ store, service }: SideCardSectionProps) {
   }
 
   // The ACTIVE session's live workspace root — the project tab's scope key
-  // (`projectSettings[cwd]`). The store carries the active session id (the
+  // (`pluginSettings['__project'][cwd]`). The store carries the active
+  // session id (the
   // sidebar shell and the native tab adapter keep it set); the HOST is the
   // authority on where the session actually works (it can follow the agent
   // into a linked worktree), the same answer the explorer uses. One fetch
@@ -867,12 +869,13 @@ export function SideCardSection({ store, service }: SideCardSectionProps) {
   // The workspace's own blob + its writer: the project tab's open-with panel
   // edits THIS blob; the editor window composes it OVER the global one (the
   // project wins where both configure the same thing).
-  const projectBlob = projectCwd === undefined
+  const projectMap = prefs.pluginSettings[PROJECT_SETTINGS_KEY]
+  const projectBlob: Record<string, unknown> = projectCwd === undefined
     ? EMPTY_PROJECT_BLOB
-    : prefs.projectSettings[projectCwd] ?? EMPTY_PROJECT_BLOB
+    : (projectMap?.[projectCwd] as Record<string, unknown> | undefined) ?? EMPTY_PROJECT_BLOB
   const writeProjectBlob = (key: string, value: unknown): void => {
     if (projectCwd === undefined) return
-    applyPref({ projectSettings: mergeProjectSetting(optimisticRef.current.projectSettings, projectCwd, key, value) })
+    applyPref({ pluginSettings: mergeProjectSetting(optimisticRef.current.pluginSettings, projectCwd, key, value) })
   }
 
   // The settings document revision (guards concurrent writes). A ref: commits
@@ -1110,9 +1113,9 @@ export function SideCardSection({ store, service }: SideCardSectionProps) {
           active session (no workspace to scope to) the tab shows the hint;
           otherwise the open-with group renders — the one setting history
           asked to be per-project (路径映射 /code/www → D:/code/www is a
-          per-workspace fact, session-dca2613f). The panel edits
-          `projectSettings[cwd]` through the same optimistic/revision-guarded
-          pipeline as every other row. */}
+          per-workspace fact, session-dca2613f). The panel edits the reserved
+          `pluginSettings['__project'][cwd]` blob through the same
+          optimistic/revision-guarded pipeline as every other row. */}
       {scopeTab === 'project' && (
         projectCwd === undefined ? (
           <div className={css.group}>

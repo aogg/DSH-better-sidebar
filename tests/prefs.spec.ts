@@ -49,7 +49,6 @@ describe('side card preferences', () => {
         tabsEnabled: {},
         viewersEnabled: {},
         pluginSettings: {},
-        projectSettings: {},
       })
   })
 
@@ -73,7 +72,6 @@ describe('side card preferences', () => {
         tabsEnabled: {},
         viewersEnabled: {},
         pluginSettings: {},
-        projectSettings: {},
       })
   })
 
@@ -97,7 +95,6 @@ describe('side card preferences', () => {
         tabsEnabled: {},
         viewersEnabled: {},
         pluginSettings: {},
-        projectSettings: {},
       })
     expect((await loadPrefs(wire({ autoOpenSubagent: 1 }))).autoOpenSubagent)
       .toBe(true)
