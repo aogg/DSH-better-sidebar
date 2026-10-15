@@ -8,6 +8,7 @@ export const de: Record<string, string> = {
   guideDescSubagent: 'Workflow-Diagramm, Team-Aufgabenboard und Hintergrundaufgaben, live',
   guideDescSidechat: 'Ein unabhängiger Folge-Thread mit dem Kontext dieser Sitzung',
   guideDescTerminal: 'Eine echte Shell (xterm + pty) mit Wiederverbindung',
+  guideDescSettings: 'Seitenkarten-Einstellungen, Funktionsschalter und benutzerdefiniertes CSS',
   guideDescBrowser: 'Eingebetteter Browser, der Chat-Links übernehmen kann',
   changesSessionEmpty: 'Noch keine Dateioperationen in dieser Sitzung',
   changesRead: 'Lesen',

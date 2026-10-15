@@ -22,6 +22,7 @@ export const vi: Record<string, string> = {
   guideDescSubagent: 'Đồ thị quy trình, bảng tác vụ nhóm và tác vụ nền, theo thời gian thực',
   guideDescSidechat: 'Luồng hỏi tiếp độc lập kế thừa ngữ cảnh của phiên này',
   guideDescTerminal: 'Shell thật (xterm + pty), tự kết nối lại',
+  guideDescSettings: 'Cài đặt thẻ bên, công tắc tính năng và CSS tùy chỉnh',
   guideDescBrowser: 'Trình duyệt nhúng, có thể mở link trong chat',
   changesSessionEmpty: 'Chưa có thao tác tệp nào trong phiên này',
   changesRead: 'Đọc',

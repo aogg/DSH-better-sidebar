@@ -20,6 +20,7 @@ export const id: Record<string, string> = {
   guideDescSubagent: 'Graf alur kerja, papan tugas tim, dan tugas latar belakang, langsung',
   guideDescSidechat: 'Utas lanjutan independen yang mewarisi konteks sesi ini',
   guideDescTerminal: 'Shell sungguhan (xterm + pty), bisa menyambung ulang',
+  guideDescSettings: 'Pengaturan kartu samping, sakelar fitur, dan CSS kustom',
   guideDescBrowser: 'Peramban tertanam, bisa mengambil alih tautan chat',
   changesSessionEmpty: 'Belum ada operasi file di sesi ini',
   changesRead: 'Baca',

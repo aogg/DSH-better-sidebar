@@ -5,6 +5,7 @@ export const pt: Record<string, string> = {
   guideDescSubagent: 'Grafo do workflow, quadro de tarefas da equipe e tarefas em segundo plano, ao vivo',
   guideDescSidechat: 'Uma conversa paralela independente que herda o contexto desta sessão',
   guideDescTerminal: 'Um shell real (xterm + pty) com reconexão',
+  guideDescSettings: 'Preferências do cartão lateral, interruptores e CSS personalizado',
   guideDescBrowser: 'Navegador incorporado, que pode abrir links do chat',
   changesSessionEmpty: 'Ainda sem operações de arquivo nesta sessão',
   changesRead: 'Leitura',

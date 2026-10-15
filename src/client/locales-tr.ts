@@ -22,6 +22,7 @@ export const tr: Record<string, string> = {
   guideDescSubagent: 'İş akışı grafiği, takım görev panosu ve arka plan görevleri, canlı',
   guideDescSidechat: 'Bu oturumun bağlamını devralan bağımsız bir yan konu',
   guideDescTerminal: 'Gerçek bir shell (xterm + pty), yeniden bağlanma destekli',
+  guideDescSettings: 'Yan kart ayarları, özellik anahtarları ve özel CSS',
   guideDescBrowser: 'Sohbet bağlantılarını devralabilen gömülü tarayıcı',
   changesSessionEmpty: 'Bu oturumda henüz dosya işlemi yok',
   changesRead: 'Okuma',

@@ -15,6 +15,8 @@
  * type. It is the one built-in whose carrier surface is asserted here.
  */
 import { describe, expect, it } from 'vitest'
+import { createElement } from 'react'
+import { renderToString } from 'react-dom/server'
 import type { ReactElement } from 'react'
 import { VscCommentDiscussion, VscGitCommit, VscLayers } from 'react-icons/vsc'
 // First import: browser globals before the xterm-carrying builtin graph loads.
@@ -26,6 +28,7 @@ import { planFsReadOutcome } from '../src/client/editor-load.ts'
 import { createSidebarStore } from '../src/client/state.ts'
 import { registerBuiltins } from '../src/client/builtins/index.ts'
 import { parkSidechatReopen } from '../src/client/SideChatView.tsx'
+import { SettingsPage } from '../src/client/SettingsPage.tsx'
 
 function setup(): { service: ReturnType<typeof createBetterSidebarService>; store: ReturnType<typeof createSidebarStore>; dispose: () => void } {
   const store = createSidebarStore()
@@ -35,11 +38,39 @@ function setup(): { service: ReturnType<typeof createBetterSidebarService>; stor
 }
 
 describe('built-in tab registrations', () => {
-  it('registers the 6 built-in tabs (the host owns the right-sidebar terminal and browser)', () => {
+  it('registers the 7 built-in tabs (the host owns the right-sidebar terminal and browser)', () => {
     const { service } = setup()
     expect(service.getTabs().map(t => t.id).sort()).toEqual(
-      ['diff', 'editor', 'git', 'sidechat', 'subagent', 'terminal-bottom'],
+      ['diff', 'editor', 'git', 'settings', 'sidechat', 'subagent', 'terminal-bottom'],
     )
+  })
+
+  it('the settings tab is the sidebar start page\'s 设置 door (single, visible, real page)', () => {
+    const { service } = setup()
+    const settings = service.getTab('settings')
+    expect(settings).toBeDefined()
+    // One settings page: a second open focuses the existing one.
+    expect(settings?.single).toBe(true)
+    // Visible → the native surface registers it WITH a guide entry (the
+    // 侧边栏开始页's「设置」capsule) and the + menus list it.
+    expect(settings?.hidden).not.toBe(true)
+    expect(settings?.icon).toBeDefined()
+    expect(settings?.component).toBeDefined()
+    // Not bottom-only: it opens in the right sidebar like every other page.
+    expect(settings?.bottomOnly).not.toBe(true)
+  })
+
+  it('the settings page body renders the Side card section (SSR, no mount effects)', () => {
+    const { service, store } = setup()
+    const html = renderToString(createElement(SettingsPage, {
+      ctx: { get: (name: string) => name === 'betterSidebar' ? service : undefined } as unknown as Context,
+      store,
+    }))
+    // The section's own face: intro line, the general group and the width row.
+    expect(html).toContain('data-dsh-settings-page')
+    expect(html).toContain('General')
+    expect(html).toContain('data-dsh-drag-number')
+    expect(html).toContain('DSH-better-sidebar')
   })
 
   it('the terminal tab is bottom-only and never claims a native right-sidebar type', () => {

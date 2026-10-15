@@ -5,6 +5,7 @@ export const sv: Record<string, string> = {
   guideDescSubagent: 'Arbetsflödesgraf, teamuppgiftstavla och bakgrundsjobb, live',
   guideDescSidechat: 'En oberoende uppföljningstråd som ärver sessionens kontext',
   guideDescTerminal: 'Ett riktigt skal (xterm + pty) med återanslutning',
+  guideDescSettings: 'Sidokortsinställningar, funktionsreglage och anpassad CSS',
   guideDescBrowser: 'Inbäddad webbläsare som kan ta över chattlänkar',
   changesSessionEmpty: 'Inga filoperationer i den här sessionen ännu',
   changesRead: 'Läs',

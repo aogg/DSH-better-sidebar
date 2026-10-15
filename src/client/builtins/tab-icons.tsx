@@ -22,10 +22,11 @@ import {
   VscGitCommit,
   VscGlobe,
   VscLayers,
+  VscSettingsGear,
   VscTerminal,
 } from 'react-icons/vsc'
 /** The styled wrapper classes; typed so a renamed rule fails the build. */
-const css = styles as Record<'files' | 'changes' | 'tasks' | 'sidechat' | 'terminal' | 'browser', string>
+const css = styles as Record<'files' | 'changes' | 'tasks' | 'sidechat' | 'terminal' | 'browser' | 'settings', string>
 
 /** One tab type's glyph, sized by the caller's surface (14px in a strip). */
 export type TabIcon = (size: number) => ReactNode
@@ -69,3 +70,7 @@ export const terminalTabIcon: TabIcon = (size) =>
 /** Browser — the same secondary accent as the side chat's sibling surfaces. */
 export const browserTabIcon: TabIcon = (size) =>
   themed(css.browser, <VscGlobe size={size} />)
+
+/** Settings — primary ink, a control rather than an activity. */
+export const settingsTabIcon: TabIcon = (size) =>
+  themed(css.settings, <VscSettingsGear size={size} />)

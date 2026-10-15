@@ -1,7 +1,7 @@
 /**
  * The built-in tab descriptors: the plugin registers its own pages
  * (editor / git — the unified changes tab / subagent / sidechat / terminal-bottom /
- * diff) through
+ * settings / diff) through
  * the same {@link BetterSidebarService} external plugins use — eating its
  * own dogfood. The editor IS the files window (the old standalone explorer
  * merged into it).
@@ -17,10 +17,15 @@
  * terminal service through a self-drawn xterm. It declares `bottomOnly` so it
  * can never become a second right-Sidebar terminal capsule beside the host's
  * own. See docs/plans/2026-10-05-bottom-terminal-tab.md.
+ *
+ * `settings` is the sidebar's OWN settings page: its guide registration puts a
+ * 「设置」door on the right column's start page (the host guide), and picking it
+ * opens the Side card preferences as a real page — the same section the hero
+ * start page's settings panel mounts, on the same store.
  */
 import { IconCodeOutlineRegular, IconPanelLeftOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
-  changesTabIcon, filesTabIcon, sidechatTabIcon, tasksTabIcon, terminalTabIcon,
+  changesTabIcon, filesTabIcon, settingsTabIcon, sidechatTabIcon, tasksTabIcon, terminalTabIcon,
 } from './tab-icons.tsx'
 import { t } from '../locales.ts'
 import { openSidebarFile } from '../sidebar-file.ts'
@@ -29,6 +34,7 @@ import { OpenWithSettings } from '../open-with-settings.tsx'
 import { CommitModelSettings } from '../changes/CommitModelSettings.tsx'
 import { ChangesTab, opCountOf } from '../changes/ChangesTab.tsx'
 import { DiffTab } from '../DiffTab.tsx'
+import { SettingsPage } from '../SettingsPage.tsx'
 import { SubagentView } from '../SubagentView.tsx'
 import { consumeSidechatSeed, SideChatView, sidechatThreadIdOf } from '../SideChatView.tsx'
 import { LazyTerminalBottom } from '../terminal-lazy.tsx'
@@ -37,7 +43,7 @@ import { api } from '../api.ts'
 import type { Context } from '../../context-types.ts'
 import type { TabDescriptor } from '../service.ts'
 
-/** The 6 built-in tab descriptors (the host owns the right-Sidebar terminal and browser). */
+/** The 7 built-in tab descriptors (the host owns the right-Sidebar terminal and browser). */
 export function builtinTabs(ctx: Context): readonly TabDescriptor[] {
   return [
     {
@@ -292,6 +298,24 @@ export function builtinTabs(ctx: Context): readonly TabDescriptor[] {
         if (sessionId === undefined || sessionId === '') return
         closeBottomTerminal(ctx, tab, sessionId)
       },
+    },
+    {
+      id: 'settings',
+      // The sidebar's OWN settings page (the 侧边栏开始页's「设置」door): the
+      // guide capsule lands through the descriptor's native guide registration,
+      // and picking it opens this page in the pane — one real page, not a
+      // popup. The hero start page's「设置」pill keeps its own in-hero panel;
+      // both mount the same SideCardSection on the same store.
+      title: () => t('startSettings'),
+      description: () => t('guideDescSettings'),
+      icon: settingsTabIcon,
+      // Below the four host-facing pages and the bottom terminal (10..40): a
+      // tool, but a visible door on the guide and in the + menu.
+      order: 50,
+      single: true,
+      component: ({ ctx, store }) => (
+        <SettingsPage ctx={ctx} store={store} />
+      ),
     },
     {
       id: 'diff',

@@ -24,6 +24,7 @@ export const pl: Record<string, string> = {
   guideDescSubagent: 'Graf przepływu pracy, tablica zadań zespołu i zadania w tle, na żywo',
   guideDescSidechat: 'Niezależny wątek uzupełniający dziedziczący kontekst tej sesji',
   guideDescTerminal: 'Prawdziwy shell (xterm + pty) z ponownym łączeniem',
+  guideDescSettings: 'Ustawienia karty bocznej, przełączniki funkcji i własny CSS',
   guideDescBrowser: 'Wbudowana przeglądarka, może przejmować linki z czatu',
   changesSessionEmpty: 'Brak operacji na plikach w tej sesji',
   changesRead: 'Odczyt',

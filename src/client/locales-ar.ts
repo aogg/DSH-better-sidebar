@@ -23,6 +23,7 @@ export const ar: Record<string, string> = {
   guideDescSubagent: 'مخطط سير العمل، لوحة مهام الفريق، والمهام الخلفية مباشرةً',
   guideDescSidechat: 'خيط متابعة مستقل يرث سياق هذه الجلسة',
   guideDescTerminal: 'صدفة حقيقية (xterm + pty) مع إعادة الاتصال',
+  guideDescSettings: 'إعدادات البطاقة الجانبية ومفاتيح الميزات وCSS المخصص',
   guideDescBrowser: 'متصفح مدمج يمكنه فتح روابط المحادثة',
   changesSessionEmpty: 'لا توجد عمليات ملفات في هذه الجلسة بعد',
   changesRead: 'قراءة',

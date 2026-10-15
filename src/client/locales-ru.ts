@@ -18,6 +18,7 @@ export const ru: Record<string, string> = {
   guideDescSubagent: 'Граф рабочего процесса, доска задач команды и фоновые задания в реальном времени',
   guideDescSidechat: 'Независимый дополнительный тред с контекстом этой сессии',
   guideDescTerminal: 'Настоящий shell (xterm + pty) с переподключением',
+  guideDescSettings: 'Настройки боковой карточки, переключатели функций и пользовательский CSS',
   guideDescBrowser: 'Встроенный браузер, перехватывает ссылки из чата',
   changesSessionEmpty: 'В этой сессии пока нет файловых операций',
   changesRead: 'Чтение',

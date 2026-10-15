@@ -15,6 +15,7 @@ export const fr: Record<string, string> = {
   guideDescSubagent: 'Diagramme de workflow, tableau de tâches d\'équipe et travaux d\'arrière-plan, en direct',
   guideDescSidechat: 'Un fil de suivi indépendant héritant du contexte de cette session',
   guideDescTerminal: 'Un vrai shell (xterm + pty) avec reconnexion',
+  guideDescSettings: 'Préférences de la carte latérale, commutateurs et CSS personnalisé',
   guideDescBrowser: 'Navigateur intégré, qui peut reprendre les liens du chat',
   changesSessionEmpty: 'Aucune opération de fichier dans cette session',
   changesRead: 'Lecture',

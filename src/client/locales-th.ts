@@ -22,6 +22,7 @@ export const th: Record<string, string> = {
   guideDescSubagent: 'กราฟเวิร์กโฟลว์ บอร์ดงานของทีม และงานเบื้องหลัง แบบเรียลไทม์',
   guideDescSidechat: 'เธรดถามต่ออิสระที่สืบทอดบริบทของเซสชันนี้',
   guideDescTerminal: 'เชลล์จริง (xterm + pty) เชื่อมต่อใหม่ได้',
+  guideDescSettings: 'การตั้งค่าการ์ดด้านข้าง สวิตช์ฟีเจอร์ และ CSS ที่กำหนดเอง',
   guideDescBrowser: 'เบราว์เซอร์ในตัว รับช่วงลิงก์จากแชทได้',
   changesSessionEmpty: 'ยังไม่มีการดำเนินการไฟล์ในเซสชันนี้',
   changesRead: 'อ่าน',

@@ -14,6 +14,7 @@ export const ko: Record<string, string> = {
   guideDescSubagent: '워크플로 그래프 · 팀 작업 보드 · 백그라운드 작업, 실시간',
   guideDescSidechat: '현재 세션의 컨텍스트를 이어받는 독립 후속 스레드',
   guideDescTerminal: '실제 셸(xterm + pty), 재연결 지원',
+  guideDescSettings: '사이드 카드 설정, 기능 스위치, 사용자 지정 CSS',
   guideDescBrowser: '내장 브라우저, 채팅 링크도 대신 열 수 있음',
   changesSessionEmpty: '이 세션에 아직 파일 작업이 없습니다',
   changesRead: '읽기',

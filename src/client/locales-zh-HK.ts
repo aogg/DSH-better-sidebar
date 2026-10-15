@@ -37,6 +37,7 @@ export const zhHK: Record<string, string> = {
   guideDescSubagent: '工作流圖 · 團隊任務板 · 背景任務，即時狀態',
   guideDescSidechat: '繼承目前工作階段上下文的獨立追問執行緒',
   guideDescTerminal: '真實 shell 終端（xterm + pty），斷線重連',
+  guideDescSettings: '側邊卡片設定、各功能開關與自訂 CSS',
   guideDescBrowser: '內嵌網頁瀏覽器，可接管聊天中的外鏈',
   changesSessionEmpty: '本工作階段還沒有檔案操作',
   changesRead: '讀取',

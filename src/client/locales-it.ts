@@ -13,6 +13,7 @@ export const it: Record<string, string> = {
   guideDescSubagent: 'Grafo del workflow, bacheca delle attività del team e attività in background, in tempo reale',
   guideDescSidechat: 'Un thread di approfondimento indipendente che eredita il contesto della sessione',
   guideDescTerminal: 'Una vera shell (xterm + pty) con riconnessione',
+  guideDescSettings: 'Preferenze della scheda laterale, interruttori e CSS personalizzato',
   guideDescBrowser: 'Browser integrato, può aprire i link della chat',
   changesSessionEmpty: 'Ancora nessuna operazione sui file in questa sessione',
   changesRead: 'Lettura',

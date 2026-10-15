@@ -20,6 +20,7 @@ export const nl: Record<string, string> = {
   guideDescSubagent: 'Workflowgrafiek, teamtakenbord en achtergrondtaken, live',
   guideDescSidechat: 'Een onafhankelijke vervolgthread met de context van deze sessie',
   guideDescTerminal: 'Een echte shell (xterm + pty) met herverbinding',
+  guideDescSettings: 'Zijkaart-voorkeuren, functieschakelaars en aangepaste CSS',
   guideDescBrowser: 'Ingebouwde browser die chatlinks kan overnemen',
   changesSessionEmpty: 'Nog geen bestandsbewerkingen in deze sessie',
   changesRead: 'Lezen',

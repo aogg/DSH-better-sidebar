@@ -1,0 +1,18 @@
+/*
+ * The sidebar's 设置 page (src/client/SettingsPage.tsx): one scroll container
+ * around the Side card section — the pane owns the page chrome, the section
+ * owns its groups. Centered reading column like the hero settings panel.
+ */
+
+.page {
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px 18px 24px;
+}
+
+.page > * {
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
+}

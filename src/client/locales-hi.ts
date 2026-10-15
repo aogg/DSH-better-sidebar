@@ -22,6 +22,7 @@ export const hi: Record<string, string> = {
   guideDescSubagent: 'वर्कफ़्लो ग्राफ़, टीम कार्य बोर्ड और बैकग्राउंड कार्य, लाइव',
   guideDescSidechat: 'इस सत्र का संदर्भ विरासत में लेने वाला स्वतंत्र फ़ॉलो-अप थ्रेड',
   guideDescTerminal: 'असली शेल (xterm + pty), रीकनेक्ट सहित',
+  guideDescSettings: 'साइड कार्ड सेटिंग्स, फ़ीचर स्विच और कस्टम CSS',
   guideDescBrowser: 'अंतर्निहित ब्राउज़र, चैट के लिंक भी खोल सकता है',
   changesSessionEmpty: 'इस सत्र में अभी कोई फ़ाइल ऑपरेशन नहीं',
   changesRead: 'पढ़ना',

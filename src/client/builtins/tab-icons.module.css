@@ -37,3 +37,8 @@
 .browser {
   color: var(--dsw-alias-state-business-primary, var(--dsw-alias-brand-primary, var(--dsw-alias-label-primary)));
 }
+
+.settings {
+  /* The gear is a control, not an activity: ink, like the terminal chip. */
+  color: var(--dsw-alias-label-primary);
+}

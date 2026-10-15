@@ -22,6 +22,7 @@ export const ja: Record<string, string> = {
   guideDescSubagent: 'ワークフロー図・チームタスクボード・バックグラウンドジョブをリアルタイム表示',
   guideDescSidechat: '現在のセッションの文脈を引き継ぐ独立した追加スレッド',
   guideDescTerminal: '本物のシェル（xterm + pty）、再接続対応',
+  guideDescSettings: 'サイドカード設定、機能スイッチ、カスタム CSS',
   guideDescBrowser: '埋め込みブラウザ。チャット内のリンクも引き受け可能',
   changesSessionEmpty: 'このセッションにはファイル操作がまだありません',
   changesRead: '読み取り',
