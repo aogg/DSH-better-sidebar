@@ -772,6 +772,7 @@ export function Sidebar(props: { ctx: Context; store: SidebarStore }) {
             isTabUnread={isTabUnread}
             getTabRightActions={tabRightActionsOf}
             onRevealInFileManager={revealTabFile}
+            tabMenuCwd={cwd}
           />
         </div>
       </div>

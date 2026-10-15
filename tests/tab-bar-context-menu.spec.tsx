@@ -1,17 +1,22 @@
 /**
  * Tab-strip right-click context-menu tests. Right-clicking a tab takes over
  * the browser menu (preventDefault) and shows the tab context menu with
- * exactly six items: close / close others / close to the left / close to the
- * right / close all / reveal in the file manager. All close operations are
- * scoped to the CURRENT pane (the render-time tab snapshot) and reuse the
- * per-tab onClose path, so every closed tab keeps its own lifecycle and the
- * pane never empties mid-loop; "close all" is the one that closes the
- * right-clicked tab too. The reveal row hands the tab's associated file
- * (`path`, i.e. an editor window) to the shell's reveal resolver and is
- * disabled for a tab that has none. Menu rows gray out when there is nothing
- * to do (single tab → close others; leftmost → close left; rightmost → close
- * right; no file → reveal). Opening the menu must not activate the
- * right-clicked tab.
+ * exactly eight items: close / close others / close to the left / close to
+ * the right / close all / copy the file as a session-cwd-relative path /
+ * copy the absolute path / reveal in the file manager. All close operations
+ * are scoped to the CURRENT pane (the render-time tab snapshot) and reuse
+ * the per-tab onClose path, so every closed tab keeps its own lifecycle and
+ * the pane never empties mid-loop; "close all" is the one that closes the
+ * right-clicked tab too. The two copy rows and the reveal row all act on the
+ * tab's associated file (`path`, i.e. an editor window): the relative row
+ * projects it against the strip's `tabMenuCwd` (the session cwd, FileTree's
+ * `relativeTo` semantics) onto the clipboard, the absolute row copies the
+ * path verbatim, and the reveal row hands it to the shell's reveal resolver.
+ * All three gray out for a tab that has no file; only the reveal row also
+ * needs a resolver (the copy rows work without one). Menu rows gray out when
+ * there is nothing to do (single tab → close others; leftmost → close left;
+ * rightmost → close right; no file → both copy rows and reveal). Opening
+ * the menu must not activate the right-clicked tab.
  */
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -37,14 +42,31 @@ function stubZh(): void {
   })
 }
 
+/**
+ * Stub the clipboard wire writeClipboard actually uses: the primitives'
+ * clipboard.js prefers `navigator.clipboard.writeText` and only falls back
+ * to a `document.execCommand('copy')` textarea when the host omits it, so
+ * pinning writeText (like the FileTree/side-chat specs do) pins the copy in
+ * jsdom. Call AFTER stubZh(): the zh stub replaces `globalThis.navigator`
+ * wholesale, and the spy has to land on that replacement object.
+ */
+function stubClipboard(): { writeText: ReturnType<typeof vi.fn> } {
+  const writeText = vi.fn(async () => {})
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+  return { writeText }
+}
+
 const MENU_LABELS = [
-  '关闭', '关闭其他页签', '关闭左侧页签', '关闭右侧页签', '关闭全部页签', '在资源管理器中定位',
+  '关闭', '关闭其他页签', '关闭左侧页签', '关闭右侧页签', '关闭全部页签', '复制相对地址', '复制绝对地址', '在资源管理器中定位',
 ]
 
 function mountBar(tabs: SidebarTab[], opts: {
   /** Omit the reveal resolver (the shell always passes one; this pins the
    *  disabled-without-resolver half of the contract). */
   noRevealResolver?: boolean
+  /** The session cwd the copy-relative row projects against (`tabMenuCwd`;
+   *  absent → the row still runs on relativeTo's own fallback). */
+  tabMenuCwd?: string
 } = {}): {
   tabEls: HTMLElement[]
   onClose: ReturnType<typeof vi.fn>
@@ -69,6 +91,7 @@ function mountBar(tabs: SidebarTab[], opts: {
       onNewTab: () => {},
       newTabOptions: [],
       ...(onRevealInFileManager === undefined ? {} : { onRevealInFileManager }),
+      ...(opts.tabMenuCwd === undefined ? {} : { tabMenuCwd: opts.tabMenuCwd }),
       onDropTab: () => {},
     }))
   })
@@ -127,7 +150,7 @@ afterEach(() => {
 })
 
 describe('TabBar right-click context menu', () => {
-  it('opens the six-item menu at the cursor, prevents the browser menu, and does not activate', () => {
+  it('opens the eight-item menu at the cursor, prevents the browser menu, and does not activate', () => {
     stubZh()
     const { tabEls, onActivate, unmount } = mountBar(fourTabs())
     try {
@@ -227,14 +250,87 @@ describe('TabBar right-click context menu', () => {
     const { tabEls, onRevealInFileManager, onClose, unmount } = mountBar(fileTabs())
     try {
       act(() => { rightClick(tabEls[0]!) })
-      // The file tab's row is live; the pane's other tab has no file.
-      expect(menuDisabled()).toEqual([false, false, true, false, false, false])
-      act(() => { menuItems()[5]!.click() })
+      // The file tab's rows (copies + reveal) are all live; the pane's other
+      // tab has no file.
+      expect(menuDisabled()).toEqual([false, false, true, false, false, false, false, false])
+      act(() => { menuItems()[7]!.click() })
       expect(onRevealInFileManager).toHaveBeenCalledTimes(1)
       expect(onRevealInFileManager).toHaveBeenCalledWith('/repo/src/a.ts')
       // Revealing is not a close: no tab may go away.
       expect(onClose).not.toHaveBeenCalled()
       expect(menuItems()).toHaveLength(0)
+    } finally {
+      unmount()
+    }
+  })
+
+  it('copies the right-clicked tab file relative to the session cwd', () => {
+    stubZh()
+    const { writeText } = stubClipboard()
+    const { tabEls, onClose, unmount } = mountBar(fileTabs(), { tabMenuCwd: '/repo' })
+    try {
+      act(() => { rightClick(tabEls[0]!) })
+      // Both copy rows are live for a file tab: unlike the reveal row they
+      // need no resolver.
+      expect(menuDisabled()[5]).toBe(false)
+      expect(menuDisabled()[6]).toBe(false)
+      act(() => { menuItems()[5]!.click() })
+      // relativeTo('/repo', '/repo/src/a.ts') drops the cwd prefix.
+      expect(writeText).toHaveBeenCalledTimes(1)
+      expect(writeText).toHaveBeenCalledWith('src/a.ts')
+      // Copying is not a close, and the menu dismisses like any pick.
+      expect(onClose).not.toHaveBeenCalled()
+      expect(menuItems()).toHaveLength(0)
+    } finally {
+      unmount()
+    }
+  })
+
+  it('copies the right-clicked tab file as the absolute path verbatim', () => {
+    stubZh()
+    const { writeText } = stubClipboard()
+    const { tabEls, unmount } = mountBar(fileTabs(), { tabMenuCwd: '/repo' })
+    try {
+      act(() => { rightClick(tabEls[0]!) })
+      act(() => { menuItems()[6]!.click() })
+      // The absolute row ignores the cwd: the tab's path lands as-is.
+      expect(writeText).toHaveBeenCalledTimes(1)
+      expect(writeText).toHaveBeenCalledWith('/repo/src/a.ts')
+    } finally {
+      unmount()
+    }
+  })
+
+  it('copy relative without a strip cwd writes the de-rooted path', () => {
+    stubZh()
+    const { writeText } = stubClipboard()
+    const { tabEls, unmount } = mountBar(fileTabs())
+    try {
+      act(() => { rightClick(tabEls[0]!) })
+      // No `tabMenuCwd`: relativeTo('', '/repo/src/a.ts') matches the empty
+      // base's '/' prefix, so the fallback strips only the leading
+      // separator — it does NOT hand back the absolute path.
+      act(() => { menuItems()[5]!.click() })
+      expect(writeText).toHaveBeenCalledTimes(1)
+      expect(writeText).toHaveBeenCalledWith('repo/src/a.ts')
+    } finally {
+      unmount()
+    }
+  })
+
+  it('grays out both copy rows for a tab with no file and copies nothing', () => {
+    stubZh()
+    const { writeText } = stubClipboard()
+    const { tabEls, unmount } = mountBar(fileTabs(), { tabMenuCwd: '/repo' })
+    try {
+      act(() => { rightClick(tabEls[1]!) })
+      // The changes tab carries no path, so both copy rows gray out exactly
+      // like the reveal row (the cwd is irrelevant to that rule).
+      expect(menuDisabled()).toEqual([false, false, false, true, false, true, true, true])
+      // Clicking the disabled rows must not touch the clipboard.
+      act(() => { menuItems()[5]!.click() })
+      act(() => { menuItems()[6]!.click() })
+      expect(writeText).not.toHaveBeenCalled()
     } finally {
       unmount()
     }
@@ -249,7 +345,7 @@ describe('TabBar right-click context menu', () => {
       act(() => { rightClick(single.tabEls[0]!) })
       // The Menu renders each row as a disabled <button role="menuitem">.
       // Close all stays live (it always has at least the right-clicked tab).
-      expect(menuDisabled()).toEqual([false, true, true, true, false, true])
+      expect(menuDisabled()).toEqual([false, true, true, true, false, true, true, true])
       // Clicking the disabled row must not close anything.
       act(() => { menuItems()[1]!.click() })
       expect(single.onClose).not.toHaveBeenCalled()
@@ -260,9 +356,9 @@ describe('TabBar right-click context menu', () => {
     const four = mountBar(fourTabs())
     try {
       act(() => { rightClick(four.tabEls[0]!) })
-      expect(menuDisabled()).toEqual([false, false, true, false, false, true])
+      expect(menuDisabled()).toEqual([false, false, true, false, false, true, true, true])
       act(() => { rightClick(four.tabEls[3]!) })
-      expect(menuDisabled()).toEqual([false, false, false, true, false, true])
+      expect(menuDisabled()).toEqual([false, false, false, true, false, true, true, true])
     } finally {
       four.unmount()
     }
@@ -276,8 +372,8 @@ describe('TabBar right-click context menu', () => {
       act(() => { rightClick(tabEls[1]!) })
       // The changes tab carries no file of its own (its diff ref is
       // repo-relative, not a path the host could reveal).
-      expect(menuDisabled()).toEqual([false, false, false, true, false, true])
-      act(() => { menuItems()[5]!.click() })
+      expect(menuDisabled()).toEqual([false, false, false, true, false, true, true, true])
+      act(() => { menuItems()[7]!.click() })
       expect(onRevealInFileManager).not.toHaveBeenCalled()
       expect(onClose).not.toHaveBeenCalled()
     } finally {
@@ -291,7 +387,11 @@ describe('TabBar right-click context menu', () => {
     try {
       act(() => { rightClick(tabEls[0]!) })
       expect(onRevealInFileManager).toBeUndefined()
-      expect(menuDisabled()[5]).toBe(true)
+      // Reveal needs the resolver; the copy rows do not (a missing cwd just
+      // falls back inside relativeTo), so they stay live for a file tab.
+      expect(menuDisabled()[7]).toBe(true)
+      expect(menuDisabled()[5]).toBe(false)
+      expect(menuDisabled()[6]).toBe(false)
     } finally {
       unmount()
     }
@@ -348,12 +448,12 @@ describe('Workbench tab context menu', () => {
       expect(paneTabs).toHaveLength(2)
       // Each strip's reveal row must reach the resolver with ITS tab's file.
       act(() => { rightClick(paneTabs[0]!) })
-      expect(menuDisabled()[5]).toBe(false)
-      act(() => { menuItems()[5]!.click() })
+      expect(menuDisabled()[7]).toBe(false)
+      act(() => { menuItems()[7]!.click() })
       expect(onRevealInFileManager).toHaveBeenLastCalledWith('/repo/a.ts')
 
       act(() => { rightClick(paneTabs[1]!) })
-      act(() => { menuItems()[5]!.click() })
+      act(() => { menuItems()[7]!.click() })
       expect(onRevealInFileManager).toHaveBeenLastCalledWith('/repo/b.ts')
       expect(onRevealInFileManager).toHaveBeenCalledTimes(2)
     } finally {
@@ -409,8 +509,8 @@ describe('Sidebar tab context menu reveal', () => {
       // shape and the row's live state are what matter (the shell runs on the
       // default locale).
       expect(menuItems()).toHaveLength(MENU_LABELS.length)
-      expect(menuDisabled()[5]).toBe(false)
-      await act(async () => { menuItems()[5]!.click() })
+      expect(menuDisabled()[7]).toBe(false)
+      await act(async () => { menuItems()[7]!.click() })
       expect(reveal).toHaveBeenCalledTimes(1)
       expect(reveal).toHaveBeenCalledWith({ path: '/repo/src/probe.ts', action: 'reveal' })
     } finally {

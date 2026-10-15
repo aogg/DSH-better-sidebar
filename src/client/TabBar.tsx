@@ -5,16 +5,19 @@
  * are draggable; dropping onto another tab inserts before it, dropping on the
  * strip background appends to this pane. Right-clicking a tab opens the tab
  * context menu (close / close others / close to the left / close to the
- * right / close all — every close scoped to this pane — plus reveal the
- * right-clicked tab's file in the OS file manager).
+ * right / close all — every close scoped to this pane — copy the
+ * right-clicked tab's file as a session-cwd-relative or absolute path, both
+ * rows greyed out for a tab without a file — plus reveal the right-clicked
+ * tab's file in the OS file manager).
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import clsx from 'clsx'
 import {
-  IconCloseFillRegular, IconPlusOutlineRegular, Menu,
+  IconCloseFillRegular, IconCopyOutlineRegular, IconPlusOutlineRegular, Menu, writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarTab } from './state.ts'
 import { t } from './locales.ts'
+import { relativeTo } from './paths.ts'
 import css from './sidebar.module.css'
 
 /** One + menu option. */
@@ -96,11 +99,21 @@ export function TabBar(props: {
    * shell passes no resolver at all.
    */
   onRevealInFileManager?: (path: string) => void
+  /**
+   * The session cwd the tab context menu's copy-relative row projects the
+   * right-clicked tab's file against (FileTree's `relativeTo(cwd, path)`
+   * semantics; the shell feeds the same `useSessionRoot` value the
+   * explorer/git rows use). Absent → the relative copy still runs with the
+   * FileTree fallback. Both copy rows stay disabled for a tab with no
+   * associated file, like the reveal row.
+   */
+  tabMenuCwd?: string
 }) {
   const {
     paneId, tabs, active, onActivate, onClose, onNewTab, newTabOptions, onDropTab, getTabIcon, getTabBadge, getTabRightActions,
     isTabUnread,
     onRevealInFileManager,
+    tabMenuCwd,
   } = props
   const [menuOpen, setMenuOpen] = useState(false)
   // The tab right-click context menu: the target tab plus the cursor
@@ -117,6 +130,11 @@ export function TabBar(props: {
   // path the host could reveal — so the reveal row greys out for them.
   const tabMenuPath = tabs[tabMenuIndex]?.path
   const canReveal = onRevealInFileManager !== undefined && tabMenuPath !== undefined && tabMenuPath !== ''
+  // The copy rows share the reveal row's "has a file" rule (the changes /
+  // tasks / side-chat / diff pages copy nothing); unlike the reveal row they
+  // do not depend on a resolver — a missing cwd just falls back inside
+  // `relativeTo` below.
+  const canCopyPath = tabMenuPath !== undefined && tabMenuPath !== ''
 
   // The active tab's right-actions node, resolved up front so the render
   // below can skip the wrapper entirely when there is nothing to show (an
@@ -335,6 +353,10 @@ export function TabBar(props: {
             { id: 'closeLeft', label: t('closeLeftTabs'), ...(tabMenuIndex <= 0 ? { disabled: true } : {}) },
             { id: 'closeRight', label: t('closeRightTabs'), ...(tabMenuIndex >= tabs.length - 1 ? { disabled: true } : {}) },
             { id: 'closeAll', label: t('closeAllTabs') },
+            // The FileTree/git-lens copy pair, aimed at the right-clicked
+            // tab's file: relative to the session cwd, or the absolute path.
+            { id: 'relative', label: t('copyRelative'), icon: <IconCopyOutlineRegular size={14} />, ...(canCopyPath ? {} : { disabled: true }) },
+            { id: 'absolute', label: t('copyAbsolute'), icon: <IconCopyOutlineRegular size={14} />, ...(canCopyPath ? {} : { disabled: true }) },
             { id: 'revealInFileManager', label: t('revealTabInFileManager'), ...(canReveal ? {} : { disabled: true }) },
           ]}
           onSelect={(id) => {
@@ -358,6 +380,15 @@ export function TabBar(props: {
               // is what separates it from "close others") and the ones
               // scrolled out of the strip's viewport included.
               for (const tab of tabs) onClose(tab.id)
+            } else if (id === 'relative') {
+              // Disabled without a file, so the guard only covers a target
+              // that vanished mid-menu; `relativeTo(cwd ?? '', …)` is
+              // FileTree's own copy-relative projection.
+              if (tabMenuPath !== undefined && tabMenuPath !== '') {
+                void writeClipboard(relativeTo(tabMenuCwd ?? '', tabMenuPath))
+              }
+            } else if (id === 'absolute') {
+              if (tabMenuPath !== undefined && tabMenuPath !== '') void writeClipboard(tabMenuPath)
             } else if (id === 'revealInFileManager') {
               const path = tabs[index]?.path
               if (path !== undefined && path !== '') onRevealInFileManager?.(path)
