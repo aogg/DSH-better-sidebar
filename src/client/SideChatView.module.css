@@ -191,7 +191,7 @@
 }
 
 /* One settled answer + its answer chrome (the group wrapper gives the copy
- * action a hover surface that spans exactly the answer). */
+ * action a surface that spans exactly the answer). */
 .sidechatAssistantGroup {
   align-self: stretch;
   display: flex;
@@ -199,10 +199,8 @@
   gap: 2px;
 }
 
-/* ── answer actions (the main conversation's MessageIconActions, narrowed
- * to copy): one quiet icon under the answer, hidden until the answer is
- * hovered or keyboard-focused — and never hidden where hover does not
- * exist, so touch keeps the button reachable ──────────────────────────── */
+/* ── answer actions: the copy button sits FIXED under every settled answer
+ * — always visible, never hover-gated ─────────────────────────────────── */
 .sidechatMsgActions {
   align-self: flex-start;
   display: flex;
@@ -229,18 +227,6 @@
 .sidechatMsgAction:hover {
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-secondary);
-}
-
-@media (hover: hover) {
-  .sidechatMsgActions {
-    opacity: 0;
-    transition: opacity 80ms ease-out;
-  }
-
-  .sidechatAssistantGroup:hover .sidechatMsgActions,
-  .sidechatMsgActions:focus-within {
-    opacity: 1;
-  }
 }
 
 /* Pending / local-echo bubbles: the user surface plus the queue chrome
@@ -609,8 +595,7 @@
     color: var(--dsw-alias-label-tertiary);
   }
   .sidechatRowChevron,
-  .sidechatMsgAction,
-  .sidechatMsgActions {
+  .sidechatMsgAction {
     transition: none;
   }
 }

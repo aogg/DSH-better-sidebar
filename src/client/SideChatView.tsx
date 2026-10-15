@@ -401,11 +401,9 @@ function CollapsibleRow(props: {
 const COPY_FLASH_MS = 1000
 
 /**
- * One settled answer's copy action: the main conversation's answer chrome
- * (MessageIconActions) narrowed to the single verb a sidebar row carries.
- * Same interaction contract — an icon button that copies the answer's raw
- * markdown and flashes a check for a second; the row keeps it hidden until
- * hover or keyboard focus reveals it (see the CSS module's hover-reveal).
+ * One settled answer's copy action: an icon button FIXED under the answer —
+ * always visible, never hover-gated. It copies the answer's raw markdown and
+ * flashes a check for a second after a successful copy (tooltip 复制/已复制).
  * @param props.text - the answer's raw markdown (what the main pane copies).
  */
 function MessageCopyActions(props: { text: string }): React.ReactNode {
@@ -495,9 +493,8 @@ function renderRow(row: SidechatTranscriptRow, labels: RowLabels, rewrite: (text
         </div>
       )
     case 'assistant': {
-      // The answer carries the main conversation's answer chrome: a hover-
-      // revealed copy action under the prose (settled answers only — a
-      // streaming tail has nothing stable to copy yet).
+      // The answer carries a FIXED copy action under the prose (settled
+      // answers only — a streaming tail has nothing stable to copy yet).
       return (
         <div key={`${row.kind}:${row.seq}`} className={css.sidechatAssistantGroup}>
           <div className={css.sidechatAssistant}>
