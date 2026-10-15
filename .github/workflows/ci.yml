@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    # `dev` is the alpha integration branch (AGENTS.md §0): everything lands
+    # `dev` is the alpha integration branch: everything lands
     # there first, so its post-merge state needs the same green signal `main`
     # gets. `pull_request` below has no branch filter, so PRs targeting `dev`
     # are already covered.
