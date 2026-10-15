@@ -442,6 +442,42 @@ describe('SideChatView archive', () => {
   })
 })
 
+describe('SideChatView answer copy', () => {
+  it('renders the settled answer with the main pane\'s copy action (raw markdown, check flash)', async () => {
+    const writeText = vi.fn(async () => {})
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    try {
+      const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(threadStore()))))
+      await act(async () => {})  // flush the initial transcript pull
+
+      // The settled answer carries exactly one copy action — the answer
+      // chrome the main conversation hangs under every answer.
+      const copies = container.querySelectorAll<HTMLButtonElement>('button[aria-label="复制"]')
+      expect(copies).toHaveLength(1)
+
+      await act(async () => { copies[0]?.click() })
+
+      // The raw markdown is what lands on the clipboard (the main pane's
+      // contract), and the button flashes its copied state for the window.
+      expect(writeText).toHaveBeenCalledTimes(1)
+      expect(writeText).toHaveBeenCalledWith('done')
+      expect(container.querySelector('button[aria-label="已复制"]')).not.toBeNull()
+      unmount()
+    } finally {
+      delete (navigator as { clipboard?: unknown }).clipboard
+    }
+  })
+
+  it('offers no copy action before any answer exists', async () => {
+    eventsValue = EARLY_EVENTS
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(threadStore()))))
+    await act(async () => {})  // flush the initial transcript pull
+
+    expect(container.querySelector('button[aria-label="复制"]')).toBeNull()
+    unmount()
+  })
+})
+
 describe('SideChatView queue, echo and model picker', () => {
   /** The catalogue the picker cases serve (the host's own shape). */
   const CATALOG = {

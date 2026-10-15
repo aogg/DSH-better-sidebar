@@ -40,8 +40,10 @@ import {
   IconApiOutlineRegular,
   IconArchiveOutlineRegular,
   IconBrowseOutlineRegular,
+  IconCheckOutlineRegular,
   IconChevronRightOutlineRegular,
   IconCloseFillRegular,
+  IconCopyOutlineRegular,
   IconEditOutlineRegular,
   IconNewChatOutlineRegular,
   IconPlusOutlineRegular,
@@ -56,6 +58,7 @@ import {
   StateDot,
   TerminalBlock,
   Tooltip,
+  writeClipboard,
   type DiffBlockLabels,
   type MenuEntry,
   type ReadBlockLabels,
@@ -390,6 +393,47 @@ function CollapsibleRow(props: {
   )
 }
 
+/** How long the copy action flashes its check mark after a successful copy
+ *  (the main conversation's MessageIconActions feedback window). */
+const COPY_FLASH_MS = 1000
+
+/**
+ * One settled answer's copy action: the main conversation's answer chrome
+ * (MessageIconActions) narrowed to the single verb a sidebar row carries.
+ * Same interaction contract — an icon button that copies the answer's raw
+ * markdown and flashes a check for a second; the row keeps it hidden until
+ * hover or keyboard focus reveals it (see the CSS module's hover-reveal).
+ * @param props.text - the answer's raw markdown (what the main pane copies).
+ */
+function MessageCopyActions(props: { text: string }): React.ReactNode {
+  const [copied, setCopied] = useState(false)
+  const copyTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => { window.clearTimeout(copyTimer.current) }, [])
+  const onCopy = useCallback(() => {
+    if (copied) return
+    void writeClipboard(props.text).then(ok => {
+      if (!ok) return
+      setCopied(true)
+      window.clearTimeout(copyTimer.current)
+      copyTimer.current = window.setTimeout(() => { setCopied(false) }, COPY_FLASH_MS)
+    })
+  }, [copied, props.text])
+  return (
+    <div className={css.sidechatMsgActions}>
+      <Tooltip label={copied ? t('copied') : t('copy')} side="top" portal delayMs={TIP_DELAY_MS}>
+        <button
+          type="button"
+          className={css.sidechatMsgAction}
+          onClick={onCopy}
+          aria-label={copied ? t('copied') : t('copy')}
+        >
+          {copied ? <IconCheckOutlineRegular size={14} /> : <IconCopyOutlineRegular size={14} />}
+        </button>
+      </Tooltip>
+    </div>
+  )
+}
+
 /** The host Block body for a structured tool card (main-conversation atoms:
  *  terminal surface, diff hunks, line-numbered read window). */
 function toolCardBody(card: SidechatToolCard, executing: boolean, labels: RowLabels): React.ReactNode {
@@ -447,12 +491,19 @@ function renderRow(row: SidechatTranscriptRow, labels: RowLabels, rewrite: (text
           <MarkdownText {...markdownTextProps(rewrite(row.text), labels)} />
         </div>
       )
-    case 'assistant':
+    case 'assistant': {
+      // The answer carries the main conversation's answer chrome: a hover-
+      // revealed copy action under the prose (settled answers only — a
+      // streaming tail has nothing stable to copy yet).
       return (
-        <div key={`${row.kind}:${row.seq}`} className={css.sidechatAssistant}>
-          <MarkdownText {...markdownTextProps(rewrite(row.text), labels)} />
+        <div key={`${row.kind}:${row.seq}`} className={css.sidechatAssistantGroup}>
+          <div className={css.sidechatAssistant}>
+            <MarkdownText {...markdownTextProps(rewrite(row.text), labels)} />
+          </div>
+          {row.settled && <MessageCopyActions text={row.text} />}
         </div>
       )
+    }
     case 'reasoning':
       return (
         <CollapsibleRow

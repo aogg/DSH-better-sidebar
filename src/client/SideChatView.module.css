@@ -190,6 +190,59 @@
   overflow-wrap: anywhere;
 }
 
+/* One settled answer + its answer chrome (the group wrapper gives the copy
+ * action a hover surface that spans exactly the answer). */
+.sidechatAssistantGroup {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* ── answer actions (the main conversation's MessageIconActions, narrowed
+ * to copy): one quiet icon under the answer, hidden until the answer is
+ * hovered or keyboard-focused — and never hidden where hover does not
+ * exist, so touch keeps the button reachable ──────────────────────────── */
+.sidechatMsgActions {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.sidechatMsgAction {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  transition: background-color 100ms ease-out, color 100ms ease-out;
+}
+
+.sidechatMsgAction:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+
+@media (hover: hover) {
+  .sidechatMsgActions {
+    opacity: 0;
+    transition: opacity 80ms ease-out;
+  }
+
+  .sidechatAssistantGroup:hover .sidechatMsgActions,
+  .sidechatMsgActions:focus-within {
+    opacity: 1;
+  }
+}
+
 /* Pending / local-echo bubbles: the user surface plus the queue chrome
  * (spinner · state word · dequeue). They sit AFTER the durable rows, so the
  * reader sees the message they just sent instead of a silent composer. */
@@ -555,7 +608,9 @@
     background-image: none;
     color: var(--dsw-alias-label-tertiary);
   }
-  .sidechatRowChevron {
+  .sidechatRowChevron,
+  .sidechatMsgAction,
+  .sidechatMsgActions {
     transition: none;
   }
 }
