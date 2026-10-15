@@ -88,7 +88,7 @@ import type {} from 'dsh-better-sidebar'  // 触发 declare module '@deepseek-ai
 ```
 
 - `dsh-better-sidebar` 必须是 **peerDependency**（不是 dependency），避免两份实例；
-- `optional: true`：better-sidebar 未安装时你的插件照常加载，注册代码因为 `ctx.betterSidebar` 为 undefined 而安全跳过。
+- `optional: true`：npm 安装层声明——better-sidebar 缺失时 `npm install` 不报错。运行时行为由 `inject` 决定：声明 `inject = ['betterSidebar']` 的插件在服务缺失时停在未激活，`apply` 不执行、无报错，服务出现后自动激活（`ctx.betterSidebar` 不会以 undefined 出现在你的 `apply` 里），三种情形的细节见 [file-save-events.md](./file-save-events.md) 「本插件未安装 / 版本过旧时会怎样」。
 
 > ⚠️ **计划上架 DSH 插件市场**的插件还须遵守市场 manifest 约束（`dependencies`/`peerDependencies`/`optionalDependencies` 一律不得出现 `cordis`、`scripts` 不得含 install 类钩子），详见 [AGENTS.md](../AGENTS.md) 硬约束一节。
 
