@@ -54,8 +54,8 @@ cat > "$WORK/check.ts" <<'EOF'
 import { SIDEBAR_FEATURES, SIDEBAR_SERVICE_VERSION } from 'dsh-better-sidebar/client/service'
 import type {} from 'dsh-better-sidebar/client/service'
 import type {
-  BetterSidebarService, FileViewerDescriptor, OpenTabSeed, SidebarSettingsRenderProps,
-  TabComponentProps, TabDescriptor,
+  BetterSidebarService, FileViewerDescriptor, OpenTabSeed, SidebarFileSavedEvent,
+  SidebarSettingsRenderProps, TabComponentProps, TabDescriptor,
 } from 'dsh-better-sidebar/client/service'
 import type { SessionScope, SidebarSnapshot, SidebarState, SidebarStore, SidebarTab } from 'dsh-better-sidebar/client/service'
 import type { SidebarPrefs } from 'dsh-better-sidebar/client/service'
@@ -95,6 +95,11 @@ const snap: SidebarSnapshot = ctx.betterSidebar.getSnapshot()
 const prefs: SidebarPrefs = snap.prefs
 const store: SidebarStore = null as unknown as SidebarStore
 void prefs; void store; void ctx.betterSidebar.version; void ctx.betterSidebar.features
+// File-save events (feature `fileSaveEvents`, v0.27.0+).
+const offFileSaved: () => void = ctx.betterSidebar.onFileSaved((event: SidebarFileSavedEvent) => {
+  void event.path
+})
+offFileSaved()
 void SIDEBAR_SERVICE_VERSION; void SIDEBAR_FEATURES
 // Vendored-cordis augmentation path.
 declare const vctx: VendoredContext

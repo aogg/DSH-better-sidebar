@@ -2,7 +2,7 @@
  * Tests for the BetterSidebar service registry: register/dispose lifecycle,
  * matchFileViewer priority/exts/detect algorithm, and openTab dedupe.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 
 // Mock browser globals (SidebarStore.reduce → schedulePersist uses window.setTimeout)
 const g = globalThis as Record<string, unknown>
@@ -20,7 +20,14 @@ if (g.localStorage === undefined) {
   }
 }
 
-import { createBetterSidebarService, matchUrlTarget, SIDEBAR_FEATURES, SIDEBAR_SERVICE_VERSION } from '../src/client/service.ts'
+import {
+  createBetterSidebarService,
+  emitFileSaved,
+  matchUrlTarget,
+  SIDEBAR_FEATURES,
+  SIDEBAR_SERVICE_VERSION,
+  type SidebarFileSavedEvent,
+} from '../src/client/service.ts'
 import { createSidebarStore, allLeaves, makeDefaultState, openDiffTab, openTabInBottomPane, sanitizeState } from '../src/client/state.ts'
 
 describe('BetterSidebar service', () => {
@@ -980,5 +987,90 @@ describe('independent CR follow-up fixes', () => {
     const service = createBetterSidebarService(store)
     service.registerFileViewer({ id: 'csv', exts: ['csv'], fetchStrategy: 'custom', component: () => null })
     expect(() => service.registerFileViewer({ id: 'csv', exts: ['csv'], fetchStrategy: 'custom', component: () => null })).toThrow(/already registered/)
+  })
+})
+
+describe('file save events (v0.27.0)', () => {
+  /** One event with every field filled (tests mutate a copy). */
+  const anEvent = (overrides: Partial<SidebarFileSavedEvent> = {}): SidebarFileSavedEvent => ({
+    path: '/w/a.ts',
+    sessionId: 's1',
+    bytes: 12,
+    savedAt: 1_700_000_000_000,
+    source: 'editor',
+    ...overrides,
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('onFileSaved delivers emitFileSaved events; the disposer stops delivery', () => {
+    const service = createBetterSidebarService(createSidebarStore())
+    const seen: SidebarFileSavedEvent[] = []
+    const dispose = service.onFileSaved(event => { seen.push(event) })
+    emitFileSaved(anEvent())
+    expect(seen).toEqual([anEvent()])
+    // Delivery is the EVENT OBJECT verbatim (no cloning, no re-shaping).
+    const event = anEvent({ path: '/w/b.md' })
+    emitFileSaved(event)
+    expect(seen[1]).toBe(event)
+    dispose()
+    emitFileSaved(anEvent({ path: '/w/c.md' }))
+    expect(seen).toHaveLength(2)
+  })
+
+  it('a listener added DURING a dispatch hears only the NEXT event (snapshot delivery)', () => {
+    const service = createBetterSidebarService(createSidebarStore())
+    const late: string[] = []
+    let disposeLate: (() => void) | undefined
+    const disposeFirst = service.onFileSaved(() => {
+      // Subscribing while the walk is running must not join the walk: the
+      // listener set is snapshotted before iteration.
+      disposeLate ??= service.onFileSaved(event => { late.push(event.path) })
+    })
+    emitFileSaved(anEvent({ path: '/w/first.ts' }))
+    expect(late).toEqual([])
+    emitFileSaved(anEvent({ path: '/w/second.ts' }))
+    expect(late).toEqual(['/w/second.ts'])
+    disposeFirst()
+    disposeLate?.()
+  })
+
+  it('a throwing listener is logged and never blocks the other listeners', () => {
+    const service = createBetterSidebarService(createSidebarStore())
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const good: SidebarFileSavedEvent[] = []
+    const disposeBad = service.onFileSaved(() => { throw new Error('plugin bug') })
+    const disposeGood = service.onFileSaved(event => { good.push(event) })
+    // The throw must not escape `emitFileSaved` (the built-in editor calls it
+    // inside the save's then-branch) and must not skip the later listener.
+    expect(() => emitFileSaved(anEvent())).not.toThrow()
+    expect(good).toEqual([anEvent()])
+    expect(errorSpy).toHaveBeenCalledTimes(1)
+    expect(String(errorSpy.mock.calls[0]?.[0])).toContain('dsh-better-sidebar')
+    disposeBad()
+    disposeGood()
+  })
+
+  it('every service instance hands out the same save feed (one module-level set)', () => {
+    const serviceA = createBetterSidebarService(createSidebarStore())
+    const serviceB = createBetterSidebarService(createSidebarStore())
+    const seen: string[] = []
+    const disposeA = serviceA.onFileSaved(event => { seen.push(`a:${event.path}`) })
+    const disposeB = serviceB.onFileSaved(event => { seen.push(`b:${event.path}`) })
+    emitFileSaved(anEvent({ path: '/w/x.ts' }))
+    // One store behind every instance: both subscriptions hear the save, and
+    // a free-function emit reaches a listener that subscribed via a service.
+    expect(seen).toEqual(['a:/w/x.ts', 'b:/w/x.ts'])
+    disposeA()
+    disposeB()
+    emitFileSaved(anEvent({ path: '/w/y.ts' }))
+    expect(seen).toEqual(['a:/w/x.ts', 'b:/w/x.ts'])
+  })
+
+  it('the feature is advertised', () => {
+    expect(SIDEBAR_FEATURES).toContain('fileSaveEvents')
+    expect(SIDEBAR_FEATURES).toContain('hostRouteUrl')
   })
 })

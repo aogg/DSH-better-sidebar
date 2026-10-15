@@ -49,7 +49,7 @@ import { MdToc } from './md-toc.tsx'
 import { splitMermaidBlocks } from './mermaid-blocks.ts'
 import { localeSignature, t } from './locales.ts'
 import { HTML_IFRAME_SANDBOX } from './html-preview.ts'
-import type { EditorToolbarState, FileViewerProps } from './service.ts'
+import { emitFileSaved, type EditorToolbarState, type FileViewerProps } from './service.ts'
 import css from './sidebar.module.css'
 
 /** Previewable files (rendered output vs source editing). */
@@ -589,11 +589,15 @@ export function TextEditor(props: FileViewerProps) {
     if (view === null || savingRef.current) return
     savingRef.current = true
     setSaveState('saving')
+    // The document is read once: the same string rides to the host and sizes
+    // the file-saved event, so the event can never describe other bytes than
+    // the ones this save carried.
+    const savedDocument = view.state.doc.toString()
     // Optimistic concurrency: the draft was based on the bytes read at
     // `mtimeMs`; a file that changed on disk since is REFUSED (fs-conflict)
     // instead of clobbering whatever wrote it (the model, another tab, an
     // external editor). `null` = the file did not exist when loaded.
-    api.fsWrite(scope, path, view.state.doc.toString(), mtimeRef.current ?? null).then((result) => {
+    api.fsWrite(scope, path, savedDocument, mtimeRef.current ?? null).then((result) => {
       savingRef.current = false
       // Adopt the fresh baseline the host reports (absent on a stat failure —
       // keep the old one, the next save just re-checks).
@@ -602,6 +606,20 @@ export function TextEditor(props: FileViewerProps) {
       setDirty(false)
       setConflict(false)
       setSaveState('saved')
+      // Announce the save (v0.27.0; feature 'fileSaveEvents'): any plugin
+      // subscribed through `ctx.betterSidebar.onFileSaved` hears it. Emitted
+      // only here — a refused (fs-conflict) or failed save changed no bytes,
+      // so it is not a save event. `bytes` is the UTF-8 length of the saved
+      // content; the disk bytes may differ (the host restores the file's own
+      // encoding and line endings). emitFileSaved itself is crash-isolated —
+      // a broken listener cannot un-save the file or break this tab.
+      emitFileSaved({
+        path,
+        sessionId: scope.sessionId,
+        bytes: new TextEncoder().encode(savedDocument).length,
+        savedAt: Date.now(),
+        source: 'editor',
+      })
       // The saved bytes are a new revision of the uncommitted diff: re-read
       // the change set (the file's XY status code usually stays the same, so
       // the status store alone would never wake the gutter up again).

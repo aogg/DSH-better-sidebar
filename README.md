@@ -193,7 +193,7 @@ dsh registry enable dsh-external/dsh-better-sidebar
 
 **支持的 DSH 版本**：<a href="https://www.npmjs.com/package/@deepseek-ai/dsh?activeTab=versions"><img alt="支持的 DSH 版本（v0.26.0）：0.2.0-rc.2+" src="https://img.shields.io/badge/DSH-0.2.0--rc.2%2B-4d6bfe" /></a> · 完整发布历史见 [Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)
 
-> 📜 逐版本更新说明（v0.26.0 → v0.22.0 等）已迁至 [`docs/recent-updates.md`](./docs/recent-updates.md)。
+> 📜 逐版本更新说明（v0.27.0 → v0.22.0 等）已迁至 [`docs/recent-updates.md`](./docs/recent-updates.md)。
 
 ## ⌨️ 快捷键
 

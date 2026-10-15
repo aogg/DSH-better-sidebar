@@ -91,6 +91,7 @@ export type { SidebarConfig, ResolvedSidebarConfig }
 export type { Context } from './context-types.ts'
 export type {
   BetterSidebarService,
+  SidebarFileSavedEvent,
   TabDescriptor,
   TabComponentProps,
   FileViewerDescriptor,
@@ -1662,6 +1663,32 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
           ...(expectedMtimeMs === undefined ? {} : { expectedMtimeMs }),
         })
         writeOk(res, { ok: true, ...result })
+        // ── Cross-plugin save broadcast (v0.27.0) ──────────────────────────
+        // Any host plugin can learn about (or hook into) this save with
+        // `ctx.on('better-sidebar/file-saved', …)` — the cordis event bus is
+        // shared across plugin contexts, so this reaches every consumer.
+        // Fired AFTER the response is committed and guarded twice over: a
+        // listener that throws must never turn a finished save into an error
+        // envelope (cordis `emit` dispatches synchronously and lets listener
+        // errors propagate to the caller), and a test double without the
+        // event API keeps a working save route (same degrade as the
+        // workflow-routes mirror's `ctx.on` probe).
+        if (typeof ctx.emit === 'function') {
+          try {
+            ctx.emit('better-sidebar/file-saved', {
+              sessionId,
+              cwd,
+              path,
+              // Both fields come from the write result itself (`size` measured
+              // on disk, absent only when the post-write stat failed).
+              ...(result.size !== undefined ? { size: result.size } : {}),
+              ...(result.mtimeMs !== undefined ? { mtimeMs: result.mtimeMs } : {}),
+              at: Date.now(),
+            })
+          } catch (error) {
+            console.error('[dsh-better-sidebar] file-saved listener error:', error)
+          }
+        }
       } catch (error) {
         writeError(res, error)
       }

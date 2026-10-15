@@ -4,6 +4,10 @@
 
 ---
 
+### v0.27.0
+
+> 🔌 **编辑器保存开放为插件事件**：保存成功后，其他插件可以注入回调或订阅到这次保存。client 侧 `ctx.betterSidebar.onFileSaved(...)`（feature `'fileSaveEvents'`，事件带 `path` / `sessionId` / `bytes` / `savedAt` / `source`）；host 侧任何插件 `ctx.on('better-sidebar/file-saved', …)`（`/sidebar/write` 成功写入后广播，payload 含解析后的 `cwd` 与写入结果的 `size` / `mtimeMs`）。fs-conflict 拒绝与失败不是保存，零事件；listener 抛错被吞，不影响保存。字段表与示例见 [docs/file-save-events.md](./file-save-events.md)，逐条见 [CHANGELOG](../CHANGELOG.md#v0270)。
+
 ### v0.26.0
 
 > 🚀 **四件大事**：① **传输全面流式化**——上传 / 下载 / HTML 预览 / 打包都不再有大小上限（三个部署限额键 `readLimit` / `mediaLimit` / `uploadLimit` 随之删除），编辑器保存也拆掉了 1 MiB 的请求体墙；② **超大文件从「截断成半份文档」改为只读分页预览**（滚到底自动续读 + 「加载全部」，到 5 万行提示改用下载），并新增第 4 个内置 viewer **`.jsonl` / `.ndjson`**（逐条可折叠卡片 + 可保存编辑）；③ **侧边对话补齐到接近原生**——实时推送（纯失效帧 + 增量重拉）、排队可见与按 id 撤回、per-thread 模型选择；④ **任务管理面板整批重构**（按组展开、Token 用量与耗时、画布动效与错峰入场）。另有底部工作台**多终端 Tab**、编辑器**引用行号**的四处收尾、文件改名 / 删除**同时作用于原生右栏页签**（修掉「改名后保存把旧文件重建」「删掉的文件被保存复活」这类数据面问题）、三处静默数据问题等，逐条见 [CHANGELOG](../CHANGELOG.md#v0260)。

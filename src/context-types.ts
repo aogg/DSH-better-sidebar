@@ -870,6 +870,16 @@ export interface SidebarContextShape {
    */
   on(event: string, listener: (session: unknown, event: SidebarSessionEvent) => void): () => void
   /**
+   * String-keyed event emit (the vendored cordis `emit` is keyed to its typed
+   * Events map; this plugin's cross-plugin feed — `better-sidebar/file-saved`,
+   * v0.27.0+, fired after every successful `/sidebar/write` — is a plain
+   * string event). Fire-and-forget dispatch: listeners registered through
+   * `ctx.on` run synchronously, and cordis lets a listener error propagate to
+   * the CALLER, so an emitter wraps its dispatch — a broken listener must not
+   * fail the save that produced the event.
+   */
+  emit(event: string, payload: unknown): void
+  /**
    * The agent's process-local assistant stream (DSH 0.1.5+): one payload per
    * `start` / `chunk` / `end` frame, carrying the emitting agent and the
    * frame. These frames are NOT session events — see

@@ -24,6 +24,7 @@ import type {
   FileViewerDescriptor,
   FileViewerProps,
   OpenTabSeed,
+  SidebarFileSavedEvent,
   SidebarSettingsDeclaration,
   SidebarSettingsRenderProps,
   SidebarSettingToggle,
@@ -131,6 +132,21 @@ service.activateTab('tab:1')
 // Retiring the "new page" dot for one session's tab type.
 service.clearUnread('my-plugin:db', 's1')
 service.openFile({ sessionId: 's1', cwd: '/p' }, '/p/a.csv', 'Data')
+
+/** File-save events (feature `fileSaveEvents`, v0.27.0+). */
+const saveEvent: SidebarFileSavedEvent = {
+  path: '/p/a.csv',
+  sessionId: 's1',
+  bytes: 12,
+  savedAt: 1_700_000_000_000,
+  source: 'editor',
+}
+const offFileSaved: () => void = service.onFileSaved((event: SidebarFileSavedEvent) => {
+  const savedPath: string = event.path
+  void savedPath
+})
+void saveEvent
+offFileSaved()
 
 /** File-icon registration surface (feature `fileIcons`). */
 const icon: FileIconDescriptor = {

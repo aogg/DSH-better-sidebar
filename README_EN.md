@@ -202,7 +202,7 @@ WeChat / QQ group QR codes will live here. After uploading the QR images (drag t
 
 **Supported DSH versions**: <a href="https://www.npmjs.com/package/@deepseek-ai/dsh?activeTab=versions"><img alt="Supported DSH versions (v0.26.0): 0.2.0-rc.2+" src="https://img.shields.io/badge/DSH-0.2.0--rc.2%2B-4d6bfe" /></a> · full release history on the [Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases) page
 
-> 📜 Per-version update notes (v0.26.0 → v0.22.0 etc.) have moved to [`docs/recent-updates-en.md`](./docs/recent-updates-en.md).
+> 📜 Per-version update notes (v0.27.0 → v0.22.0 etc.) have moved to [`docs/recent-updates-en.md`](./docs/recent-updates-en.md).
 
 ## ⌨️ Keyboard Shortcuts
 

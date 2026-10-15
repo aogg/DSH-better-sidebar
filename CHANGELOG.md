@@ -2,6 +2,14 @@
 
 > 本文档收录 dsh-better-sidebar 的完整发布历史（最新版摘要见 [README](README.md)；同步发布于 [GitHub Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)）。
 
+### v0.27.0
+
+- 🔌 **编辑器保存变成插件可见的事件：保存成功后，别的插件可以注入回调参与这个时机，也可以只是订阅到这次保存**（v0.27.0+，feature `'fileSaveEvents'`；面向消费方的完整说明——字段表、最小示例与边界——见 [docs/file-save-events.md](docs/file-save-events.md)）。两个暴露面，同一事实来源（写入成功）：
+  - **client（`ctx.betterSidebar`，浏览器侧）**：新增 `onFileSaved(listener)`——返回 disposer；投递按快照走（派发途中新注册的 listener 从下一个事件开始收）；单个 listener 抛错被 `console.error` 吞掉，不影响保存本身、其余 listener 与发射方。事件类型 `SidebarFileSavedEvent`：`path`（保存时路径原样，不归一化不拼 cwd）/ `sessionId` / `bytes`（保存内容的 UTF-8 字节数；落盘字节可能因宿主的编码 / 行尾还原而不同）/ `savedAt`（写入确认时刻）/ `source: 'editor'`（内置文本编辑器；字段为复用同一发射器的 viewer 预留）。发射点在编辑器 `save()` 的 `fsWrite` 成功分支——fs-conflict 拒绝与普通失败都不发射；模块级导出 `emitFileSaved` 是发射方入口，内置编辑器与想参与进来的 viewer 调同一个函数。
+  - **host（Node 侧）**：`/sidebar/write` 路由在 `writeWorkspaceText` 成功、响应写回**之后**广播 cordis 字符串事件 `better-sidebar/file-saved`，payload `{ sessionId, cwd, path, size?, mtimeMs?, at }`——`cwd` 是该路由自己解析出的 activeWorktreeRoot（可能是 linked worktree），`size` / `mtimeMs` 取自写入结果（`writeWorkspaceText` 的收尾 stat 现在把 `size` 一并带回；stat 失败时两者缺省），`at = Date.now()`。任意 host 插件 `ctx.on('better-sidebar/file-saved', …)` 即订阅（cordis 事件总线跨插件上下文可达）；路由对派发包了 try/catch——cordis `emit` 同步派发且把 listener 异常传回调用方，坏 listener 不得把已完成的保存变成错误响应。`context-types.ts` 相应补了字符串事件的 `emit` 重载（与既有 `on` 的字符串重载同一先例）。
+  - **版本与类型面**：`SIDEBAR_FEATURES` 追加 `'fileSaveEvents'`（features 只增不减）；`SIDEBAR_SERVICE_VERSION` 与 package.json 一起升到 **0.27.0**。`SidebarFileSavedEvent` 进入包根的类型 re-export；`tests/consumer-types.ts` 与 `scripts/check-consumer-types.sh` 的消费面夹具同步演练新方法与新类型。
+  - 🧪 测试：`tests/service.spec.ts` 新增 `file save events` 一组 5 例（注册/退订与事件对象原样投递、快照投递——投递中新注册的 listener 只从下一个事件收、抛错 listener 被记录且不挡其余 listener、多个 service 实例共享同一监听集、feature 在列）；`tests/text-editor-conflict.spec.tsx` 新增 3 例（保存成功后事件字段正确——多字节内容验证 `bytes` 是 UTF-8 字节数 7 而非字符数 3；fs-conflict 拒绝不发射；普通失败也不发射）；`tests/fs-write-route.spec.ts` 新增 `file-saved broadcast` 一组 3 例（成功保存恰好广播一次且 payload 字段齐全——含实测 `size` 与解析后的 `cwd`；fs-conflict 拒绝零广播；listener 在派发中抛错仍回 `ok: true` 且字节落盘）。判别性：去掉 TextEditor 成功分支的 `emitFileSaved` → 编辑器发射用例当场红；把发射挪进失败分支 → 两条「不发射」红；去掉路由的 `ctx.emit` 块 → 广播用例红；把广播挪到写入判定之前（或失败也广播）→ 「拒绝不广播」红；去掉 emit 的快照拷贝或 `safeCall` 包裹 → service 对应用例红。
+
 ### v0.26.0
 
 - ⚡ **git 状态轮询不再拖慢界面**（[#212](https://github.com/omdsh-dev/DSH-better-sidebar/issues/212) 后续；设计与实测见 [docs/plans/2026-10-13-git-poll-ladder-and-idle-notify.md](docs/plans/2026-10-13-git-poll-ladder-and-idle-notify.md)）：一次抓取是 `git status --untracked-files=all` 加两条全仓库 `--numstat`（4 个进程），在**未忽略的大目录**（嵌套 `node_modules`、pnpm store，就是「根锚定 `/node_modules` 盖不住子目录」那种仓库）上实测 **59,631 条 / 9.24 MB / 0.131 s**，而截断上限是在整份输出产出并解析成五万多个对象**之后**才生效的。三处一起收：

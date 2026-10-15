@@ -43,17 +43,22 @@ interface FakeContext {
   /** The assistant-live buffer subscribes on mount (dev's apply). */
   on: () => () => void
   get: (key: string) => undefined
+  /** The cross-plugin event bus face the write route broadcasts through. */
+  emit: (name: string, payload: unknown) => void
 }
 
 /** The two routes this spec drives: the JSON read and the raw save. */
 interface Mounted {
   api: SidebarWebRoute
   write: SidebarWebRoute
+  /** Every `ctx.emit` the mounted plugin made, in order. */
+  events: Array<{ name: string; payload: Record<string, unknown> }>
 }
 
 /** Mount the plugin against a fake context whose session cwd is `workspace`. */
 function mountApi(workspace: string): Mounted {
   const routes: SidebarWebRoute[] = []
+  const events: Mounted['events'] = []
   const ctx: FakeContext = {
     webRuntime: { trustedHosts: [] },
     webServer: { register: (route) => { routes.push(route); return () => {} }, registerUpgrade: () => () => {} },
@@ -63,11 +68,13 @@ function mountApi(workspace: string): Mounted {
     inject: () => () => {},
     on: () => () => {},
     get: () => undefined,
+    emit: (name, payload) => { events.push({ name, payload: payload as Record<string, unknown> }) },
   }
   apply(ctx as never, {})
   return {
     api: routes.find(route => route.path === '/sidebar/api')!,
     write: routes.find(route => route.path === '/sidebar/write')!,
+    events,
   }
 }
 
@@ -441,6 +448,101 @@ describe('/sidebar/write route', () => {
       // Redundant with the byte comparison, but keeps the intent readable when
       // that assertion ever gets relaxed.
       expect(readFileSync(target).toString('utf8')).not.toContain('\r\r')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+/**
+ * The cross-plugin save broadcast (v0.27.0): a successful save through
+ * `/sidebar/write` emits `better-sidebar/file-saved` on the cordis event bus,
+ * so ANY host plugin can learn about (or hook into) editor saves without
+ * touching this plugin. The payload carries the route's OWN resolution of the
+ * save: the resolved worktree root as `cwd`, the write result's `size` /
+ * `mtimeMs`, and the wall-clock `at`. A refused save (fs-conflict) is not a
+ * save and must stay silent — reverting the route's `ctx.emit` block turns
+ * the first test red; moving the broadcast into a failure path (or firing it
+ * before the write) turns the second one red.
+ */
+describe('/sidebar/write file-saved broadcast', () => {
+  it('broadcasts better-sidebar/file-saved after a successful save, with the write result fields', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-sidebar-write-event-'))
+    try {
+      const workspace = join(root, 'ws')
+      mkdirSync(workspace)
+      const target = join(workspace, 'draft.txt')
+      writeFileSync(target, 'disk-v1')
+      const route = mountApi(workspace)
+
+      const saved = await invokeWrite(route, { sessionId: 's9', path: target, content: 'disk-v2' })
+      expect(saved, JSON.stringify(saved)).toMatchObject({ ok: true, status: 200 })
+      // Exactly one broadcast per save, under the documented name.
+      expect(route.events).toHaveLength(1)
+      const broadcast = route.events[0]!
+      expect(broadcast.name).toBe('better-sidebar/file-saved')
+      expect(broadcast.payload).toMatchObject({
+        sessionId: 's9',
+        // The route's RESOLVED root (here: the session header cwd, a plain
+        // directory — not the client-supplied spelling of the request).
+        cwd: workspace,
+        path: target,
+        // Both come from the write result: the size ON DISK (measured by the
+        // post-write stat) and the fresh mtime baseline the client adopts.
+        size: Buffer.byteLength('disk-v2', 'utf8'),
+        mtimeMs: saved.value?.mtimeMs,
+      })
+      expect(typeof broadcast.payload.at).toBe('number')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not broadcast when the save is refused (fs-conflict)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-sidebar-write-event-refused-'))
+    try {
+      const workspace = join(root, 'ws')
+      mkdirSync(workspace)
+      const target = join(workspace, 'draft.txt')
+      writeFileSync(target, 'disk-v1')
+      const route = mountApi(workspace)
+
+      const read = await invoke(route.api, 'fs.read', { sessionId: 's', path: target })
+      const baseline = read.value?.mtimeMs
+      expect(typeof baseline).toBe('number')
+      writeFileSync(target, 'disk-v2')
+      utimesSync(target, new Date(), new Date(Date.now() + 2_000))
+
+      const stale = await invokeWrite(route, {
+        sessionId: 's', path: target, content: 'my-draft', expectedMtimeMs: baseline,
+      })
+      expect(stale).toMatchObject({ ok: false, status: 409, error: { code: 'fs-conflict' } })
+      // The refusal produced no event: subscribers must never hear a save
+      // that did not happen.
+      expect(route.events).toEqual([])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a listener throwing during the broadcast still leaves the save answered', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-sidebar-write-event-throw-'))
+    try {
+      const workspace = join(root, 'ws')
+      mkdirSync(workspace)
+      const target = join(workspace, 'draft.txt')
+      writeFileSync(target, 'disk-v1')
+      const route = mountApi(workspace)
+      // A broken subscriber: cordis `emit` dispatches synchronously and lets
+      // listener errors propagate to the CALLER, so a throwing listener lands
+      // back inside this route handler. Whatever layer guards it, the
+      // user-visible contract is fixed here: the save is answered and the
+      // bytes land.
+      route.events.push = ((): never => { throw new Error('plugin bug') }) as unknown as typeof route.events.push
+
+      const saved = await invokeWrite(route, { sessionId: 's', path: target, content: 'disk-v2' })
+      expect(saved, JSON.stringify(saved)).toMatchObject({ ok: true, status: 200 })
+      expect(readFileSync(target, 'utf8')).toBe('disk-v2')
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

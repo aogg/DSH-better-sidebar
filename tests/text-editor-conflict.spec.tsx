@@ -13,6 +13,7 @@ import { renderRoot, setupReactAct } from './test-utils.ts'
 import { SidebarApiError } from '../src/client/api.ts'
 import { TextEditor } from '../src/client/TextEditor.tsx'
 import { createSidebarStore } from '../src/client/state.ts'
+import { createBetterSidebarService, type SidebarFileSavedEvent } from '../src/client/service.ts'
 import type { FileViewerProps } from '../src/client/service.ts'
 
 setupReactAct()
@@ -121,6 +122,74 @@ describe('TextEditor save conflict', () => {
       expect(fsWrite.mock.calls[1]![3]).toBe(456)
     } finally {
       mounted.unmount()
+    }
+  })
+})
+
+describe('TextEditor file-saved events (v0.27.0)', () => {
+  /** A service subscription plus the events it collected. */
+  function subscribe(): { seen: SidebarFileSavedEvent[]; dispose: () => void } {
+    const seen: SidebarFileSavedEvent[] = []
+    const dispose = createBetterSidebarService(createSidebarStore())
+      .onFileSaved(event => { seen.push(event) })
+    return { seen, dispose }
+  }
+
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('a successful save emits the event with the save\'s own fields', async () => {
+    const { seen, dispose } = subscribe()
+    fsWrite.mockResolvedValue({ ok: true, mtimeMs: 456 })
+    // Multi-byte content on purpose: `bytes` is the UTF-8 length (7), not the
+    // character count (3).
+    const mounted = renderRoot(createElement(TextEditor, viewerProps({ content: '中文\n' })))
+    try {
+      click(saveButton(mounted.container))
+      await act(async () => { await Promise.resolve() })
+      expect(seen).toHaveLength(1)
+      expect(seen[0]).toMatchObject({
+        path: '/p/a.ts',
+        sessionId: 's1',
+        bytes: 7,
+        source: 'editor',
+      })
+      // The save ran, then the event: savedAt is taken at emission time.
+      expect(typeof seen[0]!.savedAt).toBe('number')
+      expect(seen[0]!.savedAt).toBeLessThanOrEqual(Date.now())
+    } finally {
+      mounted.unmount()
+      dispose()
+    }
+  })
+
+  it('an fs-conflict refusal emits nothing (no bytes changed, no save happened)', async () => {
+    const { seen, dispose } = subscribe()
+    fsWrite.mockRejectedValue(new SidebarApiError('fs-conflict', 'changed on disk'))
+    const mounted = renderRoot(createElement(TextEditor, viewerProps()))
+    try {
+      click(saveButton(mounted.container))
+      await act(async () => { await Promise.resolve() })
+      expect(mounted.container.textContent ?? '').toContain('changed on disk')
+      expect(seen).toEqual([])
+    } finally {
+      mounted.unmount()
+      dispose()
+    }
+  })
+
+  it('an ordinary save failure emits nothing either', async () => {
+    const { seen, dispose } = subscribe()
+    fsWrite.mockRejectedValue(new SidebarApiError('fs-error', 'disk full'))
+    const mounted = renderRoot(createElement(TextEditor, viewerProps()))
+    try {
+      click(saveButton(mounted.container))
+      await act(async () => { await Promise.resolve() })
+      expect(seen).toEqual([])
+    } finally {
+      mounted.unmount()
+      dispose()
     }
   })
 })

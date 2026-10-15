@@ -611,6 +611,30 @@ export interface SidebarSurface {
 }
 
 /**
+ * One successful file save (v0.27.0+; feature `fileSaveEvents`), delivered to
+ * every `onFileSaved` listener. Emitted by the built-in text editor after the
+ * host confirms the write, and by any third-party viewer that saves through
+ * {@link emitFileSaved} — one emitter, one event shape.
+ */
+export interface SidebarFileSavedEvent {
+  /** The path exactly as the save carried it (no normalization, no cwd join —
+   *  the editor's own spelling: absolute, relative, either separator). */
+  path: string
+  /** The session the save ran under. */
+  sessionId: string
+  /** UTF-8 byte length of the saved CONTENT (what the emitter handed to the
+   *  host — not the bytes on disk, which the host's encoding/EOL restore may
+   *  re-spell). */
+  bytes: number
+  /** When the write was confirmed (epoch ms, taken after the host answered). */
+  savedAt: number
+  /** Which surface saved the file. `'editor'` is the built-in text editor;
+   *  the field exists so a third-party viewer reusing the emitter can name
+   *  itself later without a shape change. */
+  source: 'editor'
+}
+
+/**
  * The registry service published as `ctx.betterSidebar`.
  */
 export interface BetterSidebarService {
@@ -769,6 +793,17 @@ export interface BetterSidebarService {
    */
   clearUnread(type: TabType, sessionId: string): void
   /**
+   * Subscribe to successful file saves (v0.27.0+; feature `fileSaveEvents`).
+   * The listener receives a {@link SidebarFileSavedEvent} for every save the
+   * built-in editor (or a third-party viewer calling
+   * {@link emitFileSaved}) confirms. Returns the disposer. Delivery is
+   * snapshot-based (a listener added during a dispatch hears the NEXT event,
+   * not the running one) and crash-isolated: a throwing listener is logged
+   * (console.error) and never affects the save, the other listeners, or the
+   * emitter.
+   */
+  onFileSaved(listener: (event: SidebarFileSavedEvent) => void): () => void
+  /**
    * Install (or clear) the native right-Sidebar write face.
    * @internal Called once by the client half; not part of the consumer API.
    */
@@ -819,7 +854,7 @@ export function matchUrlTarget(tabs: readonly TabDescriptor[], url: URL): TabDes
  * The plugin version this service instance reports. Keep in lockstep with
  * `package.json`'s version — `tests/service.spec.ts` asserts the pair.
  */
-export const SIDEBAR_SERVICE_VERSION = '0.26.0'
+export const SIDEBAR_SERVICE_VERSION = '0.27.0'
 
 /**
  * Monotonic capability list consumers use to gate new API usage (features
@@ -842,6 +877,8 @@ export const SIDEBAR_SERVICE_VERSION = '0.26.0'
  *   right-aligned action area rendered at the tab strip's right end.
  * - 'settingPatterns': SidebarSettingToggle type 'patterns' (editable
  *   string-list row, committed as one string[] value).
+ * - 'fileSaveEvents' (v0.27.0): BetterSidebarService.onFileSaved plus the
+ *   module-level emitFileSaved — the successful-file-save feed.
  *
  * v0.19.0 REMOVED 'floatWindows': the free-window feature is gone (DSH 0.1.5
  * owns the right column, so the plugin keeps only its bottom workbench).
@@ -862,6 +899,7 @@ export const SIDEBAR_FEATURES = [
   'rightActions',
   'settingPatterns',
   'hostRouteUrl',
+  'fileSaveEvents',
 ] as const
 
 /** Run one plugin callback; a throw is logged and never breaks the caller. */
@@ -871,6 +909,39 @@ function safeCall(fn: () => void): void {
   } catch (error) {
     console.error('[dsh-better-sidebar] plugin callback error:', error)
   }
+}
+
+/**
+ * The file-saved listeners. Module-level like the editor-dirty store: a save
+ * is a PROCESS fact, not one service instance's — the emitter
+ * ({@link emitFileSaved}) is a free function any surface can call, including
+ * ones that never touch the registry, and every service instance hands
+ * `onFileSaved` out of this one set so a listener hears saves regardless of
+ * which instance it subscribed through.
+ */
+const fileSavedListeners = new Set<(event: SidebarFileSavedEvent) => void>()
+
+/**
+ * Publish one successful file save (v0.27.0+). The built-in editor calls this
+ * after the host confirms the write; a third-party viewer that saves files
+ * calls it with the same shape so its saves reach the same listeners.
+ *
+ * Delivery is snapshot-based (`[...set]`) and crash-isolated: the set is
+ * copied BEFORE the walk, so a listener subscribed mid-dispatch hears the next
+ * event and never this one, and a throwing listener is logged (console.error,
+ * the `safeCall` semantics) without affecting the emitter, the other
+ * listeners, or the save that produced the event.
+ */
+export function emitFileSaved(event: SidebarFileSavedEvent): void {
+  for (const listener of [...fileSavedListeners]) {
+    safeCall(() => listener(event))
+  }
+}
+
+/** The implementation behind `BetterSidebarService.onFileSaved`. */
+function subscribeFileSaved(listener: (event: SidebarFileSavedEvent) => void): () => void {
+  fileSavedListeners.add(listener)
+  return () => { fileSavedListeners.delete(listener) }
 }
 
 /**
@@ -1429,6 +1500,7 @@ export function createBetterSidebarService(store: SidebarStore): BetterSidebarSe
     setSurface: (next: SidebarSurface | undefined) => { surface = next },
     nativePathTabs: () => surface?.pathTabs?.() ?? [],
     clearUnread: clearUnreadFor,
+    onFileSaved: subscribeFileSaved,
   }
 }
 

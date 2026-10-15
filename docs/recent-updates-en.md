@@ -4,6 +4,10 @@ Per-version update notes for this plugin, moved out of [`README_EN.md`](../READM
 
 ---
 
+### v0.27.0
+
+> 🔌 **Editor saves became a plugin event**: after a successful save, other plugins can hook the moment or simply observe it. Client side: `ctx.betterSidebar.onFileSaved(...)` (feature `'fileSaveEvents'`; the event carries `path` / `sessionId` / `bytes` / `savedAt` / `source`). Host side: any plugin hears `ctx.on('better-sidebar/file-saved', …)` — broadcast by `/sidebar/write` after a successful write, with the resolved `cwd` and the write result's `size` / `mtimeMs` in the payload. fs-conflict refusals and failures are not saves and emit nothing; a throwing listener is swallowed and never affects the save. Field tables and examples in [docs/file-save-events.md](./file-save-events.md); item by item in [CHANGELOG_EN](../CHANGELOG_EN.md#v0270).
+
 ### v0.26.0
 
 > 🚀 **Four headline changes**: ① **transfers are fully streamed** — upload, download, the HTML preview and archiving have no size ceiling left (the three deployment caps `readLimit` / `mediaLimit` / `uploadLimit` are gone with them), and saving from the editor dropped its 1 MiB request-body wall; ② **very large files** no longer open as a truncated half-document — they get a read-only paged preview (scroll to the end to append the next page, "load all", and a download hint at 50k rows) — plus a **fourth built-in viewer for `.jsonl` / `.ndjson`** (collapsible record cards + saveable edit); ③ **Side Chat reaches near-parity with a native session** — live push (invalidation frames + incremental refetch), a visible queue with per-item retraction, and per-thread model selection; ④ **the Tasks panel was rebuilt** (expand by group, token usage and duration, canvas motion with staggered entrances). Also: **multiple terminal tabs** in the bottom workbench, four follow-ups to **reference line numbers**, rename/delete now reaching the **native right-sidebar tabs** (fixing data-level bugs such as "saving recreated a renamed file" and "saving resurrected a deleted one"), and three silent data problems. Item by item in [CHANGELOG](../CHANGELOG.md#v0260).

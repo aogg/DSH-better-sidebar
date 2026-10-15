@@ -160,7 +160,7 @@ export interface WorkspaceWriteInput {
  *  matches the file OR the file is no longer there at all, fs-error when the
  *  write itself fails.
  */
-export async function writeWorkspaceText(input: WorkspaceWriteInput): Promise<{ mtimeMs?: number }> {
+export async function writeWorkspaceText(input: WorkspaceWriteInput): Promise<{ mtimeMs?: number; size?: number }> {
   const { cwd, path, content, expectedMtimeMs } = input
   let absolute = await ensureWorkspaceWritePath(cwd, path)
   // Workspace-dir-prefix compatibility, WRITE side — deliberately narrower
@@ -213,9 +213,17 @@ export async function writeWorkspaceText(input: WorkspaceWriteInput): Promise<{ 
     throw new SidebarError('fs-error', `cannot write "${absolute}": ${error instanceof Error ? error.message : String(error)}`, 400)
   }
   invalidateDirectoryCache(dirname(absolute))
-  // The fresh baseline the client adopts after a successful save.
-  const mtimeMs = await stat(absolute).then(info => info.mtimeMs).catch(() => undefined)
-  return { ...(mtimeMs !== undefined ? { mtimeMs } : {}) }
+  // The fresh baseline the client adopts after a successful save, plus the
+  // size on disk (the `better-sidebar/file-saved` broadcast carries it; the
+  // written bytes can differ from the transported document — encoding/EOL
+  // restore — so this is measured, not counted client-side).
+  const fresh = await stat(absolute)
+    .then(info => ({ mtimeMs: info.mtimeMs, size: info.size }))
+    .catch(() => undefined)
+  return {
+    ...(fresh !== undefined ? { mtimeMs: fresh.mtimeMs } : {}),
+    ...(fresh !== undefined ? { size: fresh.size } : {}),
+  }
 }
 
 /** Inputs of one tree-row rename. */
