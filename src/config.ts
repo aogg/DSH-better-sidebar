@@ -114,6 +114,11 @@ export const PrefsSchema: z<SidebarPrefs> = z.object({
   // "settings seam" opening — without it the seam would drop third-party
   // keys as unknown schema fields.
   pluginSettings: z.dict(z.dict(z.any())).default({}),
+  // Per-workspace settings blobs (v0.26.0+) are an OPEN nested map keyed by
+  // the workspace root's absolute path — same opening as `pluginSettings`,
+  // one scope finer: each active workspace carries its own blob (today only
+  // `openWith`) that the client composes OVER the global configuration.
+  projectSettings: z.dict(z.dict(z.any())).default({}),
 })
 
 // ── The Loader row schema ───────────────────────────────────────────────────

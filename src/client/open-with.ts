@@ -12,7 +12,7 @@
  */
 import type { CopyKey } from './locales.ts'
 
-/** One user-configured editor (persisted in `pluginSettings['editor'].openWith`). */
+/** One user-configured editor (persisted in the global `pluginSettings['editor'].openWith` blob or a workspace's `projectSettings[cwd].openWith` blob). */
 export interface CustomEditor {
   id: string
   /** Human label shown in the menu (e.g. "Windsurf"). */
@@ -282,6 +282,54 @@ export function newCustomEditorId(): string {
     return crypto.randomUUID()
   }
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`
+}
+
+/**
+ * Compose the GLOBAL and PROJECT open-with configurations into the one
+ * effective config the menu and the URL builder consume. Both scopes are
+ * user-editable (the settings page's 全局设置 / 项目设置 tabs), so neither
+ * replaces the other — they merge field by field, the PROJECT side winning
+ * wherever both sides express the same thing:
+ *
+ *  - `sshHost`: the project's host when set, else the global one (one
+ *    workspace = one machine namespace; a blank project field means "use the
+ *    global answer", not "local").
+ *  - `customEditors`: the project's rows first, then the global rows whose
+ *    id the project does not already define (an id collision keeps the
+ *    project's row — same id, project's name/template win).
+ *  - `pinned`: the project's pins first, then the global pins not already
+ *    present (menu order follows the merged list; dedupe keeps one entry).
+ *  - `pathMappings`: project rows FIRST, global rows after — the mapper
+ *    picks the longest `from` (equal lengths keep the FIRST row), so a
+ *    project row overrides a same-prefix global row while every other global
+ *    mapping still applies.
+ */
+export function mergeOpenWithConfigs(globalConfig: OpenWithConfig, project: OpenWithConfig): OpenWithConfig {
+  const sshHost = project.sshHost.trim() !== '' ? project.sshHost : globalConfig.sshHost
+  const projectIdSet = new Set(project.customEditors.map(editor => editor.id))
+  const customEditors = [
+    ...project.customEditors,
+    ...globalConfig.customEditors.filter(editor => !projectIdSet.has(editor.id)),
+  ]
+  const pinnedSet = new Set(project.pinned)
+  const pinned = [...project.pinned, ...globalConfig.pinned.filter(id => !pinnedSet.has(id))]
+  const pathMappings = [...project.pathMappings, ...globalConfig.pathMappings]
+  return { sshHost, customEditors, pinned, pathMappings }
+}
+
+/**
+ * Which blob a pin toggle on one target id must write: the PROJECT config
+ * when the project owns the target — it defines that custom editor, or it
+ * already carries the pin (an existing project pin must be unpinnable) — and
+ * the GLOBAL config otherwise (built-ins and global-only custom editors).
+ * Writing to the owning blob keeps the two scopes independently round-trippable:
+ * a pin toggle never silently promotes a project setting to global or vice versa.
+ */
+export function openWithPinScope(globalConfig: OpenWithConfig, project: OpenWithConfig, targetId: string): 'global' | 'project' {
+  const customId = targetId.startsWith('custom:') ? targetId.slice('custom:'.length) : undefined
+  if (customId !== undefined && project.customEditors.some(editor => editor.id === customId)) return 'project'
+  if (project.pinned.includes(targetId)) return 'project'
+  return 'global'
 }
 
 /** Validate one custom-editor row before the settings panel accepts it. */

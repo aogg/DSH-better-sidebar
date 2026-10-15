@@ -40,7 +40,7 @@
  * shows the wire error inline — a broken settings surface never crashes the
  * shell.
  */
-import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import {
   IconChevronDownOutlineRegular,
   IconPlusOutlineRegular,
@@ -58,6 +58,8 @@ import { RIGHTBAR_RATIO_MAX, RIGHTBAR_RATIO_MIN } from '../prefs-shared.ts'
 import { api } from './api.ts'
 import { parsePrefs } from './prefs.ts'
 import { AddPluginModal, type PluginKind } from './add-plugin-modal.tsx'
+import { OpenWithSettings } from './open-with-settings.tsx'
+import { baseName } from './paths.ts'
 import { t } from './locales.ts'
 import type { SidebarStore } from './state.ts'
 import type {
@@ -143,6 +145,45 @@ export function mergePluginSetting(
   return {
     ...pluginSettings,
     [descriptorId]: { ...(pluginSettings[descriptorId] ?? {}), [key]: value },
+  }
+}
+
+/** The settings page's two scopes: 全局设置 (the one shared document) and
+ *  项目设置 (the active workspace's own blobs, keyed by its root path). */
+export type SettingsScopeTab = 'global' | 'project'
+
+/** Where the last-visited scope tab persists (per browser, like the tab layouts). */
+const SETTINGS_TAB_STORAGE_KEY = 'dsh-sidebar:settings-tab'
+
+/** Read the persisted scope tab (SSR-safe: no localStorage → 全局设置). */
+function initialScopeTab(): SettingsScopeTab {
+  try {
+    return (typeof localStorage !== 'undefined' && localStorage.getItem(SETTINGS_TAB_STORAGE_KEY) === 'project')
+      ? 'project'
+      : 'global'
+  } catch {
+    return 'global'
+  }
+}
+
+/** The shared empty blob (stable identity for the store selectors). */
+const EMPTY_PROJECT_BLOB: Record<string, unknown> = {}
+
+/**
+ * Map one plugin-owned setting into a WORKSPACE blob map (pure, v0.26.0+):
+ * the project-scoped sibling of {@link mergePluginSetting} — sequential
+ * merges are additive, so building from the latest optimistic map keeps
+ * earlier keys (and other workspaces' blobs) intact.
+ */
+export function mergeProjectSetting(
+  projectSettings: Record<string, Record<string, unknown>>,
+  cwd: string,
+  key: string,
+  value: unknown,
+): Record<string, Record<string, unknown>> {
+  return {
+    ...projectSettings,
+    [cwd]: { ...(projectSettings[cwd] ?? {}), [key]: value },
   }
 }
 
@@ -786,6 +827,54 @@ export function SideCardSection({ store, service }: SideCardSectionProps) {
     setViewers([...service.getFileViewers()].sort(viewerOrder))
   }), [service])
 
+  // The scope tab (全局设置 / 项目设置), persisted per browser like the tab
+  // layouts — the page reopens where the user left it.
+  const [scopeTab, setScopeTab] = useState<SettingsScopeTab>(initialScopeTab)
+  const selectScopeTab = (tab: SettingsScopeTab): void => {
+    setScopeTab(tab)
+    try {
+      localStorage.setItem(SETTINGS_TAB_STORAGE_KEY, tab)
+    } catch { /* private mode: the in-memory choice still works */ }
+  }
+
+  // The ACTIVE session's live workspace root — the project tab's scope key
+  // (`projectSettings[cwd]`). The store carries the active session id (the
+  // sidebar shell and the native tab adapter keep it set); the HOST is the
+  // authority on where the session actually works (it can follow the agent
+  // into a linked worktree), the same answer the explorer uses. One fetch
+  // per session change, no polling: a settings page does not need live
+  // worktree tracking.
+  const sessionId = useSyncExternalStore(
+    useCallback((callback: () => void) => store.subscribe(callback), [store]),
+    useCallback(() => store.getSnapshot().sessionId, [store]),
+    // Server snapshot: renderToString has no store effects — the same
+    // snapshot face answers (a plain object store, safe to read twice).
+    useCallback(() => store.getSnapshot().sessionId, [store]),
+  )
+  const [projectCwd, setProjectCwd] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    if (sessionId === undefined) {
+      setProjectCwd(undefined)
+      return
+    }
+    let cancelled = false
+    api.sessionCwd({ sessionId })
+      .then(result => { if (!cancelled) setProjectCwd(result.cwd) })
+      .catch(() => { if (!cancelled) setProjectCwd(undefined) })
+    return () => { cancelled = true }
+  }, [sessionId])
+
+  // The workspace's own blob + its writer: the project tab's open-with panel
+  // edits THIS blob; the editor window composes it OVER the global one (the
+  // project wins where both configure the same thing).
+  const projectBlob = projectCwd === undefined
+    ? EMPTY_PROJECT_BLOB
+    : prefs.projectSettings[projectCwd] ?? EMPTY_PROJECT_BLOB
+  const writeProjectBlob = (key: string, value: unknown): void => {
+    if (projectCwd === undefined) return
+    applyPref({ projectSettings: mergeProjectSetting(optimisticRef.current.projectSettings, projectCwd, key, value) })
+  }
+
   // The settings document revision (guards concurrent writes). A ref: commits
   // read the freshest value at execution time, no re-render needed.
   const revisionRef = useRef<number | undefined>(undefined)
@@ -992,6 +1081,60 @@ export function SideCardSection({ store, service }: SideCardSectionProps) {
     <div className={css.section}>
       <p className={css.intro}>{t('settingsIntro')}</p>
 
+      {/* The scope tabs: 全局设置 (the one shared document — everything that
+          existed here before) vs 项目设置 (the active workspace's own blobs,
+          keyed by its root path). Both stay editable: the project scope
+          composes OVER the global one, it does not replace it. */}
+      <div className={css.scopeTabs} role="tablist" aria-label={t('settingsScopeTabsLabel')}>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={scopeTab === 'global'}
+          className={clsx(css.scopeTab, scopeTab === 'global' && css.scopeTabOn)}
+          onClick={() => { selectScopeTab('global') }}
+        >
+          {t('settingsTabGlobal')}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={scopeTab === 'project'}
+          className={clsx(css.scopeTab, scopeTab === 'project' && css.scopeTabOn)}
+          onClick={() => { selectScopeTab('project') }}
+        >
+          {t('settingsTabProject')}
+        </button>
+      </div>
+
+      {/* 项目设置: the active workspace's own configuration. Without an
+          active session (no workspace to scope to) the tab shows the hint;
+          otherwise the open-with group renders — the one setting history
+          asked to be per-project (路径映射 /code/www → D:/code/www is a
+          per-workspace fact, session-dca2613f). The panel edits
+          `projectSettings[cwd]` through the same optimistic/revision-guarded
+          pipeline as every other row. */}
+      {scopeTab === 'project' && (
+        projectCwd === undefined ? (
+          <div className={css.group}>
+            <div className={css.projectEmpty} data-dsh-project-empty="">{t('projectNoWorkspace')}</div>
+          </div>
+        ) : (
+          <div className={css.group} data-dsh-project-scope={projectCwd}>
+            <div className={css.groupHeading}>{t('projectOpenWithGroup')}</div>
+            <div className={css.projectPath}>
+              <span className={css.projectPathName}>{baseName(projectCwd)}</span>
+              <span className={css.projectPathFull}>{projectCwd}</span>
+            </div>
+            <p className={css.projectHint}>{t('projectMergeHint')}</p>
+            <OpenWithSettings
+              pluginSettings={projectBlob}
+              updatePluginSetting={writeProjectBlob}
+            />
+          </div>
+        )
+      )}
+
+      {scopeTab === 'global' && (<>
       {/* The managing plugin's own identity: name + version badge, so the
           section is attributable at a glance (the version is the service
           instance's, kept in lockstep with package.json by
@@ -1177,6 +1320,7 @@ export function SideCardSection({ store, service }: SideCardSectionProps) {
           </button>
         </div>
       </div>
+      </>)}
 
       {/* The secondary settings popup: a feature's declared related settings
           as title/desc + switch rows in a wider-than-default Modal with a

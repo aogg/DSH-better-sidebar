@@ -1058,3 +1058,83 @@
   accent-color: var(--dsw-alias-button-primary-fill);
   cursor: pointer;
 }
+
+/* 作用域 tab（全局设置 / 项目设置）：DSH 分段控件配方 —— 一条 l2 描边的
+   圆角容器，两枚等宽按钮，选中项走 layer-2 填充 + 主标签色，未选中走
+   透明 + 三级标签色；键盘焦点沿原生 button 的 focus-visible 画环。 */
+.scopeTabs {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  margin: 8px 0 12px;
+  padding: 2px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-2);
+  width: fit-content;
+}
+
+.scopeTab {
+  appearance: none;
+  border: 0;
+  padding: 4px 14px;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.scopeTab:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l4);
+  outline-offset: 1px;
+}
+
+.scopeTabOn {
+  background: var(--dsw-alias-interactive-bg-active);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 项目 tab 的工作区头：目录名（主标签色）+ 完整根路径（等宽、三级色、
+   可截断），两行叠放，让「这是哪个项目」一眼可辨。 */
+.projectPath {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 2px 8px;
+}
+
+.projectPathName {
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.projectPathFull {
+  font-family: var(--dsw-font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+  word-break: break-all;
+}
+
+/* 合并语义提示行：三级色小字，紧跟工作区头。 */
+.projectHint {
+  margin: 0 0 8px;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 项目 tab 的空态（无活动会话）：一条居中三级色说明。 */
+.projectEmpty {
+  padding: 18px 2px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}

@@ -41,3 +41,30 @@ export function updatePluginSettings(
     console.error('open-with settings write failed', error)
   })
 }
+
+/**
+ * Merge one WORKSPACE settings blob and persist it — the project-scoped
+ * sibling of {@link updatePluginSettings}: same queue, same last-write-wins
+ * route, but the patch lands under `projectSettings[cwd]` instead of a
+ * descriptor id. `cwd` is the workspace root's absolute path (the same string
+ * `api.sessionCwd` reports); an empty/undefined cwd is refused silently —
+ * there is no project to scope to, and the menu degrades to the global blob.
+ */
+export function updateProjectSettings(
+  store: SidebarStore,
+  cwd: string | undefined,
+  updater: (blob: Record<string, unknown>) => Record<string, unknown>,
+): void {
+  if (cwd === undefined || cwd === '') return
+  queue = queue.then(async () => {
+    const prefs = store.getPrefs()
+    const blob = prefs.projectSettings[cwd] ?? {}
+    const next = updater({ ...blob })
+    const view = await api.settingsUpdate({
+      projectSettings: { ...prefs.projectSettings, [cwd]: next },
+    })
+    store.setPrefs(parsePrefs(view.value))
+  }).catch((error: unknown) => {
+    console.error('project settings write failed', error)
+  })
+}

@@ -160,6 +160,20 @@ export interface SidebarPrefs {
    * numbers / booleans; custom panels are responsible for their own).
    */
   pluginSettings: Record<string, Record<string, unknown>>
+  /**
+   * Per-workspace ("project") settings blobs (v0.26.0+), keyed by the
+   * workspace root's ABSOLUTE path as the host reports it (`useSessionRoot` /
+   * `api.sessionCwd`): each active workspace carries its own open map of
+   * JSON-serializable values. Today the one blob is `openWith` — the file
+   * tree's 打开方式 configuration (SSH host, custom editors, path-prefix
+   * mappings, pinned ids) — which the editor composes with the GLOBAL
+   * `pluginSettings['editor'].openWith` blob (project wins on conflicts, see
+   * `mergeOpenWithConfigs`). A workspace with no entry falls back to the
+   * global configuration unchanged. An empty object under a key is
+   * meaningful (it shadows nothing; it exists so the settings page's project
+   * tab can seed a fresh edit without waiting for a first write).
+   */
+  projectSettings: Record<string, Record<string, unknown>>
 }
 
 /** The stock exclude list (VS Code ships a similar files.exclude default). */
@@ -186,4 +200,5 @@ export const SIDEBAR_PREFS_DEFAULTS: SidebarPrefs = {
   tabsEnabled: {},
   viewersEnabled: {},
   pluginSettings: {},
+  projectSettings: {},
 }

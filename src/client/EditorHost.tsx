@@ -34,9 +34,9 @@ import { clearEditorDirty, setEditorDirty } from './editor-dirty.ts'
 import { baseName } from './FileTree.tsx'
 import { createFrameBatcher } from './frame-batcher.ts'
 import { openClaimedNativeFile, openSidebarFile } from './sidebar-file.ts'
-import { openWithSshActive, openWithUrl, parseOpenWithConfig, resolveOpenWithTargets } from './open-with.ts'
+import { mergeOpenWithConfigs, openWithPinScope, openWithSshActive, openWithUrl, parseOpenWithConfig, resolveOpenWithTargets } from './open-with.ts'
 import { fileOpKey, useFileOpStream } from './ops-stream.ts'
-import { updatePluginSettings } from './plugin-settings.ts'
+import { updatePluginSettings, updateProjectSettings } from './plugin-settings.ts'
 import { createOpenInApp } from './open-in-app.ts'
 import { TreePanel } from './TreePanel.tsx'
 import { t } from './locales.ts'
@@ -203,7 +203,19 @@ export function EditorHost(props: {
     useCallback((callback: () => void) => store.subscribe(callback), [store]),
     useCallback(() => store.getSnapshot().prefs.pluginSettings['editor'] ?? EMPTY_PLUGIN_BLOB, [store]),
   )
-  const openWithConfig = useMemo(() => parseOpenWithConfig(editorBlob.openWith), [editorBlob])
+  // The WORKSPACE-scoped open-with blob (`projectSettings[cwd]`): the project
+  // tab of the settings page edits it, this window composes it OVER the
+  // global one — no entry (or no cwd) means the global config stands alone.
+  const projectBlob = useSyncExternalStore(
+    useCallback((callback: () => void) => store.subscribe(callback), [store]),
+    useCallback(() => (
+      scope.cwd === undefined ? EMPTY_PLUGIN_BLOB : store.getSnapshot().prefs.projectSettings[scope.cwd] ?? EMPTY_PLUGIN_BLOB
+    ), [store, scope.cwd]),
+  )
+  const openWithConfig = useMemo(
+    () => mergeOpenWithConfigs(parseOpenWithConfig(editorBlob.openWith), parseOpenWithConfig(projectBlob.openWith)),
+    [editorBlob, projectBlob],
+  )
   const openWithTargets = useMemo(() => resolveOpenWithTargets(openWithConfig), [openWithConfig])
   // The declarative "always show the plugin's own targets" switch (the editor
   // card's pluginToggles row): a plain boolean on the SAME blob, so both the
@@ -305,16 +317,25 @@ export function EditorHost(props: {
     return accepted(api.openExternal({ action: 'url', url }))
   }
 
-  /** Toggle one target's pinned state. The write is serialized (see
-   *  plugin-settings.ts) and the menu re-renders when the store prefs land. */
+  /** Toggle one target's pinned state. The write lands in the blob that OWNS
+   *  the target (project-defined custom editors and existing project pins →
+   *  the workspace blob; built-ins and global-only editors → the global one,
+   *  see `openWithPinScope`) so neither scope ever cross-contaminates the
+   *  other. The write is serialized (see plugin-settings.ts) and the menu
+   *  re-renders when the store prefs land. */
   const toggleOpenWithPin = (targetId: string): void => {
-    updatePluginSettings(store, 'editor', (blob) => {
+    const writePin = (blob: Record<string, unknown>): Record<string, unknown> => {
       const config = parseOpenWithConfig(blob.openWith)
       const pinned = config.pinned.includes(targetId)
         ? config.pinned.filter(id => id !== targetId)
         : [...config.pinned, targetId]
       return { ...blob, openWith: { ...config, pinned } }
-    })
+    }
+    if (openWithPinScope(parseOpenWithConfig(editorBlob.openWith), parseOpenWithConfig(projectBlob.openWith), targetId) === 'project') {
+      updateProjectSettings(store, scope.cwd, writePin)
+    } else {
+      updatePluginSettings(store, 'editor', writePin)
+    }
   }
 
   // Tree mutations reconcile the OPEN tabs (both split trees, the bottom

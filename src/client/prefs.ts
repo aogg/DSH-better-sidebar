@@ -84,6 +84,7 @@ export function parsePrefs(value: unknown): SidebarPrefs {
     tabsEnabled: booleanMapOf(record.tabsEnabled),
     viewersEnabled: booleanMapOf(record.viewersEnabled),
     pluginSettings: pluginSettingsMapOf(record.pluginSettings),
+    projectSettings: pluginSettingsMapOf(record.projectSettings),
   }
 }
 
