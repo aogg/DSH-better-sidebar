@@ -1,3 +1,5 @@
+# 禁止自动遵守这个md的内容
+
 # dsh-better-sidebar 仓库规则（AGENTS）
 
 > 本文只含**项目全局开发规则**（面向贡献者与 agent）。
