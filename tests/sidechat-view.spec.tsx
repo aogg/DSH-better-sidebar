@@ -12,6 +12,10 @@
  * composer bar's model picker lists the host catalog and pins a route. Every
  * thread function (model / threads / save / archive) must render in that
  * composer bar — below the input — never in a top header.
+ *
+ * The user-row surface (2026-10-16): all three user rows (durable history,
+ * queued inbox, local echo) render VERBATIM plain text — a bare text node
+ * under pre-wrap, never MarkdownText — so ASCII box art survives intact.
  */
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -20,6 +24,7 @@ import { act } from 'react-dom/test-utils'
 import { renderRoot, setupReactAct } from './test-utils.ts'
 import { SideChatView, consumeSidechatSeed } from '../src/client/SideChatView.tsx'
 import { attachLocale } from '../src/client/locales.ts'
+import css from '../src/client/SideChatView.module.css'
 import type { Context, SidebarSessionList } from '../src/context-types.ts'
 import type { SidebarTab } from '../src/client/state.ts'
 
@@ -476,6 +481,61 @@ describe('SideChatView answer copy', () => {
     await act(async () => {})  // flush the initial transcript pull
 
     expect(container.querySelector('button[aria-label="复制"]')).toBeNull()
+    unmount()
+  })
+})
+
+describe('SideChatView user rows render verbatim (no markdown)', () => {
+  /** The user text the three cases share: an ASCII box drawing whose shape
+   *  depends on the newlines between the lines and the runs of interior
+   *  alignment spaces inside them. The middle line ends in two trailing
+   *  spaces — under markdown those read as a hard line break, so the spaces
+   *  vanish from the render while a verbatim text node keeps every one. */
+  const BOX_ART = ['┌──────┐', '│ 关闭   │\u0020\u0020', '└──────┘'].join('\n')
+
+  /** The one user-row assertion pair: the bubble is a BARE text node (markdown
+   *  always wraps prose in block elements — `<p>` at the very least — so a
+   *  non-empty element child list means the row went back through
+   *  MarkdownText) and its text matches the source character-for-character. */
+  function verbatimBubble(container: HTMLElement, className: string): HTMLElement {
+    const bubble = container.querySelector<HTMLElement>(`.${className}`)
+    if (bubble === null) throw new Error(`the ${className} bubble is absent`)
+    expect(bubble.children, 'the bubble must be a bare text node, no markdown blocks').toHaveLength(0)
+    return bubble
+  }
+
+  it('renders a durable history user row char-for-char (newlines and alignment spaces survive)', async () => {
+    eventsValue = eventsWithUserId('msg-box', BOX_ART)
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(threadStore()))))
+    await act(async () => {})  // flush the initial transcript pull
+
+    expect(verbatimBubble(container, css.sidechatUser).textContent).toBe(BOX_ART)
+    unmount()
+  })
+
+  it('renders the queued (pending) row char-for-char too', async () => {
+    pendingValue = [{ id: 'm-queue', target: 'next-step', text: BOX_ART }]
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(threadStore()))))
+    await act(async () => {})  // flush the initial transcript pull
+
+    expect(verbatimBubble(container, css.sidechatPendingText).textContent).toBe(BOX_ART)
+    unmount()
+  })
+
+  it('renders the local echo char-for-char, newlines included', async () => {
+    eventsValue = EARLY_EVENTS  // nothing durable yet: the echo is the only bubble
+    promptHold = new Promise<void>(() => {})  // keep the send in flight
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(threadStore()))))
+    await act(async () => {})  // flush the initial transcript pull
+
+    act(() => { typeComposer(container, BOX_ART) })
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="发送"]')?.click()
+    })
+
+    // handleSend trims the string ENDS only — the box art has none, so the
+    // echo must carry the typed text through untouched.
+    expect(verbatimBubble(container, css.sidechatPendingText).textContent).toBe(BOX_ART)
     unmount()
   })
 })
