@@ -497,7 +497,8 @@ describe('SideChatView user rows render verbatim (no markdown)', () => {
    *  always wraps prose in block elements — `<p>` at the very least — so a
    *  non-empty element child list means the row went back through
    *  MarkdownText) and its text matches the source character-for-character. */
-  function verbatimBubble(container: HTMLElement, className: string): HTMLElement {
+  function verbatimBubble(container: HTMLElement, className: string | undefined): HTMLElement {
+    if (className === undefined) throw new Error('the css module class map lacks the bubble class')
     const bubble = container.querySelector<HTMLElement>(`.${className}`)
     if (bubble === null) throw new Error(`the ${className} bubble is absent`)
     expect(bubble.children, 'the bubble must be a bare text node, no markdown blocks').toHaveLength(0)
