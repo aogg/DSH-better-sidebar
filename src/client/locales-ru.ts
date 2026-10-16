@@ -260,6 +260,8 @@ export const ru: Record<string, string> = {
   changesCommitFileCount: '{count} файлов',
   changesAddBadge: 'add',
   changesAddAllNote: 'Эта команда добавила в индекс всё (-A/.); файлы по команде перечислить нельзя',
+  changesFileHistoryExpand: 'Развернуть историю файла',
+  changesFileHistoryCollapse: 'Свернуть историю файла',
   changesFilterAll: 'Все',
   changesFilterEmpty: 'Нет операций этого типа',
   changesOpenDiffTab: 'Открыть в отдельной вкладке',

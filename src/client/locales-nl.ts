@@ -262,6 +262,8 @@ export const nl: Record<string, string> = {
   changesCommitFileCount: '{count} bestanden',
   changesAddBadge: 'add',
   changesAddAllNote: 'Deze opdracht heeft alles gestaged (-A/.); de bestanden zijn niet uit de opdracht op te sommen',
+  changesFileHistoryExpand: 'Bestandsgeschiedenis uitklappen',
+  changesFileHistoryCollapse: 'Bestandsgeschiedenis inklappen',
   changesFilterAll: 'Alles',
   changesFilterEmpty: 'Geen bewerkingen van dit soort',
   changesOpenDiffTab: 'In eigen diff-tabblad openen',

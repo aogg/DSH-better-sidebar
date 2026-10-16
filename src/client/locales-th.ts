@@ -264,6 +264,8 @@ export const th: Record<string, string> = {
   changesCommitFileCount: '{count} ไฟล์',
   changesAddBadge: 'add',
   changesAddAllNote: 'คำสั่งนี้สเตจทุกอย่าง (-A/.); ไม่สามารถแสดงรายชื่อไฟล์จากคำสั่งได้',
+  changesFileHistoryExpand: 'ขยายประวัติไฟล์',
+  changesFileHistoryCollapse: 'ยุบประวัติไฟล์',
   changesFilterAll: 'ทั้งหมด',
   changesFilterEmpty: 'ไม่มีการดำเนินการประเภทนี้',
   changesOpenDiffTab: 'เปิดในแท็บ diff แยก',

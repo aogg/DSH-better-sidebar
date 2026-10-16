@@ -279,6 +279,8 @@ export const zhHK: Record<string, string> = {
   changesCommitFileCount: '{count} 個檔案',
   changesAddBadge: 'add',
   changesAddAllNote: '該命令暫存了全部改動（-A/.），無法從命令枚舉檔案',
+  changesFileHistoryExpand: '展開修改歷史',
+  changesFileHistoryCollapse: '收起修改歷史',
   changesFilterAll: '全部',
   changesFilterEmpty: '沒有此類操作',
   changesOpenDiffTab: '在獨立分頁中開啟',

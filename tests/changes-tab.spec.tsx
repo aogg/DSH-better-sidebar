@@ -77,6 +77,16 @@ async function flushEffects(): Promise<void> {
   await act(async () => { await Promise.resolve() })
 }
 
+/** The session lens folds every file history by default: disclose one group
+ *  (whose header carries the path) before its op rows exist in the DOM. */
+async function expandFileGroup(container: HTMLElement, pathPart: string): Promise<void> {
+  const head = [...container.querySelectorAll<HTMLButtonElement>('button[data-file-head]')]
+    .find(button => button.getAttribute('data-file-head')?.includes(pathPart))
+  expect(head, `a folded file header containing ${pathPart}`).toBeDefined()
+  await act(async () => { head!.click() })
+  await act(async () => { await Promise.resolve() })
+}
+
 beforeEach(() => {
   Object.defineProperty(globalThis.navigator, 'language', { value: 'zh-CN', configurable: true })
 })
@@ -269,6 +279,7 @@ describe('ChangesTab', () => {
       // Session lens: expand the file group, then open the read op's preview.
       const sessionTab = lensTab(container, t('changesSessionLens'))
       await act(async () => { sessionTab!.click() })
+      await expandFileGroup(container, 'notes.md')
       const row = container.querySelector<HTMLButtonElement>('button[data-op-kind="read"]')
       expect(row).toBeDefined()
       expect(container.textContent).toContain('notes.md')
@@ -374,6 +385,7 @@ describe('ChangesTab', () => {
       await flushEffects()
       const sessionTab = lensTab(container, t('changesSessionLens'))
       await act(async () => { sessionTab!.click() })
+      await expandFileGroup(container, 'notes.txt')
 
       const row = container.querySelector<HTMLButtonElement>('button[data-op-kind="write"]')
       expect(row).toBeDefined()
@@ -433,6 +445,7 @@ describe('ChangesTab', () => {
       await flushEffects()
       const sessionTab = lensTab(container, t('changesSessionLens'))
       await act(async () => { sessionTab!.click() })
+      await expandFileGroup(container, '.env')
       const row = container.querySelector<HTMLButtonElement>('button[data-op-kind="read"]')
       await act(async () => { row!.click() })
       await flushEffects()
@@ -616,6 +629,77 @@ describe('ChangesTab', () => {
       act(() => { root.unmount() })
       container.remove()
       vi.useRealTimers()
+    }
+  })
+
+  it('folds every file history by default and discloses it from the header', async () => {
+    mockGit([])
+    vi.spyOn(api, 'changesOps').mockResolvedValue({ events: [...writeEvents(1, 'src/a.ts'), ...writeEvents(3, 'src/a.ts'), ...writeEvents(5, 'src/b.ts')], lastSeq: 6 })
+
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root: Root = createRoot(container)
+    try {
+      mount(root)
+      await flushEffects()
+      const sessionTab = lensTab(container, t('changesSessionLens'))
+      await act(async () => { sessionTab!.click() })
+
+      // Folded by default: the paths show in the headers, no op row exists.
+      expect(container.querySelectorAll('button[data-op-kind]')).toHaveLength(0)
+      const head = container.querySelector<HTMLButtonElement>('button[data-file-head="src/a.ts"]')
+      expect(head).not.toBeNull()
+      expect(head!.getAttribute('aria-expanded')).toBe('false')
+      expect(head!.getAttribute('aria-controls')).not.toBeNull()
+      // The folded summary rung: the op count pill + the newest op's badge.
+      expect(head!.querySelector('[data-op-count="2"]')).not.toBeNull()
+      expect(head!.textContent).toContain(t('changesWrite'))
+
+      // Disclosing renders every op row of that file (and that file only).
+      await act(async () => { head!.click() })
+      expect(head!.getAttribute('aria-expanded')).toBe('true')
+      expect(container.querySelectorAll('button[data-op-kind]')).toHaveLength(2)
+      expect(container.querySelector('[data-file-ops="src/a.ts"]')).not.toBeNull()
+      // The b-group stays folded.
+      expect(container.querySelector('button[data-file-head="src/b.ts"]')!.getAttribute('aria-expanded')).toBe('false')
+
+      // Folding again hides the rows.
+      await act(async () => { head!.click() })
+      expect(container.querySelectorAll('button[data-op-kind]')).toHaveLength(0)
+    } finally {
+      act(() => { root.unmount() })
+      container.remove()
+    }
+  })
+
+  it('auto-expands the folded group holding the previewed op', async () => {
+    mockGit([])
+    vi.spyOn(api, 'changesOps').mockResolvedValue({ events: writeEvents(1, 'src/a.ts'), lastSeq: 2 })
+
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root: Root = createRoot(container)
+    try {
+      mount(root)
+      await flushEffects()
+      const sessionTab = lensTab(container, t('changesSessionLens'))
+      await act(async () => { sessionTab!.click() })
+
+      // Expand, preview one op, then fold: the selection is still live, so
+      // the group must come back on its own (an op is never hidden mid-view).
+      await expandFileGroup(container, 'src/a.ts')
+      const row = container.querySelector<HTMLButtonElement>('button[data-op-kind="write"]')
+      await act(async () => { row!.click() })
+      await flushEffects()
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('button[data-file-head="src/a.ts"]')!.click()
+      })
+      await act(async () => { await Promise.resolve() })
+      expect(container.querySelectorAll('button[data-op-kind]').length).toBeGreaterThan(0)
+      expect(container.querySelector('button[data-file-head="src/a.ts"]')!.getAttribute('aria-expanded')).toBe('true')
+    } finally {
+      act(() => { root.unmount() })
+      container.remove()
     }
   })
 

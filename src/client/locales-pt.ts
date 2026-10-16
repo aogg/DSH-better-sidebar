@@ -247,6 +247,8 @@ export const pt: Record<string, string> = {
   changesCommitFileCount: '{count} arquivos',
   changesAddBadge: 'add',
   changesAddAllNote: 'Este comando adicionou tudo ao stage (-A/.); seus arquivos não podem ser listados pelo comando',
+  changesFileHistoryExpand: 'Expandir histórico do arquivo',
+  changesFileHistoryCollapse: 'Recolher histórico do arquivo',
   changesFilterAll: 'Tudo',
   changesFilterEmpty: 'Nenhuma operação deste tipo',
   changesOpenDiffTab: 'Abrir em uma aba de diff',

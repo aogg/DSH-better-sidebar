@@ -262,6 +262,8 @@ export const id: Record<string, string> = {
   changesCommitFileCount: '{count} berkas',
   changesAddBadge: 'add',
   changesAddAllNote: 'Perintah ini men-stage semuanya (-A/.); berkasnya tidak dapat didaftar dari perintah',
+  changesFileHistoryExpand: 'Buka riwayat berkas',
+  changesFileHistoryCollapse: 'Tutup riwayat berkas',
   changesFilterAll: 'Semua',
   changesFilterEmpty: 'Tidak ada operasi jenis ini',
   changesOpenDiffTab: 'Buka di tab diff terpisah',

@@ -264,6 +264,8 @@ export const ja: Record<string, string> = {
   changesCommitFileCount: '{count} 個のファイル',
   changesAddBadge: 'add',
   changesAddAllNote: 'このコマンドはすべての変更をステージしました（-A/.）。ファイル一覧はコマンドから取得できません',
+  changesFileHistoryExpand: '変更履歴を展開',
+  changesFileHistoryCollapse: '変更履歴を折りたたむ',
   changesFilterAll: 'すべて',
   changesFilterEmpty: 'この種類の操作はありません',
   changesOpenDiffTab: '独立タブで開く',

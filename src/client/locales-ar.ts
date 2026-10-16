@@ -265,6 +265,8 @@ export const ar: Record<string, string> = {
   changesCommitFileCount: '{count} ملفات',
   changesAddBadge: 'add',
   changesAddAllNote: 'هذا الأمر أضاف كل التغييرات (-A/.); لا يمكن سرد ملفاته من الأمر',
+  changesFileHistoryExpand: 'توسيع سجل الملف',
+  changesFileHistoryCollapse: 'طي سجل الملف',
   changesFilterAll: 'الكل',
   changesFilterEmpty: 'لا توجد عمليات من هذا النوع',
   changesOpenDiffTab: 'فتح في تبويب diff منفصل',

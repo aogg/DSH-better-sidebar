@@ -264,6 +264,8 @@ export const vi: Record<string, string> = {
   changesCommitFileCount: '{count} tệp',
   changesAddBadge: 'add',
   changesAddAllNote: 'Lệnh này đã stage toàn bộ (-A/.); không thể liệt kê tệp từ lệnh',
+  changesFileHistoryExpand: 'Mở rộng lịch sử tệp',
+  changesFileHistoryCollapse: 'Thu gọn lịch sử tệp',
   changesFilterAll: 'Tất cả',
   changesFilterEmpty: 'Không có thao tác thuộc loại này',
   changesOpenDiffTab: 'Mở trong tab diff riêng',

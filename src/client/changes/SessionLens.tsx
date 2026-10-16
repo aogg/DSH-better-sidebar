@@ -1,13 +1,18 @@
 /**
  * The session lens of the changes tab: agent truth — every file the model
  * read, wrote, or edited in this session, grouped by file, newest first,
- * with kind filters. Clicking an op previews it in the tab's shared bottom
- * pane (see {@link DiffPane}): writes and edits as line diffs, reads as a
- * line-numbered content view, failures as their real error text. The ops
- * arrive pre-folded from the tab (which owns the event poll); this
- * component is purely presentational.
+ * with kind filters. Each file's op history is FOLDED by default: the header
+ * discloses it (chevron + `aria-expanded`), and the folded header carries the
+ * summary — how many ops the file has and how fresh the newest one is. A
+ * preview selection inside a folded group auto-expands it, so an op clicked
+ * elsewhere (or restored from the pane) is always visible. Clicking an op
+ * previews it in the tab's shared bottom pane (see {@link DiffPane}): writes
+ * and edits as line diffs, reads as a line-numbered content view, failures as
+ * their real error text. The ops arrive pre-folded from the tab (which owns
+ * the event poll); this component is purely presentational.
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { IconChevronRightOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import { relativeTime, t } from '../locales.ts'
 import { groupByFile, type FileOp, type FileOpKind } from './ops.ts'
 import { formatBytes } from '../diff/rows.ts'
@@ -33,6 +38,9 @@ export interface SessionLensProps {
 
 export function SessionLens({ ops, loadError, onPreview, selectedCallId }: SessionLensProps) {
   const [filter, setFilter] = useState<OpFilter>('all')
+  /** The files whose op history is EXPANDED (default: none — every group
+   *  folds to its header summary). */
+  const [expandedFiles, setExpandedFiles] = useState<ReadonlySet<string>>(() => new Set())
   const filteredOps = useMemo(
     () => (filter === 'all' ? ops : ops.filter(op => op.kind === filter)),
     [ops, filter],
@@ -58,6 +66,27 @@ export function SessionLens({ ops, loadError, onPreview, selectedCallId }: Sessi
     return sizes
   }, [ops])
 
+  // A preview selection must never hide inside a folded group: expand the
+  // group holding it (once — the guard keeps this effect loop-free).
+  useEffect(() => {
+    if (selectedCallId === null) return
+    for (const [path, fileOps] of groups) {
+      if (fileOps.some(op => op.callId === selectedCallId) && !expandedFiles.has(path)) {
+        setExpandedFiles(current => new Set(current).add(path))
+        return
+      }
+    }
+  }, [selectedCallId, groups, expandedFiles])
+
+  const toggleFile = (path: string): void => {
+    setExpandedFiles((current) => {
+      const next = new Set(current)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }
+
   return (
     <div className={css.session}>
       <div className={css.filterRow} role="group" aria-label={t('changesSessionLens')}>
@@ -79,34 +108,63 @@ export function SessionLens({ ops, loadError, onPreview, selectedCallId }: Sessi
         {loadError && <Notice kind="error" role="alert">{t('changesLoadError')}</Notice>}
         {ops.length === 0 && !loadError && <Notice kind="empty" tone="page">{t('changesSessionEmpty')}</Notice>}
         {ops.length > 0 && filteredOps.length === 0 && <Notice kind="empty" tone="page">{t('changesFilterEmpty')}</Notice>}
-        {[...groups.entries()].map(([path, fileOps]) => (
-          <div key={path} className={css.fileGroup}>
-            <div className={css.filePath} title={path}>{path}</div>
-            {fileOps.map(op => (
+        {[...groups.entries()].map(([path, fileOps], index) => {
+          const open = expandedFiles.has(path)
+          const newest = fileOps[0]
+          const opsId = `changes-file-ops-${String(index)}`
+          return (
+            <div key={path} className={css.fileGroup} data-file-group={path}>
               <button
                 type="button"
-                key={op.callId}
-                className={css.opRow}
-                data-op-kind={op.kind}
-                data-op-error={op.isError ? 'true' : undefined}
-                data-selected={selectedCallId === op.callId ? 'true' : undefined}
-                onClick={() => { onPreview(path, op) }}
+                className={css.filePathButton}
+                data-file-head={path}
+                aria-expanded={open}
+                aria-controls={opsId}
+                title={open ? t('changesFileHistoryCollapse') : t('changesFileHistoryExpand')}
+                onClick={() => { toggleFile(path) }}
               >
-                <StatusBadge tone={op.kind}>{t(KIND_LABEL[op.kind])}</StatusBadge>
-                {op.running && <span className={css.opFlag}>{t('changesRunning')}</span>}
-                {op.isError && <span className={css.opFlagError}>{t('changesError')}</span>}
-                <span className={css.opMeta}>
-                  {opSizes.get(op.callId) !== undefined && (
-                    <span className={css.opSize}>
-                      {opSizes.get(op.callId)}
-                    </span>
-                  )}
-                  <span className={css.opTime}>{relativeTime(new Date(op.time).toISOString())}</span>
+                <span className={css.chevron} data-open={open ? 'true' : undefined} aria-hidden="true">
+                  <IconChevronRightOutlineRegular size={12} />
                 </span>
+                <span className={css.filePathText}>{path}</span>
+                {!open && newest !== undefined && (
+                  <span className={css.fileHeadSummary}>
+                    <StatusBadge tone={newest.kind}>{t(KIND_LABEL[newest.kind])}</StatusBadge>
+                    <span className={css.opTime}>{relativeTime(new Date(newest.time).toISOString())}</span>
+                    <span className={css.countPill} data-op-count={fileOps.length}>{fileOps.length}</span>
+                  </span>
+                )}
               </button>
-            ))}
-          </div>
-        ))}
+              {open && (
+                <div className={css.fileOps} id={opsId} data-file-ops={path}>
+                  {fileOps.map(op => (
+                    <button
+                      type="button"
+                      key={op.callId}
+                      className={css.opRow}
+                      data-op-kind={op.kind}
+                      data-op-error={op.isError ? 'true' : undefined}
+                      data-selected={selectedCallId === op.callId ? 'true' : undefined}
+                      onClick={() => { onPreview(path, op) }}
+                    >
+                      <StatusBadge tone={op.kind}>{t(KIND_LABEL[op.kind])}</StatusBadge>
+                      {op.running && <span className={css.opFlag}>{t('changesRunning')}</span>}
+                      {op.isError && <span className={css.opFlagError}>{t('changesError')}</span>}
+                      <span className={css.opMeta}>
+                        {opSizes.get(op.callId) !== undefined && (
+                          <span className={css.opSize}>
+                            {opSizes.get(op.callId)}
+                          </span>
+                        )}
+                        <span className={css.opTime}>{relativeTime(new Date(op.time).toISOString())}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })}
       </div>
     </div>
   )

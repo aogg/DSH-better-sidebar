@@ -247,6 +247,8 @@ export const sv: Record<string, string> = {
   changesCommitFileCount: '{count} filer',
   changesAddBadge: 'add',
   changesAddAllNote: 'Detta kommando stagade allt (-A/.); dess filer kan inte listas från kommandot',
+  changesFileHistoryExpand: 'Utfälla filhistorik',
+  changesFileHistoryCollapse: 'Infälla filhistorik',
   changesFilterAll: 'Alla',
   changesFilterEmpty: 'Inga åtgärder av denna typ',
   changesOpenDiffTab: 'Öppna i egen diff-flik',

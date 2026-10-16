@@ -553,10 +553,18 @@
 .sessionList { flex: 1; min-height: 0; overflow-y: auto; padding: 0 6px 10px; }
 
 .fileGroup { margin-bottom: 6px; }
-/* The group label sits between op blocks: extra head padding separates it from
-   the previous file's rows, the first group starts flush. */
-.filePath { display: block; color: var(--dsw-alias-label-tertiary); font-family: var(--ds-font-family-code, monospace); font-size: 11px; padding: 6px 4px 2px; word-break: break-all; }
-.fileGroup:first-child .filePath { padding-top: 2px; }
+/* The group header is a disclosure BUTTON (the op history folds by default):
+   chevron + path, and — only while folded — the summary rung (op count + the
+   newest op's kind badge and relative time). */
+.filePathButton { display: flex; align-items: center; gap: 5px; width: 100%; border: none; border-radius: 4px; background: transparent; padding: 6px 4px 2px; color: var(--dsw-alias-label-tertiary); cursor: pointer; text-align: left; }
+.fileGroup:first-child .filePathButton { padding-top: 2px; }
+.filePathButton:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.filePathButton:focus-visible { outline: 2px solid var(--dsw-alias-interactive-bg-hover-accent); outline-offset: -1px; }
+.filePathText { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ds-font-family-code, monospace); font-size: 11px; }
+/* The folded summary rung: how many ops the history holds and how fresh the
+   newest one is — enough to decide whether expanding is worth it. */
+.fileHeadSummary { flex: none; display: inline-flex; align-items: center; gap: 6px; }
+.fileOps { display: flex; flex-direction: column; }
 
 .opRow { position: relative; display: flex; align-items: center; gap: 6px; width: 100%; min-height: 24px; border: 0; border-radius: 4px; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 11px; padding: 0 5px; cursor: pointer; text-align: left; }
 .opRow:hover { background: var(--dsw-alias-interactive-bg-hover); }

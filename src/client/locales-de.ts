@@ -250,6 +250,8 @@ export const de: Record<string, string> = {
   changesCommitFileCount: '{count} Dateien',
   changesAddBadge: 'add',
   changesAddAllNote: 'Dieser Befehl hat alle Änderungen gestaged (-A/.); seine Dateien lassen sich dem Befehl nicht entnehmen',
+  changesFileHistoryExpand: 'Dateiverlauf ausklappen',
+  changesFileHistoryCollapse: 'Dateiverlauf einklappen',
   changesFilterAll: 'Alle',
   changesFilterEmpty: 'Keine Vorgänge dieser Art',
   changesOpenDiffTab: 'In eigenem Tab öffnen',

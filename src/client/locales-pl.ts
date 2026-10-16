@@ -266,6 +266,8 @@ export const pl: Record<string, string> = {
   changesCommitFileCount: 'Pliki: {count}',
   changesAddBadge: 'add',
   changesAddAllNote: 'To polecenie wsłalo wszystko (-A/.); jego plików nie da się wypisać z polecenia',
+  changesFileHistoryExpand: 'Rozwiń historię pliku',
+  changesFileHistoryCollapse: 'Zwiń historię pliku',
   changesFilterAll: 'Wszystko',
   changesFilterEmpty: 'Brak operacji tego rodzaju',
   changesOpenDiffTab: 'Otwórz w osobnej karcie',

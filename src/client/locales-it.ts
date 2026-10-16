@@ -255,6 +255,8 @@ export const it: Record<string, string> = {
   changesCommitFileCount: '{count} file',
   changesAddBadge: 'add',
   changesAddAllNote: 'Questo comando ha messo in stage tutto (-A/.); i suoi file non sono elencabili dal comando',
+  changesFileHistoryExpand: 'Espandi cronologia del file',
+  changesFileHistoryCollapse: 'Comprimi cronologia del file',
   changesFilterAll: 'Tutti',
   changesFilterEmpty: 'Nessuna operazione di questo tipo',
   changesOpenDiffTab: 'Apri in una scheda diff',

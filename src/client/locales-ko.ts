@@ -256,6 +256,8 @@ export const ko: Record<string, string> = {
   changesCommitFileCount: '파일 {count}개',
   changesAddBadge: 'add',
   changesAddAllNote: '이 명령은 모든 변경을 스테이지했습니다(-A/.). 파일 목록은 명령에서 가져올 수 없습니다',
+  changesFileHistoryExpand: '파일 기록 펼치기',
+  changesFileHistoryCollapse: '파일 기록 접기',
   changesFilterAll: '모두',
   changesFilterEmpty: '이 종류의 작업이 없습니다',
   changesOpenDiffTab: '별도 탭에서 열기',

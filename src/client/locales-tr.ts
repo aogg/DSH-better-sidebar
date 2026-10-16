@@ -264,6 +264,8 @@ export const tr: Record<string, string> = {
   changesCommitFileCount: '{count} dosya',
   changesAddBadge: 'add',
   changesAddAllNote: 'Bu komut her şeyi staged aldı (-A/.); dosyaları komuttan listelenemez',
+  changesFileHistoryExpand: 'Dosya geçmişini aç',
+  changesFileHistoryCollapse: 'Dosya geçmişini kapat',
   changesFilterAll: 'Tümü',
   changesFilterEmpty: 'Bu türde işlem yok',
   changesOpenDiffTab: 'Ayrı bir diff sekmesinde aç',

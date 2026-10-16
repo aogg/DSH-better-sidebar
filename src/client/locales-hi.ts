@@ -264,6 +264,8 @@ export const hi: Record<string, string> = {
   changesCommitFileCount: '{count} फ़ाइलें',
   changesAddBadge: 'add',
   changesAddAllNote: 'इस कमांड ने सब कुछ स्टेज किया (-A/.); इसकी फ़ाइलें कमांड से सूचीबद्ध नहीं की जा सकतीं',
+  changesFileHistoryExpand: 'फ़ाइल इतिहास खोलें',
+  changesFileHistoryCollapse: 'फ़ाइल इतिहास बंद करें',
   changesFilterAll: 'सभी',
   changesFilterEmpty: 'इस प्रकार का कोई ऑपरेशन नहीं',
   changesOpenDiffTab: 'अलग diff टैब में खोलें',

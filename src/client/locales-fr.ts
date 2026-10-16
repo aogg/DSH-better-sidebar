@@ -257,6 +257,8 @@ export const fr: Record<string, string> = {
   changesCommitFileCount: '{count} fichiers',
   changesAddBadge: 'add',
   changesAddAllNote: 'Cette commande a tout stagé (-A/.); ses fichiers ne peuvent pas être listés à partir de la commande',
+  changesFileHistoryExpand: 'Déplier l'historique du fichier',
+  changesFileHistoryCollapse: 'Replier l'historique du fichier',
   changesFilterAll: 'Tout',
   changesFilterEmpty: 'Aucune opération de ce type',
   changesOpenDiffTab: 'Ouvrir dans un onglet diff',
