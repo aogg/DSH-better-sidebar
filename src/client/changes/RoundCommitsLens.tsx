@@ -181,7 +181,7 @@ export function RoundCommitsLens({ scope, visible, refreshTick = 0, adds, roundS
   const committedPaths = useMemo(() => {
     const set = new Set<string>()
     for (const entry of roundCommits) {
-      for (const file of filesOf(entry, lazyFiles)) set.add(file.path)
+      for (const file of filesOf(entry, lazyFiles) ?? []) set.add(file.path)
     }
     return set
   }, [roundCommits, lazyFiles])
@@ -201,7 +201,7 @@ export function RoundCommitsLens({ scope, visible, refreshTick = 0, adds, roundS
     const map = new Map<string, Set<string>>()
     for (const entry of roundCommits) {
       const matched = new Set<string>()
-      for (const file of filesOf(entry, lazyFiles)) {
+      for (const file of filesOf(entry, lazyFiles) ?? []) {
         for (const operand of addOperands) {
           if (addPathInCommit(operand.norm, file.path)) {
             matched.add(file.path)

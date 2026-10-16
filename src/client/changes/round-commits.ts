@@ -35,7 +35,7 @@ export interface GitAddRecord {
 }
 
 /** One file a commit touched (the lazy `gitCommitDiff` fallback parses these). */
-export interface CommitFile { readonly path: string; readonly status: string }
+export interface CommitFile { path: string; status: string }
 
 /** Parse one tool-call arguments JSON body defensively (see ops.ts's twin). */
 function parseArgs(argsRaw: string): Record<string, unknown> {
