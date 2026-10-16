@@ -162,8 +162,16 @@ describe('native tab registration lifecycle', () => {
       ctx: host.ctx as never, store, service, records, reportFailure: reports.report,
     })).not.toThrow()
     expect([...host.registry.registered.keys()], 'a failed registration leaves no type behind').toEqual([])
-    // Each of them is reported through the visible channel, not swallowed.
-    expect(reports.phases.sort()).toEqual(['register editor', 'register files', 'register git'])
+    // Each of them is reported through the visible channel, not swallowed —
+    // the tab-menu copy-row slot too: injected ahead of `sync()` in the same
+    // body, an inactive window fails it like any descriptor's slots, and the
+    // fix routes that failure through this same visible channel (pinned here).
+    expect(reports.phases.sort()).toEqual([
+      'register editor',
+      'register files',
+      'register git',
+      'register the tab-menu copy rows',
+    ])
 
     // The context comes back (the reload's next activation): the same ids must
     // be registrable — no "already registered" from the orphan. The event log

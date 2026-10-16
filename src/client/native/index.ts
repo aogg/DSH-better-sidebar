@@ -512,8 +512,12 @@ export function registerNativeSurface(deps: NativeSurfaceDeps): () => void {
     // in the column — a DSH-native `text` preview tab included — no matter
     // which tab type claimed the content. Non-file tabs render no rows (see
     // `tab-menu.tsx`), so one registration is all the menu ever needs.
-    // A failure releases the partial set and rethrows — the same rollback
-    // `registerSlots` gives the per-descriptor slots.
+    // A failure releases the partial set and is REPORTED, not rethrown: like
+    // the per-descriptor registrations in `sync()`, a slot injection on an
+    // inactive/reload window throws synchronously ("cannot create effect on
+    // inactive context") — the visible report channel keeps the rest of the
+    // surface up, and `ctx.inject` re-runs this body (retrying the
+    // registration) once the context recovers.
     const menuDisposers: Array<() => void> = []
     try {
       menuDisposers.push(ctx.slots.inject('sidebar.right.tab.menu.item', () => ctx.slots.register({
@@ -523,7 +527,7 @@ export function registerNativeSurface(deps: NativeSurfaceDeps): () => void {
       }, NativeTabMenuItems)))
     } catch (error) {
       for (const dispose of menuDisposers) disposeSafely(dispose, 'the native tab-menu copy rows')
-      throw error
+      reportFailure?.('register the tab-menu copy rows', error)
     }
 
     const disposeSubscriptions = [service.subscribe(sync), store.subscribe(sync)]
