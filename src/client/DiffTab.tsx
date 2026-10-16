@@ -26,7 +26,8 @@ export function DiffTab(props: { sessionId: string; cwd: string | undefined; dif
   const { loading, error, diffText, untracked, refresh, resolveFold } = useGitDiffTarget(diff, scope)
   // A commit patch on a phone opens every file folded (headers expand on
   // tap); desktop and worktree/untracked renders keep the existing defaults.
-  const narrowCommitDiff = diff.kind === 'commit' && isNarrowWidth(useViewportSize().width)
+  const viewport = useViewportSize()
+  const narrowCommitDiff = diff.kind === 'commit' && isNarrowWidth(viewport.width)
 
   return (
     <div className={css.gitDiffTab}>
