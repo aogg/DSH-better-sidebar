@@ -203,6 +203,41 @@ describe('RoundCommitsLens', () => {
     expect(files!.querySelector('[data-commit-file="src/lazy.ts"] [data-add-badge]')).not.toBeNull()
   })
 
+  it('keeps the per-commit file list collapsed by default on any viewport width (regression)', async () => {
+    const entry = logEntry({
+      hashFull: 'anynarrow'.padEnd(40, '0'),
+      subject: 'any viewport',
+      files: [{ path: 'src/a.ts', status: 'M' }],
+    })
+    vi.spyOn(api, 'gitLog').mockResolvedValue([entry])
+
+    // Phone width: the touched-file disclosure starts folded, and tapping
+    // the chevron still opens it.
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
+    const phone = await renderLens({ adds: [] })
+    try {
+      expect(phone.container.querySelector('[data-commit-files]')).toBeNull()
+      const chevron = chevronOf(phone.container, entry.hashFull)
+      await act(async () => { chevron!.click() })
+      await act(async () => { await Promise.resolve() })
+      expect(phone.container.querySelector('[data-commit-files]')).not.toBeNull()
+    } finally {
+      act(() => { phone.root.unmount() })
+      phone.container.remove()
+    }
+
+    // Desktop width: identical default — the collapse default is deliberately
+    // viewport-independent.
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 })
+    const desktop = await renderLens({ adds: [] })
+    try {
+      expect(desktop.container.querySelector('[data-commit-files]')).toBeNull()
+    } finally {
+      act(() => { desktop.root.unmount() })
+      desktop.container.remove()
+    }
+  })
+
   it('reports a log failure and a non-repository workspace instead of an empty round', async () => {
     vi.spyOn(api, 'gitLog').mockRejectedValue(new Error('bad object'))
     const failed = await renderLens({ adds: [] })

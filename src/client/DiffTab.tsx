@@ -14,6 +14,7 @@ import { useMemo } from 'react'
 import { IconRefreshOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SessionScope } from './api.ts'
 import type { SidebarDiffRef } from './state.ts'
+import { isNarrowWidth, useViewportSize } from './breakpoints.ts'
 import { DiffFiles } from './diff/DiffFiles.tsx'
 import { useGitDiffTarget } from './diff/use-git-diff.ts'
 import { t } from './locales.ts'
@@ -23,6 +24,9 @@ export function DiffTab(props: { sessionId: string; cwd: string | undefined; dif
   const { sessionId, cwd, diff } = props
   const scope = useMemo<SessionScope>(() => ({ sessionId, cwd }), [sessionId, cwd])
   const { loading, error, diffText, untracked, refresh, resolveFold } = useGitDiffTarget(diff, scope)
+  // A commit patch on a phone opens every file folded (headers expand on
+  // tap); desktop and worktree/untracked renders keep the existing defaults.
+  const narrowCommitDiff = diff.kind === 'commit' && isNarrowWidth(useViewportSize().width)
 
   return (
     <div className={css.gitDiffTab}>
@@ -46,7 +50,7 @@ export function DiffTab(props: { sessionId: string; cwd: string | undefined; dif
         <>
           {untracked !== undefined
             ? <DiffFiles diff="" untrackedPath={diff.kind === 'worktree' ? diff.path : ''} untrackedContent={untracked} />
-            : <DiffFiles diff={diffText} resolveFold={resolveFold} />}
+            : <DiffFiles diff={diffText} resolveFold={resolveFold} allCollapsedByDefault={narrowCommitDiff} />}
           {diffText === '' && untracked === undefined && (
             <div className={css.gitEmpty}>{t('diffEmpty')}</div>
           )}

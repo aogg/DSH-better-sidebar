@@ -20,6 +20,7 @@ import { resolveSidebarPath } from '../paths.ts'
 import { HTML_IFRAME_SANDBOX } from '../html-preview.ts'
 import type { SidebarDiffRef, SidebarTab } from '../state.ts'
 import { DiffRows, ReadRows } from '../diff/DiffRows.tsx'
+import { isNarrowWidth, useViewportSize } from '../breakpoints.ts'
 import { PdfView } from '../PdfView.tsx'
 import { DiffFiles } from '../diff/DiffFiles.tsx'
 import { langOfPath } from '../diff/highlight.ts'
@@ -181,6 +182,13 @@ export function DiffPane({ target, ctx, scope, height, onHeightCommit, onClose, 
   //    untracked full-addition fallback, refresh by tick, fold cache). ─────
   const gitRef = target.kind === 'git' ? target.ref : null
   const { loading, error, diffText, untracked, refresh, resolveFold } = useGitDiffTarget(gitRef, scope)
+
+  // Mobile narrow viewports open a COMMIT patch with every file folded (a
+  // diff wall of open source files is unreadable on a phone); desktop keeps
+  // the source-open defaults. Worktree diffs and session-op previews are
+  // unaffected on either side of the breakpoint.
+  const viewport = useViewportSize()
+  const narrowCommitDiff = target.kind === 'git' && target.ref.kind === 'commit' && isNarrowWidth(viewport.width)
 
   // ── Op target material (pure snapshots; the prior content came with the
   //    target so a running op shows what is already known). ────────────────
@@ -477,6 +485,7 @@ export function DiffPane({ target, ctx, scope, height, onHeightCommit, onClose, 
                       <DiffFiles
                         diff={diffText ?? ''}
                         resolveFold={resolveFold}
+                        allCollapsedByDefault={narrowCommitDiff}
                         untrackedPath={untracked !== undefined && target.ref.kind === 'worktree' ? target.ref.path : undefined}
                         untrackedContent={untracked}
                       />

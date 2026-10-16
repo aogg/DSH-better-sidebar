@@ -4,6 +4,9 @@
  * / docs / generated files stay folded — each expanded file rendering through
  * the shared {@link DiffRows} (so git diffs get the same rewrite tinting,
  * intra-line highlights, syntax colors and hunk folds as session-op diffs).
+ * A narrow-viewport caller (a commit patch on a phone) passes
+ * `allCollapsedByDefault` to flip the default: every file starts folded and
+ * the reader expands headers one by one instead of facing a diff wall.
  * Untracked files produce no `git diff` output; the caller passes their
  * content to render as a full-file addition instead.
  */
@@ -34,6 +37,13 @@ function defaultExpandedFiles(files: readonly DiffFile[]): Set<number> {
   return expanded
 }
 
+/** The default expanded set for one parsed document: everything folded when
+ *  the caller asked for the narrow-viewport presentation (each header opens
+ *  on tap), otherwise the source-open {@link defaultExpandedFiles} defaults. */
+function expandedFilesDefault(files: readonly DiffFile[], allCollapsed: boolean): Set<number> {
+  return allCollapsed ? new Set<number>() : defaultExpandedFiles(files)
+}
+
 /** The file header badge: added / deleted / renamed / binary ('' for a plain edit). */
 function fileTag(file: DiffFile): string | null {
   if (file.binary) return t('diffBinary')
@@ -56,17 +66,22 @@ export interface DiffFilesProps {
    *  folds without `rows` stay non-expandable (session-op diffs and
    *  untracked additions always carry theirs). */
   resolveFold?: (file: DiffFile, segment: FoldSegment) => Promise<readonly DiffRow[]>
+  /** Narrow-viewport (commit-patch) mode: EVERY file section starts folded,
+   *  headers expand on tap. The flag participates in the parsed-document
+   *  reset, so crossing the breakpoint rebuilds the defaults (manual
+   *  expand/collapse states survive only while both stay unchanged). */
+  allCollapsedByDefault?: boolean
 }
 
-export function DiffFiles({ diff, untrackedPath, untrackedContent, resolveFold }: DiffFilesProps) {
+export function DiffFiles({ diff, untrackedPath, untrackedContent, resolveFold, allCollapsedByDefault = false }: DiffFilesProps) {
   const parsed = useMemo(() => {
     if (untrackedPath !== undefined) {
       return { files: [untrackedFile(untrackedPath, untrackedContent ?? '')] }
     }
     return parseUnifiedDiff(diff)
   }, [diff, untrackedPath, untrackedContent])
-  const [expandedFiles, setExpandedFiles] = useState<Set<number>>(() => defaultExpandedFiles(parsed.files))
-  useEffect(() => { setExpandedFiles(defaultExpandedFiles(parsed.files)) }, [parsed])
+  const [expandedFiles, setExpandedFiles] = useState<Set<number>>(() => expandedFilesDefault(parsed.files, allCollapsedByDefault))
+  useEffect(() => { setExpandedFiles(expandedFilesDefault(parsed.files, allCollapsedByDefault)) }, [parsed, allCollapsedByDefault])
 
   // One in-flight/resolved promise per file+fold key, so a fold re-clicked
   // after a remount (file header collapsed and re-expanded) resolves without
