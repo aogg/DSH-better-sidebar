@@ -145,17 +145,25 @@ export function apply(ctx: Context): void {
   // chain tails — worst case (no skin tokens on the page) it renders
   // byte-identical to the old hardcoded bar, and any `--dsw-alias-*` skin
   // re-themes it (guide §12: no hardcoded colors).
+  // One strip per phase: while a strip for this phase is still on screen, a
+  // repeat report (the `ctx.inject` retry pulse re-firing the same failing
+  // registration) rewrites its text instead of stacking another strip.
+  const failureBars = new Map<string, HTMLDivElement>()
   const fail = (phase: string, error: unknown): void => {
     console.error(`[dsh-better-sidebar] ${phase} error:`, error)
     try {
-      const bar = document.createElement('div')
+      const known = failureBars.get(phase)
+      const bar = known !== undefined && known.isConnected ? known : document.createElement('div')
       bar.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:2147483000;max-width:70vw;padding:8px 12px;'
         + 'font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;'
         + 'color:var(--dsw-alias-state-error-primary,#f2a1a1);'
         + 'background:var(--dsw-alias-bg-layer-3,var(--dsw-alias-bg-base,#1b1b22));'
         + 'border:1px solid var(--dsw-alias-state-error-primary,#f2a1a1);border-radius:8px;white-space:pre-wrap'
       bar.textContent = `[dsh-better-sidebar] ${phase} error: ${error instanceof Error ? error.message : String(error)}`
-      document.body.appendChild(bar)
+      if (bar !== known) {
+        document.body.appendChild(bar)
+        failureBars.set(phase, bar)
+      }
     } catch {
       // Nothing left to report with.
     }

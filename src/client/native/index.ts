@@ -507,7 +507,7 @@ export function registerNativeSurface(deps: NativeSurfaceDeps): () => void {
     // activation — deliberately NOT a descriptor registration and never in
     // `live`: the slot is declared by the host's sidebar-right package
     // itself (`kind: "list"`, so any number of implementations coexist and
-    // this key cannot collide; `scope: "session"`, so the framework hands
+    // this id cannot collide; `scope: "session"`, so the framework hands
     // the seat session id to `inject`), and it serves EVERY file-address tab
     // in the column — a DSH-native `text` preview tab included — no matter
     // which tab type claimed the content. Non-file tabs render no rows (see
@@ -522,7 +522,7 @@ export function registerNativeSurface(deps: NativeSurfaceDeps): () => void {
     try {
       menuDisposers.push(ctx.slots.inject('sidebar.right.tab.menu.item', () => ctx.slots.register({
         name: 'sidebar.right.tab.menu.item',
-        key: 'better-sidebar-copy-path',
+        id: 'better-sidebar-copy-path',
         inject: (sessionId: string) => ({ ctx, store, sessionId }),
       }, NativeTabMenuItems)))
     } catch (error) {
