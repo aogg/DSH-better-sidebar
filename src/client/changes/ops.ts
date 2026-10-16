@@ -37,7 +37,7 @@ export interface FileOp {
 /** Tool names mapped to each op kind; unknown names are ignored. */
 const READ_TOOLS = new Set(['read', 'view', 'see'])
 const WRITE_TOOLS = new Set(['write', 'create'])
-const EDIT_TOOLS = new Set(['edit', 'str_replace', 'str-replace-editor', 'multi-edit'])
+const EDIT_TOOLS = new Set(['edit', 'str_replace', 'str-replace-editor', 'str_replace_editor', 'multi-edit'])
 
 /** Classify one tool name; undefined when the tool touches no file. */
 function kindOf(name: string): FileOpKind | undefined {
