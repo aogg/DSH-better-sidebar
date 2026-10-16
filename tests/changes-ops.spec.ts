@@ -3,15 +3,26 @@
  * directory tree the Git lens renders its groups through, and a sanity pass
  * over the shared diff/highlight engines (their full behavior suites live in
  * the standalone dsh-file-trace plugin).
+ *
+ * The parentSession subtree merge (src/changes-subtree.ts + the `changes.ops`
+ * route's subtree branch) lives here too: the pure walk/merge helpers, and the
+ * route's mode selection over a mounted fake context — the untouched
+ * single-log contract for a childless root on a plain cursor, the time-scaled
+ * merge across the subtree otherwise. The route cases ride the smoke spec's
+ * mounted-API harness pattern (apply() + one POST through the registered
+ * /sidebar/api route), narrowed to the faces changes.ops touches.
  */
 import { describe, expect, it } from 'vitest'
 import { createToolResultMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import { extractFileOps, groupByFile, knownContentBefore, parseReadContent, parseReadLines } from '../src/client/changes/ops.ts'
 import { buildChangeTree, type ChangeNode } from '../src/client/changes/change-tree.ts'
+import { collectSubtreeIds, mergeSubtreeEvents } from '../src/changes-subtree.ts'
+import type { StoredSessionHeaderLike, SubtreeEventPart } from '../src/changes-subtree.ts'
+import { apply } from '../src/index.ts'
 import { diffLines, buildDiffSegments, coalesceInline, diffInline } from '../src/client/diff/rows.ts'
 import { langOfPath, scanLine } from '../src/client/diff/highlight.ts'
 import type { GitStatusEntry } from '../src/client/api.ts'
-import type { SidebarSessionEvent } from '../src/context-types.ts'
+import type { SidebarSessionEvent, SidebarWebRoute, SidebarWebUpgradeRoute } from '../src/context-types.ts'
 
 /** One synthetic session event. */
 function ev(type: string, seq: number, time: number, data: Record<string, unknown>): SidebarSessionEvent {
@@ -140,6 +151,18 @@ describe('extractFileOps', () => {
     ])
     expect(ops.find(op => op.kind === 'write')?.content).toBe('legacy write detail')
     expect(ops.find(op => op.kind === 'read')?.errorText).toBe('cannot read "b": not found')
+  })
+
+  it('classifies str_replace_editor as an edit and carries its replacement payload', () => {
+    // Named-list membership only — the other members keep their own coverage.
+    const ops = extractFileOps([
+      call(1, 'str_replace_editor', 'sre', { file_path: 'a.ts', old_string: 'x', new_string: 'y' }),
+      result(2, 'sre', 'ok'),
+    ])
+    const op = ops.find(candidate => candidate.callId === 'sre')
+    expect(op?.kind).toBe('edit')
+    expect(op?.edit).toEqual({ oldString: 'x', newString: 'y' })
+    expect(op?.running).toBe(false)
   })
 
   it('groups by file newest-first and recovers prior write content', () => {
@@ -316,5 +339,379 @@ describe('ported diff/highlight engines (sanity)', () => {
     expect(code.tokens).toContainEqual({ text: 'int', type: 'keyword' })
     expect(code.tokens).toContainEqual({ text: '42', type: 'number' })
     expect(code.tokens).toContainEqual({ text: '// done', type: 'comment' })
+  })
+})
+
+// ── parentSession subtree merge (src/changes-subtree.ts) ────────────────────
+
+/** A stored session row as the wire carries it, unchecked on purpose — the
+ *  walk must defend itself against host-shaped garbage. */
+const rawRow = (header: unknown): StoredSessionHeaderLike => ({ header }) as StoredSessionHeaderLike
+
+/** One subtree member as mergeSubtreeEvents consumes it. */
+const part = (id: string, isRoot: boolean, events: readonly SidebarSessionEvent[]): SubtreeEventPart =>
+  ({ id, isRoot, events })
+
+/** The tool-call id one window event carries, under both wire shapes: a
+ *  `tool/call` keeps it at data.callId, a `tool/result` inside its message
+ *  envelope (data.message.source.callId). '' when neither is present. */
+const windowCallId = (event: SidebarSessionEvent): string => {
+  const data = event.data as { callId?: unknown; message?: { source?: { callId?: unknown } } }
+  if (typeof data.callId === 'string') return data.callId
+  return typeof data.message?.source?.callId === 'string' ? data.message.source.callId : ''
+}
+
+describe('collectSubtreeIds (the parentSession subtree walk)', () => {
+  it('degrades to the root alone when the header list is missing or empty', () => {
+    expect(collectSubtreeIds(undefined, 'root')).toEqual(['root'])
+    expect(collectSubtreeIds([], 'root')).toEqual(['root'])
+  })
+
+  it('follows parentSession transitively: root → child → grandchild, root first', () => {
+    const headers = [
+      rawRow({ id: 'grandchild', parentSession: 'child' }),
+      rawRow({ id: 'child', parentSession: 'root' }),
+      rawRow({ id: 'root' }),
+      // Another tree entirely: never reaches the root's subtree.
+      rawRow({ id: 'other', parentSession: 'unrelated' }),
+    ]
+    expect(collectSubtreeIds(headers, 'root')).toEqual(['root', 'child', 'grandchild'])
+  })
+
+  it('ignores rows whose id or parentSession is not a usable non-empty string', () => {
+    const headers = [
+      rawRow({ id: 'root' }),
+      rawRow({ id: 42, parentSession: 'root' }), // numeric id: not an edge
+      rawRow({ id: 'kid', parentSession: 7 }), // numeric parent: not an edge
+      rawRow({ id: 'kid2', parentSession: '' }), // empty parent: not an edge
+      rawRow({ parentSession: 'root' }), // no id at all
+      rawRow(null), // no header object
+      rawRow(undefined),
+      {}, // not even a header field
+      // The one usable edge still attaches among the garbage.
+      rawRow({ id: 'kid3', parentSession: 'root' }),
+    ]
+    expect(collectSubtreeIds(headers, 'root')).toEqual(['root', 'kid3'])
+  })
+
+  it('survives a pathological parent/child cycle, visiting each node once', () => {
+    const headers = [
+      rawRow({ id: 'a', parentSession: 'b' }),
+      rawRow({ id: 'b', parentSession: 'a' }),
+    ]
+    expect(collectSubtreeIds(headers, 'a')).toEqual(['a', 'b'])
+    // A self-parent row cannot loop either.
+    expect(collectSubtreeIds([rawRow({ id: 'a', parentSession: 'a' })], 'a')).toEqual(['a'])
+  })
+})
+
+describe('mergeSubtreeEvents (the merged subtree window)', () => {
+  it('renumbers seq to the event time; a row without a usable time keeps its seq', () => {
+    const { events } = mergeSubtreeEvents(
+      [part('s', true, [
+        call(0, 'write', 'w', { file_path: 'a.ts' }, 5000),
+        result(1, 'w', 'ok', false, 6000),
+        // Wire garbage: no `time` field at all — the original seq stands in.
+        { type: 'tool/call', seq: 7, time: undefined, data: { name: 'read', callId: 'r', arguments: '{}' } } as unknown as SidebarSessionEvent,
+      ])],
+      undefined,
+    )
+    // The seq-fallback row (a small local counter) sorts below the epoch-ms
+    // rows — a best-effort order, but the row is kept, not dropped.
+    expect(events.map(event => event.seq)).toEqual([7, 5000, 6000])
+    expect(events.map(event => windowCallId(event))).toEqual(['r', 'w', 'w'])
+  })
+
+  it('breaks a same-millisecond tie by original seq: the call sorts before its result', () => {
+    // The result is logged AFTER the call (higher original seq); with both
+    // rows renumbered to the same millisecond, that original order is the
+    // only thing keeping the call ahead of its result.
+    const single = mergeSubtreeEvents(
+      [part('s', true, [
+        result(2, 'w', 'ok', false, 5000),
+        call(1, 'write', 'w', { file_path: 'a.ts' }, 5000),
+      ])],
+      undefined,
+    )
+    expect(single.events.map(event => [event.type, event.seq])).toEqual([['tool/call', 5000], ['tool/result', 5000]])
+    // Same tie, ACROSS parts: the lower original seq (here the child's row)
+    // wins regardless of which session listed first.
+    const cross = mergeSubtreeEvents([
+      part('root', true, [result(5, 'w', 'ok', false, 5000)]),
+      part('child', false, [call(0, 'write', 'w', { file_path: 'a.ts' }, 5000)]),
+    ], undefined)
+    expect(cross.events.map(event => event.type)).toEqual(['tool/call', 'tool/result'])
+  })
+
+  it('keeps the boundary event: the afterSeq cut is closed (seq >= afterSeq)', () => {
+    const events = [
+      call(0, 'write', 'w', { file_path: 'a.ts' }, 1000),
+      result(1, 'w', 'ok', false, 2000),
+    ]
+    // A strict `>` would drop the 2000 result forever once the client echoes
+    // lastSeq back — the exact loss the closed bound exists to prevent.
+    expect(mergeSubtreeEvents([part('s', true, events)], 2000).events.map(event => [event.type, event.seq]))
+      .toEqual([['tool/result', 2000]])
+    expect(mergeSubtreeEvents([part('s', true, events)], 1000).events.map(event => event.seq))
+      .toEqual([1000, 2000])
+  })
+
+  it('ships only tool/call and tool/result rows', () => {
+    const events: SidebarSessionEvent[] = [
+      ev(0, 'user/message', 10, { text: 'go' }),
+      call(1, 'write', 'w', { file_path: 'a.ts' }, 20),
+      ev(2, 'assistant/message', 30, {}),
+      result(3, 'w', 'ok', false, 40),
+      ev(4, 'turn/end', 50, {}),
+    ]
+    expect(mergeSubtreeEvents([part('s', true, events)], undefined).events.map(event => event.seq))
+      .toEqual([20, 40])
+  })
+
+  it('caps the window at the newest 4000 events', () => {
+    const events = Array.from({ length: 4010 }, (_, index) => call(index, 'write', `w${index}`, { file_path: 'a.ts' }, index + 1))
+    const merged = mergeSubtreeEvents([part('s', true, events)], undefined)
+    expect(merged.events).toHaveLength(4000)
+    expect(merged.events[0]!.seq).toBe(11) // times 11..4010 survive the tail cap
+    expect(merged.lastSeq).toBe(4010)
+  })
+
+  it('answers with merged:true, the newest renumbered seq as lastSeq, or the cursor for an empty window', () => {
+    expect(mergeSubtreeEvents([part('s', true, [call(0, 'write', 'w', { file_path: 'a.ts' }, 100)])], 5000))
+      .toEqual({ events: [], lastSeq: 5000, merged: true })
+    expect(mergeSubtreeEvents([], undefined))
+      .toEqual({ events: [], lastSeq: -1, merged: true })
+    expect(mergeSubtreeEvents([part('s', true, [result(1, 'w', 'ok', false, 200)])], undefined))
+      .toEqual({ events: [expect.objectContaining({ seq: 200 })], lastSeq: 200, merged: true })
+  })
+})
+
+describe('changes.ops route (subtree merge over the mounted API)', () => {
+  /** Explicit epoch-ms constants: the merged window's cursor is event time. */
+  const T0 = 1_700_000_000_000
+  /** A cursor beyond the route's 1e12 "time scale" mark. */
+  const T_BIG = 1_700_000_100_000
+
+  interface MountOptions {
+    /** id → live session log (`ctx.sessions.get(id)` finds these). */
+    live?: Record<string, readonly SidebarSessionEvent[]>
+    /** id → stored log served by the fake `sessionPersistence.open(id, 'read')`. */
+    stored?: Record<string, readonly SidebarSessionEvent[]>
+    /** ids whose stored handle cannot even be opened (a corrupt log). */
+    brokenOpen?: readonly string[]
+    /** The fake `persistence.list()`; undefined removes the capability entirely. */
+    list?: () => unknown
+  }
+
+  /** Mount the plugin against a minimal fake context (the smoke-spec harness,
+   *  narrowed to the faces changes.ops touches) and return /sidebar/api. */
+  function mountChangesApi(options: MountOptions = {}): SidebarWebRoute {
+    const routes: SidebarWebRoute[] = []
+    const live = options.live ?? {}
+    const persistence = {
+      ...(options.list === undefined ? {} : { list: options.list }),
+      open: async (id: string, _access: string) => {
+        if (options.brokenOpen?.includes(id)) throw new Error(`stored log unreadable: ${id}`)
+        const events = options.stored?.[id]
+        if (events === undefined) throw new Error(`no stored session: ${id}`)
+        return {
+          header: { id } as Record<string, unknown>,
+          inheritedEventCount: 0,
+          read: async () => ({ events }),
+          close: async () => {},
+        }
+      },
+    }
+    const ctx = {
+      webRuntime: { trustedHosts: [] },
+      webServer: {
+        register: (route: SidebarWebRoute) => { routes.push(route); return () => {} },
+        registerUpgrade: (_route: SidebarWebUpgradeRoute) => { void _route; return () => {} },
+      },
+      sessions: {
+        get: (id: string) => {
+          const log = live[id]
+          // The SAME array every call: an in-place seq rewrite by the merge
+          // would corrupt the session's own log, and this harness would see it.
+          return log === undefined ? undefined : { header: {}, snapshotEvents: () => log }
+        },
+      },
+      tools: { register: () => () => {} },
+      // The vendored cordis runs registration effects immediately.
+      effect: (fn: () => void | (() => void)) => { fn() },
+      // No settings service: the namespace registration never runs.
+      inject: () => () => {},
+      // The session/agent event feeds: nothing emits in these tests.
+      on: () => () => {},
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      get: (key: string) => (key === 'sessionPersistence' ? persistence : undefined),
+    }
+    apply(ctx as never)
+    const route = routes.find(entry => entry.path === '/sidebar/api')
+    if (route === undefined) throw new Error('the /sidebar/api route was not registered')
+    return route
+  }
+
+  /** One POST /sidebar/api/changes.ops through the mounted route. */
+  async function invokeOps(route: SidebarWebRoute, payload: Record<string, unknown>): Promise<{
+    ok: boolean
+    value?: { events: SidebarSessionEvent[]; lastSeq: number }
+    error?: { code?: string; message?: string }
+  }> {
+    const body = Buffer.from(JSON.stringify(payload))
+    const req = {
+      method: 'POST',
+      url: '/sidebar/api/changes.ops',
+      headers: { host: '127.0.0.1:3080' },
+      [Symbol.asyncIterator]: async function* () { yield body },
+    } as never
+    const out = { status: 200, body: '' }
+    const res = {
+      writeHead: (status: number) => { out.status = status },
+      end: (chunk: unknown) => { out.body += String(chunk ?? '') },
+    } as never
+    await route.handler(req, res)
+    return JSON.parse(out.body) as { ok: boolean; value?: { events: SidebarSessionEvent[]; lastSeq: number }; error?: { code?: string; message?: string } }
+  }
+
+  /** The window events are identified by their tool-call id. */
+  const callIdOf = windowCallId
+
+  it('answers a childless root with the untouched single-log contract (zero-regression pin)', async () => {
+    const log = [
+      ev(1, 'user/message', T0 - 10, { text: 'go' }),
+      call(2, 'write', 'w1', { file_path: 'a.ts', content: 'one' }, T0),
+      result(3, 'w1', 'ok', false, T0 + 1),
+      call(4, 'read', 'r1', { file_path: 'b.ts' }, T0 + 2),
+      result(5, 'r1', 'file body', false, T0 + 3),
+    ]
+    const route = mountChangesApi({ live: { root: log }, list: () => [{ header: { id: 'root' } }] })
+    // Delta from cursor 3: ORIGINAL seqs, strictly greater — the boundary row
+    // (seq 3) stays out, and no `merged` key appears on the wire.
+    const reply = await invokeOps(route, { sessionId: 'root', afterSeq: 3 })
+    expect(reply.ok).toBe(true)
+    expect(reply.value).toEqual({ events: [log[3], log[4]], lastSeq: 5 })
+    // An exhausted log answers lastSeq = the echoed cursor (the old contract).
+    await expect(invokeOps(route, { sessionId: 'root', afterSeq: 5 }))
+      .resolves.toEqual({ ok: true, value: { events: [], lastSeq: 5 } })
+  })
+
+  it('folds a child session into one time-ordered window (seq renumbered to time)', async () => {
+    const rootLog = [
+      call(1, 'write', 'root-w', { file_path: 'a.ts', content: 'root' }, T0),
+      result(2, 'root-w', 'ok', false, T0 + 1),
+    ]
+    const childLog = [
+      call(0, 'write', 'child-w', { file_path: 'b.ts', content: 'child' }, T0 + 10),
+      result(1, 'child-w', 'ok', false, T0 + 11),
+    ]
+    const route = mountChangesApi({
+      live: { root: rootLog },
+      stored: { child: childLog },
+      list: () => [
+        { header: { id: 'root' } },
+        { header: { id: 'child', parentSession: 'root', origin: 'subagent' } },
+      ],
+    })
+    const reply = await invokeOps(route, { sessionId: 'root' })
+    expect(reply.ok).toBe(true)
+    // The child's writes ride the same window, renumbered seq := time, in
+    // wall-clock order after the root's own rows.
+    expect(reply.value?.events.map(event => [event.seq, callIdOf(event)])).toEqual([
+      [T0, 'root-w'], [T0 + 1, 'root-w'], [T0 + 10, 'child-w'], [T0 + 11, 'child-w'],
+    ])
+    expect(reply.value?.lastSeq).toBe(T0 + 11)
+    // The renumber COPIED, never mutated, the live log's own rows.
+    expect(rootLog.map(event => event.seq)).toEqual([1, 2])
+  })
+
+  it('reaches a grandchild through the transitive parentSession walk', async () => {
+    const route = mountChangesApi({
+      live: { root: [call(1, 'write', 'root-w', { file_path: 'a.ts' }, T0)] },
+      stored: {
+        child: [],
+        grandchild: [
+          call(0, 'write', 'gc-w', { file_path: 'c.ts' }, T0 + 20),
+          result(1, 'gc-w', 'ok', false, T0 + 21),
+        ],
+      },
+      list: () => [
+        { header: { id: 'root' } },
+        { header: { id: 'child', parentSession: 'root' } },
+        { header: { id: 'grandchild', parentSession: 'child' } },
+      ],
+    })
+    const reply = await invokeOps(route, { sessionId: 'root' })
+    expect(reply.ok).toBe(true)
+    expect(reply.value?.events.map(event => callIdOf(event))).toEqual(['root-w', 'gc-w', 'gc-w'])
+    expect(reply.value?.lastSeq).toBe(T0 + 21)
+  })
+
+  it('skips a child whose stored log cannot be opened, without failing the poll', async () => {
+    const route = mountChangesApi({
+      live: { root: [call(1, 'write', 'root-w', { file_path: 'a.ts' }, T0)] },
+      stored: { good: [call(0, 'write', 'good-w', { file_path: 'b.ts' }, T0 + 10)] },
+      brokenOpen: ['bad'],
+      list: () => [
+        { header: { id: 'root' } },
+        { header: { id: 'bad', parentSession: 'root' } },
+        { header: { id: 'good', parentSession: 'root' } },
+      ],
+    })
+    const reply = await invokeOps(route, { sessionId: 'root' })
+    expect(reply.ok).toBe(true)
+    expect(reply.value?.events.map(event => callIdOf(event))).toEqual(['root-w', 'good-w'])
+    expect(reply.value?.lastSeq).toBe(T0 + 10)
+  })
+
+  it('falls back to the root session alone when persistence.list throws', async () => {
+    const rootLog = [
+      call(1, 'write', 'root-1', { file_path: 'a.ts' }, T0),
+      call(2, 'write', 'root-2', { file_path: 'b.ts' }, T0 + 1),
+    ]
+    const route = mountChangesApi({
+      live: { root: rootLog },
+      // A readable child that the fallback must NOT reach.
+      stored: { child: [call(0, 'write', 'child-w', { file_path: 'c.ts' }, T0 + 10)] },
+      list: () => { throw new Error('header store down') },
+    })
+    const reply = await invokeOps(route, { sessionId: 'root', afterSeq: 1 })
+    expect(reply.ok).toBe(true)
+    // The single-log path answers: original seq, strict >, no child rows.
+    expect(reply.value).toEqual({ events: [rootLog[1]], lastSeq: 2 })
+  })
+
+  it('keeps a single node on the merged time filter once the cursor passes 1e12', async () => {
+    const log = [
+      ev(0, 'user/message', T_BIG - 20, { text: 'go' }),
+      call(1, 'write', 'old-w', { file_path: 'old.ts' }, T_BIG - 10),
+      call(2, 'write', 'new-w', { file_path: 'new.ts' }, T_BIG + 5),
+      result(3, 'new-w', 'ok', false, T_BIG + 6),
+    ]
+    // No `list` on the persistence at all — the feature-detect keeps the root
+    // alone, and the huge cursor flips that single node onto the time scale.
+    const route = mountChangesApi({ live: { root: log } })
+    const reply = await invokeOps(route, { sessionId: 'root', afterSeq: T_BIG })
+    expect(reply.ok).toBe(true)
+    // The seq counter (1..3) sits far below the cursor: only the TIME filter
+    // can surface these rows, renumbered to their wall-clock times.
+    expect(reply.value?.events.map(event => [event.seq, callIdOf(event)])).toEqual([
+      [T_BIG + 5, 'new-w'], [T_BIG + 6, 'new-w'],
+    ])
+    expect(reply.value?.lastSeq).toBe(T_BIG + 6)
+  })
+
+  it('answers an unreadable root with an empty window and lastSeq = max(afterSeq, 0)', async () => {
+    const route = mountChangesApi({
+      // Nothing live; the stored side has the child but no root row to open.
+      stored: { child: [call(0, 'write', 'child-w', { file_path: 'b.ts' }, T0 + 10)] },
+      list: () => [
+        { header: { id: 'root' } },
+        { header: { id: 'child', parentSession: 'root' } },
+      ],
+    })
+    const reply = await invokeOps(route, { sessionId: 'root', afterSeq: 7 })
+    expect(reply.ok).toBe(true)
+    expect(reply.value).toEqual({ events: [], lastSeq: 7 })
   })
 })
