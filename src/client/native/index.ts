@@ -342,7 +342,11 @@ export function registerNativeSurface(deps: NativeSurfaceDeps): () => void {
         // them on a repeat open. What `multiple` takes away — the host's
         // fallback dedupe — the service replaces plugin-side (see
         // `service.openTab`'s native branch and the surface's `dedupeKey`).
-        multiple: descriptor.createTab !== undefined,
+        // Minting kinds carry `multiple: true`; page kinds OMIT the field —
+        // omission is the host's documented single-page face ("omission keeps
+        // one page per kind in each pane"), and only `=== true` mints, so the
+        // absent field is the exact contract the registration test pins.
+        ...(descriptor.createTab === undefined ? {} : { multiple: true }),
         // 0.1.7: the host keeps a visited body MOUNTED through hiding,
         // tab selection and Session switches, so the plugin's own React state
         // (records, tree expansion, scroll, unsaved drafts) survives without

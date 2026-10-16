@@ -113,21 +113,36 @@ describe('service.openTab native path: sidechat reopen dedupe (multiple kinds)',
     expect(controller.focus).toHaveBeenCalledTimes(1)
   })
 
-  it('opens a parked thread that is not open yet, carrying the dedupe matcher', () => {
-    const { controller, service } = setup()
+  it('opens a parked thread that is not open yet, handing the dedupe matcher to the surface', () => {
+    const { controller, records, service } = setup()
     parkSidechatReopen('t-2')
+    // The matcher is a plugin-internal service → surface contract: the host
+    // controller face has no dedupe field (the host's per-kind fallback is
+    // gone for `multiple` kinds), the surface consumes the matcher against its
+    // OWN records at place time — and again on a queued replay. A direct
+    // on-screen open is placed synchronously and its entry is spent, so the
+    // dedupe scan is the only observation point that the matcher rode along.
+    const findBy = vi.spyOn(records, 'findBy')
     service.openTab({ type: 'sidechat' })
 
+    // Minted — the thread was not open yet: the multi-open face, not a focus.
     expect(controller.openTab).toHaveBeenCalledTimes(1)
     const options = lastOpenOptions(controller)
     expect(options).toMatchObject({
       revealIfOpened: false,
       params: expect.objectContaining({ meta: { threadId: 't-2' } }),
     })
-    // The matcher rides the open: this is what the surface runs against its
-    // records — including a queued replay — to keep one page per open thread.
-    expect(typeof options?.dedupeKey).toBe('function')
     expect(controller.focus).not.toHaveBeenCalled()
+    // The scan ran for the open's seat, and the predicate it carried is the
+    // thread matcher behind the kind filter: the same thread hits; a sibling
+    // thread, an unbound tab and another kind's tab do not.
+    expect(findBy).toHaveBeenCalledTimes(1)
+    const [seat, matcher] = findBy.mock.calls[0]!
+    expect(seat).toBe('s1')
+    expect(matcher({ id: 'x', type: 'sidechat', title: 'Side Chat', meta: { threadId: 't-2' } })).toBe(true)
+    expect(matcher({ id: 'y', type: 'sidechat', title: 'Side Chat', meta: { threadId: 't-9' } })).toBe(false)
+    expect(matcher({ id: 'z', type: 'sidechat', title: 'New chat', meta: { autoCreate: true } })).toBe(false)
+    expect(matcher({ id: 'w', type: 'files', title: 'Files', meta: { threadId: 't-2' } })).toBe(false)
   })
 
   it('re-runs the dedupe on a queued replay: a record minted meanwhile wins', () => {
@@ -153,15 +168,20 @@ describe('service.openTab native path: sidechat reopen dedupe (multiple kinds)',
   })
 
   it('leaves single-page kinds on the host dedupe (no matcher, params re-delivered)', () => {
-    const { controller, service } = setup()
+    const { controller, records, service } = setup()
     service.registerTab({ id: 'subagent', title: 'Tasks', single: true, component: () => null })
+    // No matcher handed over: the surface must not scan its records for a
+    // single-page kind — the HOST's one-page-per-kind open re-delivers the
+    // params to the focused page (the subagent jump rides that).
+    const findBy = vi.spyOn(records, 'findBy')
     service.openTab({ type: 'subagent', meta: { childSessionId: 'c-1' } })
 
     expect(controller.openTab).toHaveBeenCalledTimes(1)
     const options = lastOpenOptions(controller)
-    // No matcher: the HOST keeps one page per kind and re-delivers the params
-    // to it — the subagent jump rides that re-delivery, a focus would drop it.
+    // No matcher on either seam — not into the surface (no scan ran) and not
+    // onto the host call, whose face has no dedupe field at all.
     expect(options?.dedupeKey).toBeUndefined()
+    expect(findBy).not.toHaveBeenCalled()
     expect(options).toMatchObject({ revealIfOpened: true, params: { meta: { childSessionId: 'c-1' } } })
   })
 })
