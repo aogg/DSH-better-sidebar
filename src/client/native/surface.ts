@@ -260,7 +260,7 @@ export function createNativeSurface(ctx: Context, records: NativeTabRecords): Na
    * run before creation finishes (the pending queue is empty until the first
    * `openTab`/`openResource`), so the binding is always live at call time.
    */
-  const focusRecord = (sessionId: string, tabId: string): boolean => {
+  const focusRecord = (sessionId: string | undefined, tabId: string): boolean => {
     if (sessionOf(tabId, sessionId) === undefined) return false
     controller()?.focus?.(tabId)
     return true
