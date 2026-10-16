@@ -687,12 +687,20 @@ export async function branches(cwd: string, selected?: string): Promise<{ curren
 }
 
 /** Switch to an existing branch.
- *  `--end-of-options` precedes the operand: without it a caller-supplied
- *  branch beginning with `-` is parsed as an OPTION, so `-f` force-discarded
- *  the worktree changes and `--work-tree=…` redirected the checkout. Same
- *  guard as show / commitDiff / revert / cherryPick (4100e16). */
+ *  A caller-supplied branch beginning with `-` parses as an OPTION, so `-f`
+ *  force-discarded the worktree changes and `--work-tree=…` redirected the
+ *  checkout (4100e16 added `--end-of-options` guards to show / commitDiff /
+ *  revert / cherryPick). Checkout is the exception: its operand parsing does
+ *  not go through parse-options, so it never learned the sentinel — git treats
+ *  `--end-of-options` itself as a pathspec (verified on 2.39.5: `pathspec
+ *  '--end-of-options' did not match any file(s) known to git`) and the real
+ *  branch switch breaks. The guard is the rejection below: a valid refname can
+ *  never start with `-` (`git check-ref-format --branch` refuses it), so an
+ *  option-like name dies before git sees it and what remains is a bare operand
+ *  that cannot parse as an option — on every git version. */
 export async function checkout(cwd: string, branch: string, selected?: string): Promise<void> {
-  await runGit(await repoRoot(cwd, selected), ['checkout', '--end-of-options', branch])
+  if (branch.startsWith('-')) throw new Error(`refusing option-like branch name: ${branch}`)
+  await runGit(await repoRoot(cwd, selected), ['checkout', branch])
 }
 
 /** Recent commit history (newest first), lazily pageable via skip/count. */
