@@ -269,9 +269,13 @@ describe('git parsing', () => {
   it('never lets a branch operand reach git as an option (checkout)', async () => {
     // A caller-supplied branch name went into argv as a bare operand, so `-f`
     // was parsed as git's OPTION and force-discarded the worktree changes
-    // (`--work-tree=…` redirected the checkout). The sentinel ends option
-    // parsing — the same guard 4100e16 added to show / commitDiff / revert /
-    // cherryPick, which missed this call.
+    // (`--work-tree=…` redirected the checkout). Checkout never learned the
+    // `--end-of-options` sentinel the other guarded calls use — its operand
+    // parsing bypasses parse-options, so the sentinel itself landed as a
+    // pathspec and broke the REAL switch on older gits (2.39.5). The guard is
+    // checkout()'s own rejection, so the rejects below match its message: on
+    // every git version the option-like name must die in the plugin, with the
+    // worktree untouched, and a plain name must still switch for real.
     const root = mkdtempSync(join(tmpdir(), 'dsh-git-checkout-'))
     try {
       execFileSync('git', ['init', '-q'], { cwd: root })
@@ -283,10 +287,10 @@ describe('git parsing', () => {
       execFileSync('git', ['branch', 'other'], { cwd: root })
       writeFileSync(join(root, 'a.txt'), 'UNSAVED WORK\n')
 
-      await expect(checkout(root, '-f')).rejects.toThrow()
+      await expect(checkout(root, '-f')).rejects.toThrow(/option-like branch/)
       expect(readFileSync(join(root, 'a.txt'), 'utf8')).toBe('UNSAVED WORK\n')
 
-      await expect(checkout(root, '--work-tree=/elsewhere')).rejects.toThrow()
+      await expect(checkout(root, '--work-tree=/elsewhere')).rejects.toThrow(/option-like branch/)
       expect(readFileSync(join(root, 'a.txt'), 'utf8')).toBe('UNSAVED WORK\n')
 
       // The guard must not break the real operation.
