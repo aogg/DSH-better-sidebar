@@ -37,6 +37,7 @@ import {
   type NativeTabParams,
   type NativeTabRecords,
 } from './tab-adapter.tsx'
+import { NativeTabMenuItems } from './tab-menu.tsx'
 
 /**
  * Extensions DSH's own previews own, and this plugin therefore refuses.
@@ -502,9 +503,36 @@ export function registerNativeSurface(deps: NativeSurfaceDeps): () => void {
       }
     }
 
+    // The HOST tab context menu's copy rows, registered ONCE per surface
+    // activation — deliberately NOT a descriptor registration and never in
+    // `live`: the slot is declared by the host's sidebar-right package
+    // itself (`kind: "list"`, so any number of implementations coexist and
+    // this key cannot collide; `scope: "session"`, so the framework hands
+    // the seat session id to `inject`), and it serves EVERY file-address tab
+    // in the column — a DSH-native `text` preview tab included — no matter
+    // which tab type claimed the content. Non-file tabs render no rows (see
+    // `tab-menu.tsx`), so one registration is all the menu ever needs.
+    // A failure releases the partial set and rethrows — the same rollback
+    // `registerSlots` gives the per-descriptor slots.
+    const menuDisposers: Array<() => void> = []
+    try {
+      menuDisposers.push(ctx.slots.inject('sidebar.right.tab.menu.item', () => ctx.slots.register({
+        name: 'sidebar.right.tab.menu.item',
+        key: 'better-sidebar-copy-path',
+        inject: (sessionId: string) => ({ ctx, store, sessionId }),
+      }, NativeTabMenuItems)))
+    } catch (error) {
+      for (const dispose of menuDisposers) disposeSafely(dispose, 'the native tab-menu copy rows')
+      throw error
+    }
+
     const disposeSubscriptions = [service.subscribe(sync), store.subscribe(sync)]
     sync()
     return () => {
+      // The menu slot goes first: it registered before the descriptors, so
+      // this is reverse-of-registration order (the host draws whatever is
+      // still registered, so a partial teardown must not strand it).
+      for (const dispose of menuDisposers.reverse()) disposeSafely(dispose, 'the native tab-menu copy rows')
       for (const registration of live.values()) {
         disposeSafely(() => registration.dispose(), 'a native tab registration')
       }

@@ -335,3 +335,42 @@ describe('a bottomOnly descriptor never reaches the native surface', () => {
     dispose()
   })
 })
+
+/**
+ * The HOST tab context menu's copy rows (src/client/native/tab-menu.tsx):
+ * one `sidebar.right.tab.menu.item` slot registration per surface activation,
+ * keyed `better-sidebar-copy-path`. The slot is declared `kind: "list"` by
+ * the host's sidebar-right package, so the key cannot collide and ONE
+ * registration serves every file-address tab in the column — it is
+ * deliberately NOT a descriptor entry and never lives in the per-descriptor
+ * `live` map, so the assertions are written against the fake registry's slot
+ * EVENT LOG: once registered, untouched by any notification, and the FIRST
+ * slot released when the surface's disposer runs.
+ */
+describe('the host tab-menu copy rows ride the sidebar.right.tab.menu.item slot', () => {
+  it('registers the slot once, keeps it across notifications, and releases it first on teardown', () => {
+    const host = createHost()
+    const { store, service, records } = createPlugins()
+    const dispose = registerNativeSurface({ ctx: host.ctx as never, store, service, records })
+
+    // Registered during the surface's activation, before any descriptor's
+    // slots (the inject body installs it ahead of `sync()`), and the event
+    // carries BOTH the slot name and the implementation key.
+    expect(host.slotEvents[0]).toBe('register sidebar.right.tab.menu.item::better-sidebar-copy-path')
+
+    // One registration serves every tab, so no store/service pulse may
+    // rebuild it — the same no-churn rule the descriptor slots are pinned
+    // with above.
+    store.setPrefs(store.getPrefs())
+    expect(host.slotEvents.filter(event => event.includes('sidebar.right.tab.menu.item'))).toEqual([
+      'register sidebar.right.tab.menu.item::better-sidebar-copy-path',
+    ])
+
+    dispose()
+    // And the menu slot is the FIRST slot released — the teardown runs the
+    // menu disposers ahead of the descriptor registrations, so a partial
+    // teardown never strands the rows on a live menu.
+    expect(host.slotEvents.filter(event => event.startsWith('release'))[0])
+      .toBe('release sidebar.right.tab.menu.item::better-sidebar-copy-path')
+  })
+})

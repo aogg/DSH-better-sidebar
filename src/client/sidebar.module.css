@@ -2371,6 +2371,32 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
   min-height: 0;
 }
 
+/* ── Native tab context-menu copy rows ───────────────────────────────────
+   The rows this plugin appends to the host dockkit tab context menu (the
+   `sidebar.right.tab.menu.item` slot, drawn after the host's own close row).
+   The declarations are a mirror of the host's own `._menuItem_` rule as
+   extracted from the dsh-web-frontend dockkit menu styles, so the appended
+   rows are visually indistinguishable from the close row above them (the
+   copy glyph inherits the same `color`, and hover reuses the host's
+   interactive hover token). */
+.nativeTabMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 7px;
+  color: var(--dsw-alias-label-primary);
+  font-size: calc(var(--dsh-content-font-size-secondary, 13px) - 1px);
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--dsw-radius-md);
+  cursor: pointer;
+}
+
+.nativeTabMenuItem:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
 /* ── Diff tab (generic states + shell; the changes tab owns the rest in
    changes.module.css, and the diff rows themselves live in
    diff/diff.module.css) ────────────────────────────────────────────────── */
