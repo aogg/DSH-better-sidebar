@@ -144,6 +144,10 @@ export interface GitLogEntry {
   date: string
   /** Ref decorations (--decorate=short), e.g. `HEAD -> main, origin/main`; '' when none. */
   refs: string
+  /** Files the commit touched (`--name-status` rows; M/A/D letters, renames
+   *  folded to the new path). Present ONLY when the call asked for `files` —
+   *  an older host ignores the flag and leaves this undefined. */
+  files?: { path: string; status: string }[]
 }
 
 /** One `git blame --porcelain` row (the editor's hover blame). */
@@ -566,11 +570,14 @@ export const api = {
     call<{ current: string; names: string[] }>('git.branch', gitPayload(scope, worktree, {}), signal),
   gitCheckout: (scope: SessionScope, branch: string, worktree?: string) =>
     call<{ ok: true }>('git.checkout', gitPayload(scope, worktree, { branch })),
-  /** Recent commit history, lazily pageable (skip/count; defaults 0/30). */
-  gitLog: (scope: SessionScope, count?: number, skip?: number, worktree?: string, signal?: AbortSignal) =>
+  /** Recent commit history, lazily pageable (skip/count; defaults 0/30).
+   *  `opts.files` asks the host for `--name-status` rows (each entry's
+   *  `files`); an old host silently ignores the flag and answers without. */
+  gitLog: (scope: SessionScope, count?: number, skip?: number, worktree?: string, signal?: AbortSignal, opts?: { files?: boolean }) =>
     call<GitLogEntry[]>('git.log', gitPayload(scope, worktree, {
       ...(count !== undefined ? { count } : {}),
       ...(skip !== undefined ? { skip } : {}),
+      ...(opts?.files === true ? { files: true } : {}),
     }), signal),
   /** Full patch text of one commit (diff display for the history rows). */
   gitCommitDiff: (scope: SessionScope, hash: string, worktree?: string, signal?: AbortSignal) =>

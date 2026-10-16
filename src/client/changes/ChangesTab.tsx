@@ -1,21 +1,22 @@
 /**
- * The unified changes tab: one tab, two lenses on "what changed?" — Git
- * (repository truth: staged/unstaged files, commit box, history) and the
- * session round (agent truth: every file the model read, wrote, or edited).
- * A 36px header carries the host {@link SegmentedControl} and the current
- * lens's refresh action; both lenses preview their selections in a shared
- * resizable bottom pane ({@link DiffPane}), and git targets expand into the
- * dedicated diff tab docked in the workbench's diff pane. The active lens and
- * the pane height persist in the tab's meta, so the tab reopens exactly where
- * it was left.
+ * The unified changes tab: one tab, three lenses on "what changed?" — Git
+ * (repository truth: staged/unstaged files, commit box, history), the
+ * round commits (the session's own `git add` trail cross-checked against
+ * `git log`, see {@link RoundCommitsLens}), and the session round (agent
+ * truth: every file the model read, wrote, or edited). A 36px header carries
+ * the host {@link SegmentedControl} and the current lens's refresh action;
+ * every lens previews its selections in a shared resizable bottom pane
+ * ({@link DiffPane}), and git targets expand into the dedicated diff tab
+ * docked in the workbench's diff pane. The active lens and the pane height
+ * persist in the tab's meta, so the tab reopens exactly where it was left.
  *
  * The session events ride the host's `changes.ops` route (the client runtime
  * exposes no event-log face): the tab pulls the delta past its cursor and
- * folds it into ops, and publishes the op count to a module-level cache the
- * tab-strip badge reads. The pull is one catch-up whenever the tab becomes
- * visible and then a cadence ONLY while the session lens is on screen — the
- * git lens has no use for the session event log (and the shared git-status
- * store owns its own poller).
+ * folds it into ops (and, from the same window, the `git add` records), and
+ * publishes the op count to a module-level cache the tab-strip badge reads.
+ * The pull is one catch-up whenever the tab becomes visible and then a cadence
+ * ONLY while an event-backed lens is on screen — the git lens has no use for
+ * the session event log (and the shared git-status store owns its own poller).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { IconRefreshOutlineRegular, SegmentedControl } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -30,6 +31,8 @@ import { GitLens } from './GitLens.tsx'
 import { SessionLens } from './SessionLens.tsx'
 import { DiffPane, clampPaneHeight, diffTabOf, type ChangesPreview } from './DiffPane.tsx'
 import { extractFileOps, knownContentBefore, type FileOp } from './ops.ts'
+import { extractGitAdds, type GitAddRecord } from './round-commits.ts'
+import { RoundCommitsLens } from './RoundCommitsLens.tsx'
 import css from './changes.module.css'
 
 /** The default preview pane height (px) before the first drag. */
@@ -49,7 +52,7 @@ export function opCountOf(sessionId: string): number | undefined {
   return opCounts.get(sessionId)
 }
 
-type Lens = 'git' | 'session'
+type Lens = 'commits' | 'git' | 'session'
 
 /** The persisted tab meta (JSON-serializable; rides the layout). */
 interface ChangesMeta {
@@ -67,13 +70,14 @@ type PreviewSelection =
 
 export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpenDiff }: TabComponentProps) {
   const meta = (tab.meta ?? {}) as ChangesMeta
-  const [lens, setLens] = useState<Lens>(meta.lens === 'session' ? 'session' : 'git')
+  const [lens, setLens] = useState<Lens>(meta.lens === 'session' ? 'session' : meta.lens === 'commits' ? 'commits' : 'git')
   const [selection, setSelection] = useState<PreviewSelection | null>(null)
   const [paneHeight, setPaneHeight] = useState<number>(() => clampPaneHeight(
     typeof meta.previewH === 'number' ? meta.previewH : PANE_HEIGHT_DEFAULT,
   ))
-  /** The header refresh action for the Git lens (the lens owns its own queue). */
-  const [gitRefresh, setGitRefresh] = useState(0)
+  /** The header refresh action: BOTH git-backed lenses reload through this
+   *  tick (each lens owns its own queue; an unmounted lens ignores it). */
+  const [refreshTick, setRefreshTick] = useState(0)
 
   // ── Session-event accumulation: one catch-up pull when the tab becomes
   //    visible, then a 2.5s delta poll while the SESSION lens is on screen.
@@ -86,6 +90,10 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
   // the whole window, twice per tick, and the fresh array defeated the
   // downstream memo on every poll) keeps the 2.5s tick at one fold.
   const opsRef = useRef<readonly FileOp[]>([])
+  /** The sibling fold over the SAME window: the bash `git add` records the
+   *  round-commits lens cross-checks against git. Same-source, same-tick, and
+   *  held to the same identity discipline as `opsRef`. */
+  const addsRef = useRef<readonly GitAddRecord[]>([])
   const seqRef = useRef(0)
   const pollGen = useRef(0)
   /** One delta request in flight at a time (the poller is fixed-interval, so a
@@ -119,6 +127,7 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
       if (lastSeq > seqRef.current) seqRef.current = lastSeq
       const folded = extractFileOps(eventsRef.current)
       opsRef.current = folded
+      addsRef.current = extractGitAdds(eventsRef.current)
       opCounts.set(scope.sessionId, folded.length)
       setOpsError(false)
       setTick(value => value + 1)
@@ -137,16 +146,32 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
     pollGen.current += 1
     eventsRef.current = []
     opsRef.current = []
+    addsRef.current = []
     seqRef.current = 0
     setOpsError(false)
   }, [scope.sessionId])
   // One catch-up whenever the tab becomes visible (the badge count follows the
-  // tab being opened); the CADENCE below runs only while this lens is showing.
+  // tab being opened); the CADENCE below runs only while an event-backed lens
+  // is showing (the git lens folds nothing from the session log).
   useEffect(() => { if (visible) void pull() }, [visible, pull])
-  usePolling(visible && lens === 'session', pull, { intervalMs: 2_500 })
+  usePolling(visible && lens !== 'git', pull, { intervalMs: 2_500 })
   // tick only forces the re-render; the fold reads the ref directly.
   void tick
   const ops = opsRef.current
+  const adds = addsRef.current
+  /** The (approximate) "this round" boundary: the event window's earliest
+   *  event time. The window is capped at {@link EVENTS_CAP} events, so an old
+   *  session's round start drifts forward — the lens keeps a one-minute slack
+   *  and unparseable commit dates for exactly that reason. */
+  const roundStart = useMemo(() => {
+    let min = Number.POSITIVE_INFINITY
+    for (const event of eventsRef.current) {
+      if (event.time < min) min = event.time
+    }
+    return Number.isFinite(min) ? min : Date.now()
+    // The window only changes when a poll ticks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tick])
 
   /** The preview target of the current selection, re-derived every render so
    *  an op that settled (or fell out of the window) is reflected immediately. */
@@ -171,12 +196,17 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
     patchMeta({ lens: next })
   }
 
-  /** The header's refresh action: the Git lens reloads through its own queue
-   *  (a click while a refresh is in flight is queued, not dropped), the
-   *  session lens re-pulls its event delta. */
+  /** The header's refresh action: the git-backed lenses reload through their
+   *  shared tick (GitLens's queue, the commits lens's fetch), the session lens
+   *  re-pulls its event delta — and the commits lens ALSO re-pulls, since its
+   *  add evidence rides the same event window. */
   const refreshCurrent = (): void => {
-    if (lens === 'git') setGitRefresh(value => value + 1)
-    else void pull()
+    if (lens === 'session') {
+      void pull()
+      return
+    }
+    setRefreshTick(value => value + 1)
+    if (lens === 'commits') void pull()
   }
 
   /** Preview one git change (worktree file or commit) from the Git lens. */
@@ -209,6 +239,11 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
           id={`changes-lens-${tab.id}`}
           value={lens}
           options={[
+            // The round-commits lens sits LEFT of the git lens: the session's
+            // own trail comes first, the repository's full view second. The
+            // segment shows the short name (three lenses share one 36px head);
+            // the full name rides the hover title.
+            { value: 'commits', label: t('changesCommitsLensShort'), title: t('changesCommitsLens') },
             { value: 'git', label: t('changesGitLens') },
             { value: 'session', label: t('changesSessionLens') },
           ]}
@@ -229,20 +264,32 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
             scope={scope}
             store={store}
             visible={visible}
-            refreshTick={gitRefresh}
+            refreshTick={refreshTick}
             onOpenFile={onOpenFile ?? (() => { /* no-op */ })}
             onPreview={previewGit}
             selectedRef={previewTarget !== null && previewTarget.kind === 'git' ? previewTarget.ref : null}
           />
         )
-        : (
-          <SessionLens
-            ops={ops}
-            loadError={opsError && ops.length === 0}
-            onPreview={previewOp}
-            selectedCallId={selection !== null && selection.kind === 'op' ? selection.callId : null}
-          />
-        )}
+        : lens === 'commits'
+          ? (
+            <RoundCommitsLens
+              scope={scope}
+              visible={visible}
+              refreshTick={refreshTick}
+              adds={adds}
+              roundStart={roundStart}
+              onPreview={previewGit}
+              selectedRef={previewTarget !== null && previewTarget.kind === 'git' ? previewTarget.ref : null}
+            />
+          )
+          : (
+            <SessionLens
+              ops={ops}
+              loadError={opsError && ops.length === 0}
+              onPreview={previewOp}
+              selectedCallId={selection !== null && selection.kind === 'op' ? selection.callId : null}
+            />
+          )}
       {previewTarget !== null && (
         <DiffPane
           key={previewKey(previewTarget)}

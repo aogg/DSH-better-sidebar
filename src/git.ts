@@ -59,6 +59,14 @@ export interface GitWorktree {
   changes: number
 }
 
+/** One file a commit touched (a `--name-status` row). */
+export interface GitLogNameStatus {
+  path: string
+  /** The name-status letter: `M`/`A`/`D` verbatim; a rename/copy score row
+   *  (`R100`) folds to its letter (`R`). */
+  status: string
+}
+
 /** One `git log` row. */
 export interface GitLogEntry {
   /** Short hash (7+ chars, display). */
@@ -71,6 +79,9 @@ export interface GitLogEntry {
   date: string
   /** Ref decorations (`%D` with --decorate=short), e.g. `HEAD -> main, origin/main`; '' when none. */
   refs: string
+  /** Files the commit touched, ONLY when the caller asked for
+   *  `--name-status` (absent otherwise — older clients see no change). */
+  files?: GitLogNameStatus[]
 }
 
 /** One git failure (stderr text as the message). */
@@ -239,6 +250,46 @@ export function parseLogLines(output: string): GitLogEntry[] {
       hashFull: hashFull ?? hash,
       refs: refs ?? '',
     })
+  }
+  return rows
+}
+
+/**
+ * Parse `git log --name-status` output (the SAME pretty line as
+ * {@link parseLogLines}, followed by one `\t`-framed row per touched file).
+ * The two line kinds never collide: a pretty row always carries unit
+ * separators, a name-status row never does. A rename/copy row carries a score
+ * and BOTH paths (`R100\told\tnew`) and is attributed to the NEW path with the
+ * bare letter — the file's name as the commit leaves it. Rows before the first
+ * pretty line (a truncated answer) and junk lines are skipped, never fatal.
+ */
+export function parseLogNameStatus(output: string): GitLogEntry[] {
+  const rows: GitLogEntry[] = []
+  for (const line of output.split('\n')) {
+    if (line === '') continue
+    if (line.includes('\x1f')) {
+      const [hash, subject, author, date, hashFull, refs] = line.split('\x1f')
+      if (hash === undefined || subject === undefined) continue
+      rows.push({
+        hash,
+        subject,
+        author: author ?? '',
+        date: date ?? '',
+        hashFull: hashFull ?? hash,
+        refs: refs ?? '',
+      })
+      continue
+    }
+    const current = rows[rows.length - 1]
+    if (current === undefined) continue
+    const fields = line.split('\t')
+    if (fields.length < 2 || fields[1] === '') continue
+    const rawStatus = fields[0] ?? ''
+    const status = rawStatus.length > 1 ? rawStatus[0]! : rawStatus
+    // A rename/copy names both paths; the NEW one (the last field) is the
+    // identity the client matches add operands against.
+    const path = fields.length >= 3 ? fields[fields.length - 1]! : fields[1]!
+    ;(current.files ??= []).push({ path, status })
   }
   return rows
 }
@@ -703,13 +754,19 @@ export async function checkout(cwd: string, branch: string, selected?: string): 
   await runGit(await repoRoot(cwd, selected), ['checkout', branch])
 }
 
-/** Recent commit history (newest first), lazily pageable via skip/count. */
-export async function log(cwd: string, count = 30, skip = 0, selected?: string): Promise<GitLogEntry[]> {
-  const raw = await runGit(await repoRoot(cwd, selected), [
+/** Recent commit history (newest first), lazily pageable via skip/count.
+ *  `opts.files` adds `--name-status` and fills each entry's `files` (see
+ *  {@link parseLogNameStatus}); without it the output — and the parse — are
+ *  exactly what they always were, so older callers see no difference. */
+export async function log(cwd: string, count = 30, skip = 0, selected?: string, opts?: { files?: boolean }): Promise<GitLogEntry[]> {
+  const args = [
     'log', '-n', String(count), '--skip', String(skip), '--decorate=short',
     '--pretty=format:%h%x1f%s%x1f%an%x1f%ai%x1f%H%x1f%D',
-  ])
-  return parseLogLines(raw)
+  ]
+  const files = opts?.files === true
+  if (files) args.push('--name-status')
+  const raw = await runGit(await repoRoot(cwd, selected), args)
+  return files ? parseLogNameStatus(raw) : parseLogLines(raw)
 }
 
 /**

@@ -570,6 +570,42 @@
 .opFlagError { color: var(--dsw-alias-state-error-primary); font-size: 10px; flex: none; }
 .opSize { color: var(--dsw-alias-label-tertiary); font-size: 10px; flex: none; font-family: var(--ds-font-family-code, monospace); }
 
+/* ── Round-commits lens (this round's git add trail, verified) ─────────── */
+
+.commits { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.commitsList { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 6px 10px; }
+
+/* A staged-but-uncommitted file: the `add` badge is the evidence trail's own
+   mark (the same badge the touched-file lists reuse). */
+.stagedFile { position: relative; display: flex; align-items: center; gap: 6px; width: 100%; min-height: 24px; padding: 0 5px; border-radius: 4px; font-family: var(--ds-font-family-code, monospace); font-size: 11px; color: var(--dsw-alias-label-primary); }
+
+/* The `add` badge: a quiet pill in the brand ink, matching `.logRef`'s
+   language — it marks exactly the files the round's add commands staged. */
+.addBadge { flex: none; padding: 0 5px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 999px; font: var(--dsw-font-xxxs-strong-11); color: var(--dsw-alias-brand-primary); white-space: nowrap; }
+
+/* The `add -A` / `add .` explanation line: the raw command plus the note that
+   its file set cannot be enumerated from the command line. */
+.addAllNote { display: flex; flex-direction: column; gap: 2px; padding: 4px 6px; margin-bottom: 2px; border-radius: 4px; font-size: 11px; color: var(--dsw-alias-label-tertiary); }
+.addAllCommand { font-family: var(--ds-font-family-code, monospace); font-size: 11px; color: var(--dsw-alias-label-secondary); word-break: break-all; }
+
+/* One commit row: the shared history-row body (`.logRow` language) plus its
+   own disclosure chevron — expanding the file list and previewing the commit
+   are two independent actions. */
+.roundCommit { margin: 0 0 1px; }
+.roundCommitRow { display: flex; align-items: center; gap: 2px; }
+.roundCommitRow .logRow { flex: 1; min-width: 0; margin: 0; }
+.commitToggle { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 26px; border: none; border-radius: 4px; background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
+.commitToggle:hover, .commitToggle:focus-visible { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.commitToggle:focus-visible { outline: 2px solid var(--dsw-alias-interactive-bg-hover-accent); outline-offset: -1px; }
+
+/* The disclosed touched-file list: one indented gutter column, like the git
+   tree's children. */
+.commitFiles { display: flex; flex-direction: column; margin: 2px 6px 6px 24px; padding-left: 8px; border-left: 1px solid var(--dsw-alias-border-l1); }
+.commitFile { position: relative; display: flex; align-items: center; gap: 6px; min-height: 22px; padding: 0 4px; border-radius: 3px; }
+.commitFilePath { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ds-font-family-code, monospace); font-size: 11px; color: var(--dsw-alias-label-primary); }
+.commitFileCount { flex: none; font: var(--dsw-font-xxxs-11); color: var(--dsw-alias-label-tertiary); white-space: nowrap; }
+.commitFileEmpty { padding: 2px 4px; font-size: 11px; color: var(--dsw-alias-label-tertiary); }
+
 /* ── Shared preview pane ───────────────────────────────────────────────── */
 
 .redactBanner { flex: none; font: var(--dsw-font-xxxs-strong-11); padding: 2px 8px; border-radius: 2px; color: var(--dsw-alias-state-warn-primary); background: var(--dsw-alias-interactive-bg-hover); white-space: nowrap; }

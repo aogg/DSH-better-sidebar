@@ -71,7 +71,7 @@ function pathOf(args: Record<string, unknown>): string | undefined {
 }
 
 /** The 'tool/result' message envelope inside a session event's data. */
-interface ToolResultMessageLike {
+export interface ToolResultMessageLike {
   source?: { kind?: unknown; callId?: unknown }
   content?: unknown
   /** The 0.1.7 first-class tool message lifts the error flag onto the message. */
@@ -94,7 +94,7 @@ interface ToolResultBlockLike {
  * Historical logs keep the old shape forever, so both are read. Undefined when
  * the message carries no block array.
  */
-function resultOf(message: ToolResultMessageLike): { blocks: readonly unknown[]; isError: boolean } | undefined {
+export function resultOf(message: ToolResultMessageLike): { blocks: readonly unknown[]; isError: boolean } | undefined {
   if (!Array.isArray(message.content)) return undefined
   for (const block of message.content) {
     if (block === null || typeof block !== 'object') continue
@@ -123,7 +123,7 @@ function resultText(message: ToolResultMessageLike): string | undefined {
 
 /** Whether a tool result reported an error (0.1.7's message-level flag, else
  *  the 0.1.6 wrapper block's flag). */
-function resultIsError(message: ToolResultMessageLike): boolean {
+export function resultIsError(message: ToolResultMessageLike): boolean {
   return resultOf(message)?.isError === true
 }
 

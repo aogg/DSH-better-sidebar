@@ -987,14 +987,17 @@ function buildApi(
     },
     'git.log': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
-      const record = payload as { count?: unknown; skip?: unknown }
+      const record = payload as { count?: unknown; skip?: unknown; files?: unknown }
       const count = typeof record.count === 'number' && Number.isInteger(record.count) && record.count > 0
         ? record.count
         : undefined
       const skip = typeof record.skip === 'number' && Number.isInteger(record.skip) && record.skip >= 0
         ? record.skip
         : undefined
-      return git.log(cwd, count, skip, selectedRepoOf(payload))
+      // `files` opts into `--name-status` (per-entry touched-file rows). A
+      // payload without the field takes the exact old path — no flag, no
+      // parse change — so older callers see no difference.
+      return git.log(cwd, count, skip, selectedRepoOf(payload), record.files === true ? { files: true } : undefined)
     },
     'git.commit-diff': async (payload) => {
       const { cwd } = await gitCwdOf(payload)

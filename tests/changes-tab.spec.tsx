@@ -266,7 +266,7 @@ describe('ChangesTab', () => {
       mount(root)
       await flushEffects()
 
-      // Session lens: open the read op's preview.
+      // Session lens: expand the file group, then open the read op's preview.
       const sessionTab = lensTab(container, t('changesSessionLens'))
       await act(async () => { sessionTab!.click() })
       const row = container.querySelector<HTMLButtonElement>('button[data-op-kind="read"]')
@@ -582,7 +582,7 @@ describe('ChangesTab', () => {
     expect(groupHeader).toContain('top: 0')
   })
 
-  it('polls the session events only while the session lens is on screen', async () => {
+  it('polls the session events while an event-backed lens is on screen only', async () => {
     vi.useFakeTimers()
     mockGit([])
     const ops = vi.spyOn(api, 'changesOps').mockResolvedValue({ events: [], lastSeq: 0 })
@@ -599,11 +599,83 @@ describe('ChangesTab', () => {
       // The git lens has no use for the session event log: no cadence at all.
       expect(ops).toHaveBeenCalledTimes(1)
 
+      const commitsTab = lensTab(container, t('changesCommitsLensShort'))
+      await act(async () => { commitsTab!.click() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+      // The commits lens folds its add evidence from the SAME window: the
+      // 2.5s delta cadence runs for it too.
+      expect(ops.mock.calls.length).toBeGreaterThan(1)
+      const commitsCalls = ops.mock.calls.length
+
       const sessionTab = lensTab(container, t('changesSessionLens'))
       await act(async () => { sessionTab!.click() })
       await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
-      // On screen: the 2.5s delta cadence runs.
-      expect(ops.mock.calls.length).toBeGreaterThan(1)
+      // On screen: the cadence keeps running.
+      expect(ops.mock.calls.length).toBeGreaterThan(commitsCalls)
+    } finally {
+      act(() => { root.unmount() })
+      container.remove()
+      vi.useRealTimers()
+    }
+  })
+
+  it('puts the round-commits lens left of Git and verifies round adds against the log', async () => {
+    vi.useFakeTimers()
+    mockGit([])
+    // One bash `git add` in the round window; the log answers one commit that
+    // contains a DIFFERENT file (so the staged section has something to show).
+    vi.spyOn(api, 'changesOps').mockResolvedValue({
+      events: [
+        { type: 'tool/call', seq: 1, time: 1, data: { name: 'bash', callId: 'b1', arguments: JSON.stringify({ command: 'git add src/from-add.ts' }) } },
+        { type: 'tool/result', seq: 2, time: 2, data: { message: { source: { kind: 'tool', callId: 'b1' }, content: [{ type: 'text', text: 'ok' }] } } },
+      ],
+      lastSeq: 2,
+    })
+    const commitEntry = {
+      hash: 'abc1234',
+      hashFull: 'abc1234abc1234abc1234abc1234abc1234abc1234',
+      subject: 'the round commit',
+      author: 'Agent',
+      date: new Date().toISOString(),
+      refs: 'HEAD -> main',
+      files: [{ path: 'src/from-add.ts', status: 'M' }, { path: 'src/other.ts', status: 'M' }],
+    }
+    const log = vi.spyOn(api, 'gitLog').mockResolvedValue([commitEntry])
+    vi.spyOn(api, 'gitCommitDiff').mockResolvedValue({ diff: '' })
+
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root: Root = createRoot(container)
+    try {
+      mount(root)
+      await flushEffects()
+
+      // Order: the round commits sit LEFT of Git, the session lens last.
+      const tabs = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].map(tab => tab.textContent)
+      expect(tabs).toEqual([t('changesCommitsLensShort'), t('changesGitLens'), t('changesSessionLens')])
+
+      const commitsTab = lensTab(container, t('changesCommitsLensShort'))
+      await act(async () => { commitsTab!.click() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+
+      // The log fetch asked for the touched files (`files: true`).
+      const filesCall = log.mock.calls.find(call => call[5]?.files === true)
+      expect(filesCall).toBeDefined()
+      expect(filesCall![1]).toBe(50)
+
+      // The commit row carries the collapsed file-count summary; the add that
+      // landed in it is marked after the disclosure.
+      const commitRow = container.querySelector('[data-commit="abc1234abc1234abc1234abc1234abc1234abc1234"]')
+      expect(commitRow).not.toBeNull()
+      expect(commitRow!.textContent).toContain('2 个文件')
+      expect(commitRow!.querySelector('[data-add-badge]')).toBeNull()
+      await act(async () => { chevron(container, 'abc1234abc1234abc1234abc1234abc1234abc1234')!.click() })
+      expect(commitRow!.querySelector('[data-commit-file="src/from-add.ts"] [data-add-badge]')).not.toBeNull()
+      expect(commitRow!.querySelector('[data-commit-file="src/other.ts"] [data-add-badge]')).toBeNull()
+
+      // The add that landed is NOT in the staged section; nothing else was
+      // added, so no staged section renders at all.
+      expect(container.querySelector('[data-section="staged"]')).toBeNull()
     } finally {
       act(() => { root.unmount() })
       container.remove()
@@ -611,3 +683,8 @@ describe('ChangesTab', () => {
     }
   })
 })
+
+/** The commit row's file-list chevron (the disclosure is a separate action). */
+function chevron(container: HTMLElement, hashFull: string): HTMLButtonElement | undefined {
+  return container.querySelector<HTMLButtonElement>(`[data-commit="${hashFull}"] .commitToggle`) ?? undefined
+}

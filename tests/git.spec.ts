@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import { parseUnifiedDiff } from '../src/client/diff/rows.ts'
-import { checkout, parseLogLines, parseNumstat, parsePorcelainZ, repoRoots, status } from '../src/git.ts'
+import { checkout, parseLogLines, parseLogNameStatus, parseNumstat, parsePorcelainZ, repoRoots, status } from '../src/git.ts'
 
 const execFileAsync = promisify(execFile)
 const normalizePath = (path: string): string => path.replaceAll('\\', '/')
@@ -159,6 +159,38 @@ describe('git parsing', () => {
         refs: '',
       },
     ])
+  })
+
+  it('parses name-status rows under each pretty row, renames folded to the new path', () => {
+    const rows = parseLogNameStatus(
+      'abc1234\x1fFirst subject\x1fAlice\x1f2024-01-01 10:00:00 +0800\x1fabc1234full\x1fHEAD -> main\n'
+      + 'M\tsrc/edited.ts\n'
+      + 'A\tsrc/new.ts\n'
+      + 'D\tsrc/gone.ts\n'
+      + 'R100\told-name.ts\tnew-name.ts\n'
+      + 'def5678\x1fEmpty subject\x1fBob\x1f2024-01-02 10:00:00 +0800\x1fdef5678full\x1f\n',
+    )
+    expect(rows).toHaveLength(2)
+    expect(rows[0]!.hash).toBe('abc1234')
+    expect(rows[0]!.files).toEqual([
+      { path: 'src/edited.ts', status: 'M' },
+      { path: 'src/new.ts', status: 'A' },
+      { path: 'src/gone.ts', status: 'D' },
+      { path: 'new-name.ts', status: 'R' },
+    ])
+    // A commit with no file rows answers with no `files` at all.
+    expect(rows[1]!.files).toBeUndefined()
+  })
+
+  it('skips name-status junk before the first pretty row and keeps old parseLogLines behavior', () => {
+    // A truncated answer: the file rows come first — they belong to no commit.
+    const truncated = parseLogNameStatus('M\torphan.ts\nabc1234\x1fSubject\x1fA\x1f2024-01-01 10:00:00 +0800\x1fabc1234full\x1f\n')
+    expect(truncated).toHaveLength(1)
+    expect(truncated[0]!.files).toBeUndefined()
+    // parseLogLines still answers the same rows for the same pretty text.
+    const pretty = 'abc1234\x1fSubject\x1fA\x1f2024-01-01 10:00:00 +0800\x1fabc1234full\x1f\n'
+    expect(parseLogLines(pretty)[0]!.files).toBeUndefined()
+    expect(parseLogLines(pretty)[0]!.subject).toBe('Subject')
   })
 
   it('parses a multi-file unified diff with aligned line numbers', () => {
