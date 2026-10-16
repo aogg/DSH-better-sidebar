@@ -59,6 +59,7 @@ import { createAssistantLiveBuffer, type AssistantLiveBuffer } from './assistant
 import { readJsonBody, readTextBody, requireString, SidebarError, writeError, writeJson, writeOk } from './wire.ts'
 import { streamFileToResponse } from './file-stream.ts'
 import { readPersistedSession } from './session-store.ts'
+import { collectSubtreeIds, mergeSubtreeEvents, type SubtreeEventPart } from './changes-subtree.ts'
 import { BlockAssembler, createUserMessage, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import {
   buildCommitPrompt,
@@ -1143,9 +1144,19 @@ function buildApi(
     // (and its badge): the CLIENT runtime's sessions face has no event-log
     // access, so the events cross the wire here — live session log first,
     // the persisted logical log for not-yet-hydrated sessions. Only the
-    // two event types the lens folds are sent, narrowed to `seq > afterSeq`
+    // two event types the lens folds are sent, narrowed to a cursor delta
     // so polling is a small delta, with the same recent-window cap the
     // client accumulator applies.
+    //
+    // Delegated sessions write their files in subagent CHILD sessions (log
+    // headers carry `parentSession`), so when the host exposes the stored
+    // header list the route folds the root's whole parentSession subtree
+    // into one time-ordered window (see ./changes-subtree.ts): the renumbered
+    // seq doubles as the client's `afterSeq` cursor, which is why a cursor
+    // beyond 1e12 marks "time scale" and keeps that mode even after the
+    // children disappear. Without the list (or for a childless root on a
+    // plain seq cursor) the answer is exactly the single-log path it always
+    // was — older hosts and tests see no difference.
     'changes.ops': async (payload) => {
       const sessionId = requireString(payload, 'sessionId')
       const rawAfter = (payload as { afterSeq?: unknown } | null)?.afterSeq
@@ -1157,10 +1168,29 @@ function buildApi(
       // log opens on a tool event (subagent seeds do) carries seq 0, which a
       // literal `> 0` comparison would drop, so the absent case floors at -1.
       const afterSeq = rawAfter ?? -1
-      let events: readonly SidebarSessionEvent[] | undefined = ctx.sessions.get(sessionId)?.snapshotEvents()
-      if (events === undefined) {
-        const persistence = ctx.get('sessionPersistence')
-        if (persistence !== undefined) {
+      const persistence = ctx.get('sessionPersistence')
+      // Stored headers feed the subtree walk; the list is a feature-detected
+      // host capability, so its absence (or a failure) degrades to the root
+      // session alone rather than failing the poll.
+      let headers: readonly { header: Record<string, unknown> }[] | undefined
+      if (persistence !== undefined && typeof persistence.list === 'function') {
+        try {
+          const listed = await persistence.list()
+          if (Array.isArray(listed)) headers = listed
+        } catch (error) {
+          ctx.logger?.warn?.('dsh-better-sidebar: stored session header list failed; changes.ops answers the root session only')
+          ctx.logger?.warn?.(error)
+        }
+      }
+      const subtreeIds = collectSubtreeIds(headers, sessionId)
+      // Epoch-ms cursors (a merged window's `lastSeq`) sit far above 1e12
+      // while a per-log seq counter never gets near it, so the threshold
+      // tells "this client is already on the merged time cursor" apart from
+      // a plain log position.
+      const TIME_SCALE_CURSOR = 1e12
+      if (subtreeIds.length === 1 && afterSeq <= TIME_SCALE_CURSOR) {
+        let events: readonly SidebarSessionEvent[] | undefined = ctx.sessions.get(sessionId)?.snapshotEvents()
+        if (events === undefined && persistence !== undefined) {
           try {
             events = (await readPersistedSession(persistence, sessionId)).events
           } catch {
@@ -1168,14 +1198,41 @@ function buildApi(
             // window is the honest answer, not a wire error.
           }
         }
+        if (events === undefined) return { events: [], lastSeq: Math.max(afterSeq, 0) }
+        const CHANGES_EVENTS_CAP = 4000
+        const filtered = events.filter(
+          event => (event.type === 'tool/call' || event.type === 'tool/result') && event.seq > afterSeq,
+        )
+        const window = filtered.length > CHANGES_EVENTS_CAP ? filtered.slice(filtered.length - CHANGES_EVENTS_CAP) : filtered
+        return { events: window, lastSeq: window.at(-1)?.seq ?? afterSeq }
       }
-      if (events === undefined) return { events: [], lastSeq: Math.max(afterSeq, 0) }
-      const CHANGES_EVENTS_CAP = 4000
-      const filtered = events.filter(
-        event => (event.type === 'tool/call' || event.type === 'tool/result') && event.seq > afterSeq,
-      )
-      const window = filtered.length > CHANGES_EVENTS_CAP ? filtered.slice(filtered.length - CHANGES_EVENTS_CAP) : filtered
-      return { events: window, lastSeq: window.at(-1)?.seq ?? afterSeq }
+      // Subtree mode: every member answers from its live log first, the
+      // persisted log second. A CHILD that cannot be read is skipped
+      // silently — a corrupt child log must not take the whole lens down,
+      // and per-poll warn logging here would repeat every 2.5s tick; the
+      // root keeps the single-log failure behaviour (an empty window)
+      // because it is the session the client asked about.
+      const parts: SubtreeEventPart[] = []
+      let rootReadable = true
+      for (const id of subtreeIds) {
+        const isRoot = id === sessionId
+        let events: readonly SidebarSessionEvent[] | undefined = ctx.sessions.get(id)?.snapshotEvents()
+        if (events === undefined && persistence !== undefined) {
+          try {
+            events = (await readPersistedSession(persistence, id)).events
+          } catch {
+            if (isRoot) rootReadable = false
+          }
+        }
+        if (events === undefined) {
+          if (isRoot) rootReadable = false
+          continue
+        }
+        parts.push({ id, isRoot, events })
+      }
+      if (!rootReadable) return { events: [], lastSeq: Math.max(afterSeq, 0) }
+      const merged = mergeSubtreeEvents(parts, afterSeq)
+      return { events: merged.events, lastSeq: merged.lastSeq }
     },
     // Subagent live previews: one batch request per refresh; the route folds
     // the newest text/tool activity of every running child in the tree.

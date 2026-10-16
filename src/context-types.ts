@@ -493,6 +493,15 @@ export interface SidebarSessionTitleService {
  */
 export interface SidebarSessionPersistenceService {
   open(sessionId: string, access: 'read' | 'write'): Promise<SidebarSessionHandle>
+  /**
+   * List every stored session's header (the host's `listStoredHeaders()`
+   * capability, mirrored minimally). Optional because the face carries only
+   * what this plugin consumes and older hosts do not expose it — callers must
+   * feature-detect (`typeof persistence.list === 'function'`) and degrade to
+   * per-session reads. The sole consumer is the changes route's
+   * parentSession-subtree walk (see ./changes-subtree.ts).
+   */
+  list?(): Promise<readonly { header: Record<string, unknown> }[]>
 }
 
 /** One open channel onto a stored session (the fields this plugin reads). */
