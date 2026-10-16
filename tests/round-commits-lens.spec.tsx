@@ -42,7 +42,6 @@ function logEntry(overrides: Partial<GitLogEntry>): GitLogEntry {
 
 async function renderLens(props: {
   adds: ReturnType<typeof extractGitAdds>
-  entries: GitLogEntry[]
   roundStart?: number
   onPreview?: (ref: SidebarDiffRef) => void
 }): Promise<{ container: HTMLElement; previews: SidebarDiffRef[]; root: Root }> {
