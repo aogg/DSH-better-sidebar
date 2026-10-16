@@ -329,6 +329,20 @@ export function registerNativeSurface(deps: NativeSurfaceDeps): () => void {
       const disposeType = tabs.register({
         id,
         kind: descriptor.id,
+        // Host contract (`SidebarRightTabDefinition.multiple`): with `multiple`
+        // EVERY open by kind mints independent content (a fresh page address per
+        // open); without it the host keeps ONE page per kind in each pane and
+        // merely re-delivers navigation params to that page. A `createTab`
+        // descriptor mints a self-contained tab per open (the side chat: one
+        // conversation per tab), so it needs the independent-content face —
+        // omitting `multiple` here is what once made every native + click
+        // re-target the single existing sidechat page instead of adding one.
+        // Descriptors without a factory (files/changes/tasks/subagent/settings)
+        // stay single pages: the host's one-page-per-kind rule is what focuses
+        // them on a repeat open. What `multiple` takes away — the host's
+        // fallback dedupe — the service replaces plugin-side (see
+        // `service.openTab`'s native branch and the surface's `dedupeKey`).
+        multiple: descriptor.createTab !== undefined,
         // 0.1.7: the host keeps a visited body MOUNTED through hiding,
         // tab selection and Session switches, so the plugin's own React state
         // (records, tree expansion, scroll, unsaved drafts) survives without

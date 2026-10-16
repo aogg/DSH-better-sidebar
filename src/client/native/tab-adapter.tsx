@@ -166,6 +166,17 @@ export interface NativeTabRecords {
    * silently skipped every native editor tab (its next save wrote the OLD name).
    */
   pathTabs(): NativePathTab[]
+  /**
+   * Find one seat session's record whose synthetic tab matches. The service's
+   * plugin-side dedupe for kinds the host opens with `multiple` (the
+   * `createTab` descriptors — see `registerDescriptor`) must walk the RIGHT
+   * column's live tabs to focus an already-open one, and that space exists only
+   * here: the store's state never sees native tabs.
+   * @param sessionId - the seat session to scan (records are per seat).
+   * @param predicate - match on the record's synthetic `SidebarTab`.
+   * @returns the first matching tab (its `id` is the focus target), or undefined.
+   */
+  findBy(sessionId: string, predicate: (tab: SidebarTab) => boolean): SidebarTab | undefined
   /** Whether this seat session has a record for the id. */
   has(sessionId: string, id: string): boolean
   /** Merge a patch into the synthetic record (the `updateTab` path). */
@@ -364,6 +375,12 @@ export function createNativeTabRecords(): NativeTabRecords {
       return tabs
     },
     has: (sessionId, id) => views.has(viewKey(sessionId, id)),
+    findBy(sessionId, predicate) {
+      for (const entry of views.values()) {
+        if (entry.seat === sessionId && predicate(entry.tab)) return entry.tab
+      }
+      return undefined
+    },
     update(sessionId, id, patch) {
       const key = viewKey(sessionId, id)
       const entry = views.get(key)

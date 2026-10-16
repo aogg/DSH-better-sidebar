@@ -2,6 +2,14 @@
 
 > 本文档收录 dsh-better-sidebar 的完整发布历史（最新版摘要见 [README](README.md)；同步发布于 [GitHub Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)）。
 
+### v0.28.3
+
+- 💬 **原生右栏的侧边对话页签真正多开：每次打开都铸造独立新页签，重开已打开线程聚焦既有页签而不是再切一遍**（9521db7 把「每次打开都新建线程」做进了底部工作台，原生栏却纹丝不动——根因是原生 tab 类型注册处漏传宿主 `SidebarRightTabDefinition.multiple` 契约（「有 `multiple` 则每次按 kind 打开都铸造独立内容；缺省则每 pane 每 kind 一页」），宿主于是把 sidechat 当单页类型：每次打开只是对同一页重发导航参数（切线程），页签永远只有一个）。三处一起收：
+  - **注册面**：`registerDescriptor` 按 `descriptor.createTab !== undefined` 传 `multiple`——sidechat 每开一次拿一个独立页面地址；files/changes/tasks/subagent/settings 等无 `createTab` 的类型保持单页，由宿主继续负责「重开即聚焦 + 参数重投递」（subagent 跳转等靠它）；`terminal-bottom` 虽有 `createTab` 但 `bottomOnly` 从不注册原生类型。
+  - **去重搬进插件**：`multiple` 之后宿主对 sidechat 不再有「每 pane 一页」的兜底去重，「重开已打开线程 → 聚焦既有页签」由插件侧接手——`service.openTab` 原生分支在 `descriptor.createTab` **mint 之后**从 mint 出的 tab 求 `dedupeKey`（先 mint、后判定：parked 线程 id 已被本次打开消费，不会泄漏到下一次无关打开），把匹配器经 `SidebarSurface.openTab` 交给 surface；surface 在自己持有的原生记录里扫「同 seat 会话 + 同 kind + `dedupeKey` 匹配」（`NativeTabRecords` 相应增加 `findBy(sessionId, predicate)` 枚举能力，`Pending` 条目带上 `dedupeKey`），命中走 `activate`（`ISidebarRight.focus`）而不再调 `controller.openTab`；为后台会话排队的打开在重放时重跑同一判定，两个排队的打开不会都铸造。未绑定（`meta.autoCreate`）的全新 tab 键为 `undefined`、永不去重，与底部工作台 `applyDedupe` 同一语义。生命周期保持原生面「每次打开只报一次 `onOpen`」的既有契约——去重聚焦也报 mint 出的 tab，不切 `onActivate`；外部插件指南同步订正。
+  - **版本**：`SIDEBAR_SERVICE_VERSION` 与 package.json / dsh.plugin.json 一起升到 **0.28.3**。
+  - 🧪 测试：`tests/native-registration.spec.ts` 新增 `multiple` 契约一组（sidechat 形状的 `createTab` 类型注册带 `multiple: true`；editor/git/files/subagent/settings 逐个断言该字段**缺席**——宿主的铸页判定是严格 `=== true`）；新增 `tests/sidechat-native-dedupe.spec.ts` 5 例（真实 service → `createNativeSurface` → controller mock 全链路：重开已打开线程 → `focus('tab-1')` 恰一次且 `openTab` 零调用、parked 种子被本次消费、`onOpen` 恰一次带 mint tab；聚焦后的普通打开 mint `autoCreate` 新页签且不带去重键——证明 parked 种子没有泄漏；重开未打开的 parked 线程 → 带 `dedupeKey` 匹配器照常新开；为后台会话排队的打开在 `flushPending` 重放时命中中途出现的记录 → 聚焦一次、二次 flush 不再聚焦；`single` 类型（subagent）不带匹配器、参数照常重投递）。判别性：注册处退掉 `multiple` → 注册断言红；surface 不扫记录（或 service 不传匹配器）→ 聚焦用例红、`openTab` 被重复调用；把 `createTab` 挪到去重判定之后（或命中即跳过）→ 泄漏用例红。
+
 ### v0.27.0
 
 - 🔌 **编辑器保存变成插件可见的事件：保存成功后，别的插件可以注入回调参与这个时机，也可以只是订阅到这次保存**（v0.27.0+，feature `'fileSaveEvents'`；面向消费方的完整说明——字段表、最小示例与边界——见 [docs/file-save-events.md](docs/file-save-events.md)；另增「本插件未安装 / 版本过旧时会怎样」一节：client 未装 → 消费插件停等、服务出现自动激活，旧版 → 先探 `features` 再订阅，host 面 → 无人 emit、零错误——按 vendored cordis 与宿主 client runtime 代码逐条查证）。两个暴露面，同一事实来源（写入成功）：

@@ -42,14 +42,14 @@ function createRegistry() {
   const registered = new Map<string, () => void>()
   const events: string[] = []
   /** Every definition the plugin handed the host, guide rows included. */
-  const definitions: Array<{ id: string; kind: string; guide?: Array<{ id?: unknown }> }> = []
+  const definitions: Array<{ id: string; kind: string; multiple?: boolean; guide?: Array<{ id?: unknown }> }> = []
   let failReleaseOf: string | undefined
   return {
     registered,
     events,
     definitions,
     failRelease(id: string): void { failReleaseOf = id },
-    register(definition: { id: string; kind: string; guide?: Array<{ id?: unknown }> }): () => void {
+    register(definition: { id: string; kind: string; multiple?: boolean; guide?: Array<{ id?: unknown }> }): () => void {
       definitions.push(definition)
       if (registered.has(definition.id)) {
         throw new Error(`sidebarRight: tab type id "${definition.id}" is already registered`)
@@ -241,6 +241,46 @@ describe('native tab registration lifecycle', () => {
     } finally {
       log.restore()
     }
+  })
+})
+
+/**
+ * The host `multiple` contract (`SidebarRightTabDefinition.multiple`): with it,
+ * every open by kind mints independent content; without it the host keeps ONE
+ * page per kind in each pane and only re-delivers navigation params. The
+ * registration keys it off `descriptor.createTab`: a descriptor that mints its
+ * own tabs per open (the side chat) needs every open to become a new page,
+ * while the page kinds must stay one-per-pane — the host's dedupe is what
+ * focuses a repeat open of those (and re-delivers the params a focus needs).
+ */
+describe('the native type registration carries the host `multiple` contract', () => {
+  it('registers a createTab kind with multiple and the page kinds without', () => {
+    const host = createHost()
+    const { store, service, records } = createPlugins()
+    // The sidechat shape (the only built-in with `createTab` that ever reaches
+    // the native surface; terminal-bottom has one too but is `bottomOnly`).
+    service.registerTab({
+      id: 'sidechat',
+      title: 'Side Chat',
+      createTab: () => ({ tab: { id: `sidechat:${crypto.randomUUID()}`, type: 'sidechat', title: 'Side Chat' } }),
+      dedupeKey: (tab) => (tab.meta as { threadId?: string } | undefined)?.threadId,
+      component: () => null,
+    })
+    // The single-page kinds: `single` is sugar for `dedupeKey: () => id`, and
+    // none of them mints (files/changes/tasks/subagent/settings).
+    service.registerTab({ id: 'subagent', title: 'Tasks', single: true, component: () => null })
+    service.registerTab({ id: 'settings', title: 'Settings', single: true, component: () => null })
+    const dispose = registerNativeSurface({ ctx: host.ctx as never, store, service, records })
+    const multipleOf = (kind: string): unknown =>
+      host.registry.definitions.find(definition => definition.kind === kind)?.multiple
+    expect(multipleOf('sidechat')).toBe(true)
+    // Absent — not merely falsy: `multiple === true` is the host's exact mint
+    // test, so anything else (including a forgotten field) keeps one page per
+    // kind per pane.
+    for (const kind of ['editor', 'git', 'files', 'subagent', 'settings']) {
+      expect(multipleOf(kind), `kind "${kind}" must stay a single page`).toBeUndefined()
+    }
+    dispose()
   })
 })
 

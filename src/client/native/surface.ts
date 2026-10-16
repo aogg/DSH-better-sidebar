@@ -23,11 +23,27 @@
 import type { Context } from '../../context-types.ts'
 import { fileAddressFor } from '../resource-address.ts'
 import type { NativePathTab, NativeTabParams, SidebarSurface } from '../service.ts'
+import type { SidebarTab } from '../state.ts'
 import type { NativeTabRecords } from './tab-adapter.tsx'
 
 /** One open the surface could not place yet. */
 type Pending =
-  | { kind: 'tab'; sessionId: string; tabKind: string; params: NativeTabParams; revealIfOpened: boolean; preferNewPane: boolean }
+  | {
+    kind: 'tab'
+    sessionId: string
+    tabKind: string
+    params: NativeTabParams
+    revealIfOpened: boolean
+    preferNewPane: boolean
+    /**
+     * The plugin-side duplicate check (see `SidebarSurface.openTab`): defined
+     * only for kinds the host opens with `multiple`, whose reopen-to-focus
+     * rule lives here now. Carried on the QUEUED entry too, so a replay to a
+     * session coming on screen re-runs the check against the records of that
+     * moment — two opens parked for an off-screen session must not BOTH mint.
+     */
+    dedupeKey?: (candidate: SidebarTab) => boolean
+  }
   | { kind: 'resource'; sessionId: string; address: string; line: number | undefined; revealIfOpened: boolean; preferNewPane: boolean }
 
 /**
@@ -144,6 +160,24 @@ export function createNativeSurface(ctx: Context, records: NativeTabRecords): Na
     if (api === undefined) return false
     const onScreen = mountedSessionId(ctx) === entry.sessionId
     if (entry.kind === 'tab') {
+      // The plugin-side dedupe for `multiple` kinds runs at PLACE time — also
+      // on a queued replay — so a record minted between the open and its
+      // placement still wins. A hit focuses the existing tab and reports the
+      // entry placed (never handed to `api.openTab`, which would mint a
+      // duplicate): with no host-side fallback dedupe left, one page per
+      // already-open thread is this module's job. Focus is best-effort on the
+      // same face `activate` rides (`ISidebarRight.focus`, dsh >= 0.1.5); an
+      // entry queued for an off-screen session just stays satisfied by its
+      // existing tab when the session surfaces.
+      if (entry.dedupeKey !== undefined) {
+        const matcher = entry.dedupeKey
+        const existing = records.findBy(entry.sessionId, candidate =>
+          candidate.type === entry.tabKind && matcher(candidate))
+        if (existing !== undefined) {
+          focusRecord(entry.sessionId, existing.id)
+          return true
+        }
+      }
       const options = {
         params: entry.params,
         revealIfOpened: entry.revealIfOpened,
@@ -215,6 +249,24 @@ export function createNativeSurface(ctx: Context, records: NativeTabRecords): Na
   }
 
   /**
+   * Focus one known native tab through the controller's `focus` face
+   * (`ISidebarRight.focus`, dsh >= 0.1.5): the core `activate` publishes and
+   * the dedupe hit in `place` rides. Best-effort — a controller without the
+   * face (or without a controller at all) leaves the tab where it is, which is
+   * still the right outcome for a dedupe hit: the tab exists, and opening a
+   * duplicate would be the only wrong answer.
+   *
+   * Defined after `sessionOf` but referenced by `place` above: `place` cannot
+   * run before creation finishes (the pending queue is empty until the first
+   * `openTab`/`openResource`), so the binding is always live at call time.
+   */
+  const focusRecord = (sessionId: string, tabId: string): boolean => {
+    if (sessionOf(tabId, sessionId) === undefined) return false
+    controller()?.focus?.(tabId)
+    return true
+  }
+
+  /**
    * Forget the records of sessions that no longer exist.
    *
    * A `keepMounted` body survives until its tab or its session ends, and a
@@ -250,8 +302,16 @@ export function createNativeSurface(ctx: Context, records: NativeTabRecords): Na
   const unsubscribeList = ctx.sessions.list.subscribe(onListChange)
   evictGoneSessions()
   return {
-    openTab({ sessionId, kind, params, revealIfOpened, preferNewPane }) {
-      enqueue({ kind: 'tab', sessionId, tabKind: kind, params, revealIfOpened, preferNewPane: preferNewPane === true })
+    openTab({ sessionId, kind, params, revealIfOpened, preferNewPane, dedupeKey }) {
+      enqueue({
+        kind: 'tab',
+        sessionId,
+        tabKind: kind,
+        params,
+        revealIfOpened,
+        preferNewPane: preferNewPane === true,
+        ...(dedupeKey === undefined ? {} : { dedupeKey }),
+      })
     },
     openResource({ sessionId, address, line, revealIfOpened, preferNewPane }) {
       enqueue({ kind: 'resource', sessionId, address, line, revealIfOpened, preferNewPane: preferNewPane === true })
@@ -292,9 +352,7 @@ export function createNativeSurface(ctx: Context, records: NativeTabRecords): Na
       // External plugin tabs (multi-instance kinds like side chats) carry no
       // (kind, address) identity to re-open against, so "open again to focus"
       // cannot work for them — focus through the controller's own face.
-      if (sessionOf(tabId, sessionId) === undefined) return false
-      controller()?.focus?.(tabId)
-      return true
+      return focusRecord(sessionId, tabId)
     },
     has: (tabId, sessionId) => sessionOf(tabId, sessionId) !== undefined,
     pathTabs: () => records.pathTabs(),

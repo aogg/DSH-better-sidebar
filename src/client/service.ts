@@ -574,8 +574,25 @@ export interface NativePathTab {
  * @internal Not part of the consumer contract.
  */
 export interface SidebarSurface {
-  /** Open a page type in one session's native surface. */
-  openTab(input: { sessionId: string; kind: string; params: NativeTabParams; revealIfOpened: boolean; preferNewPane?: boolean }): void
+  /**
+   * Open a page type in one session's native surface.
+   *
+   * `dedupeKey` (optional) is the plugin-side duplicate check for kinds the
+   * host opens with `multiple` (the `createTab` descriptors — the host keeps no
+   * one-page-per-kind fallback for those, so "reopen an open tab → focus it"
+   * would otherwise mint a duplicate). The service resolves the descriptor's
+   * own `dedupeKey`/`single` semantics against the MINTED tab and hands a
+   * matcher over; the surface runs it against the native records it holds —
+   * a space the service cannot see.
+   */
+  openTab(input: {
+    sessionId: string
+    kind: string
+    params: NativeTabParams
+    revealIfOpened: boolean
+    preferNewPane?: boolean
+    dedupeKey?: (candidate: SidebarTab) => boolean
+  }): void
   /** Open a resource address in one session's native surface. */
   openResource(input: { sessionId: string; address: string; line?: number; revealIfOpened: boolean; preferNewPane?: boolean }): void
   /** The file address of one path (the native surface owns the grammar). */
@@ -854,7 +871,7 @@ export function matchUrlTarget(tabs: readonly TabDescriptor[], url: URL): TabDes
  * The plugin version this service instance reports. Keep in lockstep with
  * `package.json`'s version — `tests/service.spec.ts` asserts the pair.
  */
-export const SIDEBAR_SERVICE_VERSION = '0.28.2'
+export const SIDEBAR_SERVICE_VERSION = '0.28.3'
 
 /**
  * Monotonic capability list consumers use to gate new API usage (features
@@ -1189,9 +1206,27 @@ export function createBetterSidebarService(store: SidebarStore): BetterSidebarSe
       // The descriptor's own factory mints what a view needs beyond the seed:
       // the side chat's thread bootstrap / reattach meta, the terminal's
       // per-instance title. A `null` return refuses the open (terminal cap).
+      // This MUST run before the dedupe judgment below: `createTab` consumes
+      // the side chat's parked thread id, and a judgment-first order would
+      // leave that seed parked for the next, unrelated open.
       const minted = descriptor.createTab === undefined || state === undefined
         ? undefined
         : descriptor.createTab(state)
+      // Kinds the host opens with `multiple` (the createTab descriptors — the
+      // side chat is the built-in one) lost the host's one-page-per-kind
+      // fallback, so "reopen an already-open X → focus it" is enforced HERE:
+      // the same `dedupeKey`/`single` semantics the bottom workbench's
+      // `applyDedupe` applies, but matched against the native records (via the
+      // surface) instead of the store's splits. Deliberately ONLY for
+      // createTab kinds: single-page kinds keep the host dedupe, whose open
+      // also re-delivers navigation params to the focused page (the subagent
+      // jump rides that) — a dedupe FOCUS would drop them.
+      // The key is derived from the MINTED tab (built below) — "mint first,
+      // judge second" — so a seed consumed by a dedupe-focused open is spent
+      // on it and cannot leak into the next, unrelated open.
+      const dedupeOf = descriptor.createTab === undefined
+        ? undefined
+        : descriptor.dedupeKey ?? (descriptor.single === true ? () => descriptor.id : undefined)
       if (minted === null) return
       const title = seed.title ?? minted?.tab.title
         ?? (typeof descriptor.title === 'function' ? descriptor.title() : descriptor.title)
@@ -1244,6 +1279,11 @@ export function createBetterSidebarService(store: SidebarStore): BetterSidebarSe
         // A component type's path seed stays on the page open (regression
         // #632: rerouting every path seed into openResource sent the open to
         // the editor, so the registered component never mounted).
+        // The dedupe key of the MINTED tab: defined only for `multiple` kinds
+        // (see `dedupeOf` above) and only when the minted tab itself carries a
+        // key — the side chat's unbound fresh tab (`meta.autoCreate`) keys to
+        // `undefined` and never dedupes, exactly like the bottom workbench.
+        const dedupeKey = dedupeOf?.(synthetic)
         surface.openTab({
           sessionId: targetSessionId,
           kind: seed.type,
@@ -1256,10 +1296,17 @@ export function createBetterSidebarService(store: SidebarStore): BetterSidebarSe
           },
           revealIfOpened: reveal && revealIfOpened,
           ...(side ? { preferNewPane: true } : {}),
+          ...(dedupeOf === undefined || dedupeKey === undefined ? {} : {
+            dedupeKey: (candidate: SidebarTab) => dedupeOf(candidate) === dedupeKey,
+          }),
         })
       }
       // The native surface reports one open event, not create-vs-focus, so a
-      // lifecycle consumer hears onOpen (documented in the guide).
+      // lifecycle consumer hears onOpen either way — a dedupe FOCUS reports
+      // onOpen once too (with the minted tab), never onActivate. That keeps
+      // the native lane's single-event contract the external-plugin guide
+      // documents; the bottom workbench's created/activated split is the
+      // plugin-layout path only.
       safeCall(() => descriptor.onOpen?.(synthetic, callbackScope))
       return
     }
