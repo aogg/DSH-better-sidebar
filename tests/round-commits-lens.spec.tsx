@@ -65,7 +65,7 @@ async function renderLens(props: {
 }
 
 function chevronOf(container: HTMLElement, hashFull: string): HTMLButtonElement | undefined {
-  return container.querySelector<HTMLButtonElement>(`[data-commit="${hashFull}"] .commitToggle`) ?? undefined
+  return container.querySelector<HTMLButtonElement>(`[data-commit="${hashFull}"] [data-commit-toggle]`) ?? undefined
 }
 
 beforeEach(() => {

@@ -358,6 +358,7 @@ const CommitRow = memo(function CommitRow(props: {
         <button
           type="button"
           className={css.commitToggle}
+          data-commit-toggle=""
           aria-expanded={open}
           aria-controls={filesId}
           aria-label={entry.subject}
