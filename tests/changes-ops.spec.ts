@@ -387,7 +387,7 @@ describe('collectSubtreeIds (the parentSession subtree walk)', () => {
       rawRow({ parentSession: 'root' }), // no id at all
       rawRow(null), // no header object
       rawRow(undefined),
-      {}, // not even a header field
+      {} as StoredSessionHeaderLike, // not even a header field
       // The one usable edge still attaches among the garbage.
       rawRow({ id: 'kid3', parentSession: 'root' }),
     ]
@@ -458,11 +458,11 @@ describe('mergeSubtreeEvents (the merged subtree window)', () => {
 
   it('ships only tool/call and tool/result rows', () => {
     const events: SidebarSessionEvent[] = [
-      ev(0, 'user/message', 10, { text: 'go' }),
+      ev('user/message', 0, 10, { text: 'go' }),
       call(1, 'write', 'w', { file_path: 'a.ts' }, 20),
-      ev(2, 'assistant/message', 30, {}),
+      ev('assistant/message', 2, 30, {}),
       result(3, 'w', 'ok', false, 40),
-      ev(4, 'turn/end', 50, {}),
+      ev('turn/end', 4, 50, {}),
     ]
     expect(mergeSubtreeEvents([part('s', true, events)], undefined).events.map(event => event.seq))
       .toEqual([20, 40])
@@ -579,7 +579,7 @@ describe('changes.ops route (subtree merge over the mounted API)', () => {
 
   it('answers a childless root with the untouched single-log contract (zero-regression pin)', async () => {
     const log = [
-      ev(1, 'user/message', T0 - 10, { text: 'go' }),
+      ev('user/message', 1, T0 - 10, { text: 'go' }),
       call(2, 'write', 'w1', { file_path: 'a.ts', content: 'one' }, T0),
       result(3, 'w1', 'ok', false, T0 + 1),
       call(4, 'read', 'r1', { file_path: 'b.ts' }, T0 + 2),
@@ -683,7 +683,7 @@ describe('changes.ops route (subtree merge over the mounted API)', () => {
 
   it('keeps a single node on the merged time filter once the cursor passes 1e12', async () => {
     const log = [
-      ev(0, 'user/message', T_BIG - 20, { text: 'go' }),
+      ev('user/message', 0, T_BIG - 20, { text: 'go' }),
       call(1, 'write', 'old-w', { file_path: 'old.ts' }, T_BIG - 10),
       call(2, 'write', 'new-w', { file_path: 'new.ts' }, T_BIG + 5),
       result(3, 'new-w', 'ok', false, T_BIG + 6),
