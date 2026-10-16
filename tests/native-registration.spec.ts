@@ -73,16 +73,40 @@ function createRegistry() {
 }
 
 /**
+ * The host's slot DECLARATIONS this surface touches, with each slot's `kind`.
+ * `@deepseek-ai/dsh-client-ui-slots` validates every registration against the
+ * declaration's kind, and the host's sidebar-right package declares exactly
+ * these three (its `rightbar.session` children table):
+ *
+ *   - `sidebar.right.pane.tab`        keyed — one body per native tab type
+ *   - `sidebar.right.pane.tab.title`  keyed — one chip title per native tab type
+ *   - `sidebar.right.tab.menu.item`   list  — the tab-menu copy rows
+ *
+ * The fake `slots.register` below validates AGAINST THIS TABLE — the host's
+ * word, not the plugin's habits — with the host's exact error messages. The
+ * original bug (fixed in 61edbf2) shipped precisely because the previous fake
+ * accepted whatever the plugin happened to send: a `key` handed to the list
+ * slot passed the fake and exploded only at runtime on the real host
+ * (`list slot "sidebar.right.tab.menu.item" requires options.id`).
+ */
+const SLOT_KINDS: Record<string, 'keyed' | 'list'> = {
+  'sidebar.right.pane.tab': 'keyed',
+  'sidebar.right.pane.tab.title': 'keyed',
+  'sidebar.right.tab.menu.item': 'list',
+}
+
+/**
  * A fake client context: `slots.inject` runs its callback synchronously (the
  * real one resolves the declaration and calls `ctx.effect`, which throws while
  * `inactive`), a slot listed in `failSlots` throws from `slots.register`, and
  * `inject` hands back the registry while honouring the callback's own teardown.
  *
- * Slot failures are keyed by `name::key` — NOT by `key` alone. Both slots of a
- * descriptor share the same key, so a key-keyed failure can only ever fail the
- * FIRST slot; failing the second one for a single descriptor is the only shape
- * that exercises `registerSlots`' partial release (the first slot is already
- * installed when the second throws).
+ * `failSlots` is keyed by the slot's IDENTITY, which follows its declared
+ * kind: `name::key` for a keyed slot, `name#id` for a list one. Both slots of
+ * a descriptor share the same key, so a key-keyed failure can only ever fail
+ * the FIRST slot; failing the second one for a single descriptor is the only
+ * shape that exercises `registerSlots`' partial release (the first slot is
+ * already installed when the second throws).
  */
 function createHost() {
   const registry = createRegistry()
@@ -93,10 +117,9 @@ function createHost() {
   const state = {
     /** True while the plugin's context is being torn down (the reload case). */
     inactive: false,
-    /** `name::key` slots whose registration throws. */
+    /** Slot identities whose registration throws (kind-shaped, see above). */
     failSlots: new Set<string>(),
   }
-  const slotId = (options: { name: string; key?: string }): string => `${options.name}::${options.key ?? ''}`
   const ctx = {
     inject: (
       _deps: readonly string[],
@@ -111,11 +134,27 @@ function createHost() {
         if (state.inactive) throw new Error('cannot create effect on inactive context')
         return typeof callback === 'function' ? callback() : () => {}
       },
-      register: (options: { name: string; key?: string }) => {
-        const id = slotId(options)
-        if (state.failSlots.has(id)) throw new Error(`slot registration for "${id}" failed`)
-        slotEvents.push(`register ${id}`)
-        return () => { slotEvents.push(`release ${id}`) }
+      register: (options: { name: string; key?: string; id?: string }) => {
+        // The host refuses an undeclared slot before it even looks at the
+        // options (dsh-client-ui-slots: `slot "…" is not declared …`).
+        const kind = SLOT_KINDS[options.name]
+        if (kind === undefined) {
+          throw new Error(`slot "${options.name}" is not declared (a parent entry's children table must declare it)`)
+        }
+        // Then the per-kind option requirements, VERBATIM from the host's
+        // `register`: a keyed slot needs `options.key`, a list slot needs
+        // `options.id` — a `key` is NOT an id, so the old `key:`-shaped menu
+        // registration throws here exactly as it did on the real host.
+        if (kind === 'keyed' && options.key === undefined) {
+          throw new Error(`keyed slot "${options.name}" requires options.key`)
+        }
+        if (kind === 'list' && options.id === undefined) {
+          throw new Error(`list slot "${options.name}" requires options.id`)
+        }
+        const identity = kind === 'list' ? `${options.name}#${options.id}` : `${options.name}::${options.key}`
+        if (state.failSlots.has(identity)) throw new Error(`slot registration for "${identity}" failed`)
+        slotEvents.push(`register ${identity}`)
+        return () => { slotEvents.push(`release ${identity}`) }
       },
     },
   }
@@ -143,11 +182,20 @@ function silenceFailures(): { restore: () => void; messages: string[] } {
 
 /**
  * The phase labels a surface reports through the client's visible diagnostic
- * channel (`reportFailure` → `fail('native ' + phase, error)`).
+ * channel (`reportFailure` → `fail('native ' + phase, error)`), plus the error
+ * messages themselves — some assertions need the HOST's exact wording.
  */
-function collectReports(): { phases: string[]; report: (phase: string) => void } {
+function collectReports(): { phases: string[]; errors: string[]; report: (phase: string, error?: unknown) => void } {
   const phases: string[] = []
-  return { phases, report: (phase: string) => { phases.push(phase) } }
+  const errors: string[] = []
+  return {
+    phases,
+    errors,
+    report: (phase, error) => {
+      phases.push(phase)
+      if (error !== undefined) errors.push(error instanceof Error ? error.message : String(error))
+    },
+  }
 }
 
 describe('native tab registration lifecycle', () => {
@@ -347,8 +395,9 @@ describe('a bottomOnly descriptor never reaches the native surface', () => {
 /**
  * The HOST tab context menu's copy rows (src/client/native/tab-menu.tsx):
  * one `sidebar.right.tab.menu.item` slot registration per surface activation,
- * keyed `better-sidebar-copy-path`. The slot is declared `kind: "list"` by
- * the host's sidebar-right package, so the key cannot collide and ONE
+ * carrying the list entry id `better-sidebar-copy-path`. The slot is declared
+ * `kind: "list"` by the host's sidebar-right package, so the entry is
+ * identified by `options.id` — a `key` is not read there at all — and ONE
  * registration serves every file-address tab in the column — it is
  * deliberately NOT a descriptor entry and never lives in the per-descriptor
  * `live` map, so the assertions are written against the fake registry's slot
@@ -363,15 +412,16 @@ describe('the host tab-menu copy rows ride the sidebar.right.tab.menu.item slot'
 
     // Registered during the surface's activation, before any descriptor's
     // slots (the inject body installs it ahead of `sync()`), and the event
-    // carries BOTH the slot name and the implementation key.
-    expect(host.slotEvents[0]).toBe('register sidebar.right.tab.menu.item::better-sidebar-copy-path')
+    // carries BOTH the slot name and the list entry ID (the `name#id`
+    // identity — a `::` key would mean the plugin regressed to `key:`).
+    expect(host.slotEvents[0]).toBe('register sidebar.right.tab.menu.item#better-sidebar-copy-path')
 
     // One registration serves every tab, so no store/service pulse may
     // rebuild it — the same no-churn rule the descriptor slots are pinned
     // with above.
     store.setPrefs(store.getPrefs())
     expect(host.slotEvents.filter(event => event.includes('sidebar.right.tab.menu.item'))).toEqual([
-      'register sidebar.right.tab.menu.item::better-sidebar-copy-path',
+      'register sidebar.right.tab.menu.item#better-sidebar-copy-path',
     ])
 
     dispose()
@@ -379,6 +429,63 @@ describe('the host tab-menu copy rows ride the sidebar.right.tab.menu.item slot'
     // menu disposers ahead of the descriptor registrations, so a partial
     // teardown never strands the rows on a live menu.
     expect(host.slotEvents.filter(event => event.startsWith('release'))[0])
-      .toBe('release sidebar.right.tab.menu.item::better-sidebar-copy-path')
+      .toBe('release sidebar.right.tab.menu.item#better-sidebar-copy-path')
+  })
+})
+
+/**
+ * The fake slot registry must enforce the host's per-kind options contract —
+ * the regression this file now guards against shipped precisely because the
+ * old fake accepted a `key` where the host's list slot demands `options.id`,
+ * so the mismatch only ever surfaced at runtime on a deployed plugin. These
+ * cases pin the fake to the host's exact messages (dsh-client-ui-slots'
+ * `register`) and prove that a violating registration is REPORTED through the
+ * visible channel without taking the rest of the surface down.
+ */
+describe('the fake slot registry enforces the host per-kind options contract', () => {
+  it('throws the host message when the list slot lacks options.id (the regression shape)', () => {
+    const host = createHost()
+    // The pre-fix plugin's exact call shape: `key` handed to a list slot. The
+    // host never reads `key` there, so the id is simply missing — and it must
+    // fail identically with the key present and with nothing at all.
+    expect(() => host.ctx.slots.register({ name: 'sidebar.right.tab.menu.item', key: 'better-sidebar-copy-path' }))
+      .toThrowError('list slot "sidebar.right.tab.menu.item" requires options.id')
+    expect(() => host.ctx.slots.register({ name: 'sidebar.right.tab.menu.item' }))
+      .toThrowError('list slot "sidebar.right.tab.menu.item" requires options.id')
+  })
+
+  it('reports the missing-id menu registration through the visible channel and keeps the descriptors up', () => {
+    const host = createHost()
+    const { store, service, records } = createPlugins()
+    const reports = collectReports()
+    // Simulate the pre-fix plugin (the shape 61edbf2 replaced): whatever id
+    // the surface hands over is stripped, so the host-facing call carries
+    // `key` only — the fake must reject it with the host's message.
+    const register = host.ctx.slots.register as (options: unknown, component?: unknown) => () => void
+    host.ctx.slots.register = (options: { name: string; key?: string; id?: string }, component?: unknown) => (
+      options.name === 'sidebar.right.tab.menu.item'
+        ? register({ ...options, id: undefined, key: 'better-sidebar-copy-path' }, component)
+        : register(options, component)
+    )
+    expect(() => registerNativeSurface({
+      ctx: host.ctx as never, store, service, records, reportFailure: reports.report,
+    })).not.toThrow()
+    expect(reports.phases).toEqual(['register the tab-menu copy rows'])
+    expect(reports.errors).toEqual(['list slot "sidebar.right.tab.menu.item" requires options.id'])
+    // The menu slot never installed…
+    expect(host.slotEvents.filter(event => event.includes('sidebar.right.tab.menu.item'))).toEqual([])
+    // …and the failure took nothing else down — the containment the visible
+    // report channel exists for.
+    expect([...host.registry.registered.keys()].sort()).toEqual([
+      'dsh-better-sidebar:editor',
+      'dsh-better-sidebar:files',
+      'dsh-better-sidebar:git',
+    ])
+  })
+
+  it('throws the host message when a keyed slot lacks options.key', () => {
+    const host = createHost()
+    expect(() => host.ctx.slots.register({ name: 'sidebar.right.pane.tab', id: 'dsh-better-sidebar:editor' }))
+      .toThrowError('keyed slot "sidebar.right.pane.tab" requires options.key')
   })
 })
