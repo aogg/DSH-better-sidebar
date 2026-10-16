@@ -430,15 +430,19 @@ function toolLeading(name: string, failed: boolean): React.ReactNode {
   }
 }
 
-/** One row renderer (React keys ride the source event seq). `rewrite` is the
- *  surface's markdown link pass — the rows are model prose, so a relative link
- *  resolves against the session cwd (see use-markdown-surface). */
+/** One row renderer (React keys ride the source event seq). User rows render
+ *  VERBATIM — plain text under `white-space: pre-wrap`, matching the host main
+ *  pane's `projectUserText` projection (markdown would collapse the runs of
+ *  spaces and joins single newlines that ASCII box art depends on). Only the
+ *  assistant row is model prose: it goes through markdown, and `rewrite` — the
+ *  surface's markdown link pass — makes a relative link resolve against the
+ *  session cwd (see use-markdown-surface). */
 function renderRow(row: SidechatTranscriptRow, labels: RowLabels, rewrite: (text: string) => string): React.ReactNode {
   switch (row.kind) {
     case 'user':
       return (
         <div key={`${row.kind}:${row.seq}`} className={css.sidechatUser}>
-          <MarkdownText {...markdownTextProps(rewrite(row.text), labels)} />
+          {row.text}
         </div>
       )
     case 'assistant': {
@@ -1300,12 +1304,13 @@ export function SideChatView(props: {
         <MarkdownDelegateProvider openFile={openChatFile}>
           {rows.map(row => renderRow(row, rowLabels, rewriteChatText))}
           {/* The unclaimed inbox: accepted messages whose claim has not logged
-              them yet. The same bubble surface (and markdown pass) as a
-              durable user row, plus the state word and the dequeue button. */}
+              them yet. The same bubble surface as a durable user row — verbatim
+              plain text, no markdown — plus the state word and the dequeue
+              button. */}
           {pendingRows.map(item => (
             <div key={`pending:${item.id}`} className={css.sidechatPending}>
               <div className={css.sidechatPendingText}>
-                <MarkdownText {...markdownTextProps(rewriteChatText(item.text), rowLabels)} />
+                {item.text}
               </div>
               <div className={css.sidechatPendingMeta}>
                 <StateDot state="ongoing" size={8} />
@@ -1326,7 +1331,7 @@ export function SideChatView(props: {
           {showEcho && echo !== null && (
             <div className={css.sidechatPending}>
               <div className={css.sidechatPendingText}>
-                <MarkdownText {...markdownTextProps(rewriteChatText(echo.text), rowLabels)} />
+                {echo.text}
               </div>
               <div className={css.sidechatPendingMeta}>
                 <StateDot state="ongoing" size={8} />

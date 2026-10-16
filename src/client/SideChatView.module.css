@@ -292,7 +292,10 @@
   animation: sidechatRowIn 180ms ease-out;
 }
 
-/* User message: right-aligned bubble, same surface as the main pane. */
+/* User message: right-aligned bubble, same surface as the main pane. The text
+ * renders verbatim (pre-wrap preserves the user's own line breaks and runs of
+ * spaces — ASCII box art survives), while overflow-wrap still folds the
+ * pathological no-space line. */
 .sidechatUser {
   align-self: flex-end;
   max-width: 88%;
@@ -301,6 +304,7 @@
   background: var(--dsw-specific-bubble, var(--dsw-alias-bg-base));
   font: var(--dsw-font-s-14);
   color: var(--dsw-alias-label-primary);
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
