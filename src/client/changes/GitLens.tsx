@@ -443,11 +443,12 @@ export function GitLens(props: GitLensProps) {
   const logEntriesRef = useRef<readonly GitLogEntry[]>([])
   /** Publish one history list: the ref mirrors first, then state. When the
    *  list is the SAME reference React bails the update out — the zero-change
-   *  refresh renders nothing. */
-  const publishLog = (entries: readonly GitLogEntry[]): void => {
+   *  refresh renders nothing. Stable identity: the refresh chain's callbacks
+   *  capture it once. */
+  const publishLog = useCallback((entries: readonly GitLogEntry[]): void => {
     logEntriesRef.current = entries
     setLogEntries(entries as GitLogEntry[])
-  }
+  }, [])
   /** The walk identity the displayed history answers to: the history path
    *  filter AND the selected checkout. A refresh may fold its fresh first
    *  page into the displayed rows only when both still match; anything else
@@ -599,8 +600,10 @@ export function GitLens(props: GitLensProps) {
    *  real worktree/scope switch may run this — a plain refresh must keep the
    *  history on screen while it revalidates (the merge below handles the
    *  outcome), so the list never blanks out mid-refresh. The walk identity
-   *  and the paging position belong to the OLD checkout and reset with it. */
-  const clearDerived = (): void => {
+   *  and the paging position belong to the OLD checkout and reset with it.
+   *  Stable identity (everything below is a setter or a ref) so the refresh
+   *  chain's callbacks can list it as a dependency without churning. */
+  const clearDerived = useCallback((): void => {
     setBranchNames([])
     publishLog([])
     setLogEnded(false)
@@ -609,7 +612,7 @@ export function GitLens(props: GitLensProps) {
     setActionError(null)
     logWalkRef.current = { path: null, target: undefined }
     logSkipRef.current = 0
-  }
+  }, [publishLog])
 
   /** Load the branch choices and the first history page of one checkout.
    *  The history folds INCREMENTALLY: same walk (filter + checkout) and a
@@ -691,7 +694,7 @@ export function GitLens(props: GitLensProps) {
     // A silent tick only keeps the inventory (and its change counts) fresh.
     if (silent && !targetChanged) return
     await loadTarget(target)
-  }, [gitScopeNow, loadTarget])
+  }, [gitScopeNow, loadTarget, clearDerived])
 
   /** Run one refresh, replaying a request that arrives mid-flight exactly once. */
   const refresh = useCallback(async (silent = false, signal?: AbortSignal): Promise<void> => {
