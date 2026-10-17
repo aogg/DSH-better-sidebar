@@ -206,7 +206,7 @@ describe('built-in tab registrations', () => {
     const { service } = setup()
     const toggles = service.getTab('editor')?.settings?.toggles ?? []
     // The workspace-fence switch is gone with the fence itself.
-    expect(toggles.map(t => t.key)).toEqual(['editorExplorer', 'explorerExclude'])
+    expect(toggles.map(t => t.key)).toEqual(['editorExplorer', 'explorerExclude', 'explorerGitBadges'])
     expect(toggles[0]?.title).toBeDefined()
     expect(toggles[0]?.desc).toBeDefined()
     // The merged mode is an iconed select (merged vs separate), not a switch.
