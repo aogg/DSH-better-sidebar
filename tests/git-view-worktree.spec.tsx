@@ -128,7 +128,7 @@ describe('GitLens (changes tab, git lens) linked-worktree consistency', () => {
       expect(container.textContent).toContain('Agent checkout commit')
       expect(container.textContent).not.toContain('Main checkout commit')
       expect(branch).toHaveBeenCalledWith(expect.anything(), AGENT)
-      expect(log).toHaveBeenCalledWith(expect.anything(), 20, 0, AGENT)
+      expect(log).toHaveBeenCalledWith(expect.anything(), 20, 0, AGENT, undefined, undefined)
 
       await act(async () => {
         Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(worktreeSelect, MAIN)
@@ -141,7 +141,7 @@ describe('GitLens (changes tab, git lens) linked-worktree consistency', () => {
       expect(container.textContent).toContain('Main checkout commit')
       expect(container.textContent).not.toContain('Agent checkout commit')
       expect(branch).toHaveBeenLastCalledWith(expect.anything(), MAIN)
-      expect(log).toHaveBeenLastCalledWith(expect.anything(), 20, 0, MAIN)
+      expect(log).toHaveBeenLastCalledWith(expect.anything(), 20, 0, MAIN, undefined, undefined)
     } finally {
       act(() => { root.unmount() })
       container.remove()
