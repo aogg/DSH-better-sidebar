@@ -777,14 +777,37 @@ export async function checkout(cwd: string, branch: string, selected?: string): 
 /** Recent commit history (newest first), lazily pageable via skip/count.
  *  `opts.files` adds `--name-status` and fills each entry's `files` (see
  *  {@link parseLogNameStatus}); without it the output — and the parse — are
- *  exactly what they always were, so older callers see no difference. */
-export async function log(cwd: string, count = 30, skip = 0, selected?: string, opts?: { files?: boolean }): Promise<GitLogEntry[]> {
+ *  exactly what they always were, so older callers see no difference.
+ *  `opts.path` narrows the log to ONE pathspec (a file's, or a directory's
+ *  whole subtree — git treats a dir pathspec as "anything under it", which is
+ *  how a folder row shows the history of everything it holds). The pathspec
+ *  rides behind `--end-of-options` + `--`: a caller-supplied value beginning
+ *  with `-` would otherwise parse as an OPTION (the same guard show() /
+ *  commitDiff() / diffRange() carry, see their comments), and after the
+ *  sentinel it can only ever be a path. `opts.follow` (a single FILE only)
+ *  adds `--follow`, so a file renamed mid-history keeps its log continuous
+ *  instead of stopping at the rename. Our own flag, it goes BEFORE the
+ *  sentinel — past `--end-of-options` git would take it for a pathspec and
+ *  the command would fail. Without `opts.path` the argv is byte-identical to
+ *  the pre-history shape: no `--`, no sentinel, no `--follow`. */
+export async function log(
+  cwd: string,
+  count = 30,
+  skip = 0,
+  selected?: string,
+  opts?: { files?: boolean; path?: string; follow?: boolean },
+): Promise<GitLogEntry[]> {
   const args = [
     'log', '-n', String(count), '--skip', String(skip), '--decorate=short',
     '--pretty=format:%h%x1f%s%x1f%an%x1f%ai%x1f%H%x1f%D',
   ]
   const files = opts?.files === true
   if (files) args.push('--name-status')
+  const path = opts?.path
+  if (path !== undefined && path !== '') {
+    if (opts?.follow === true) args.push('--follow')
+    args.push('--end-of-options', '--', path)
+  }
   const raw = await runGit(await repoRoot(cwd, selected), args)
   return files ? parseLogNameStatus(raw) : parseLogLines(raw)
 }
@@ -812,9 +835,19 @@ export async function show(cwd: string, rev: string, path: string, selected?: st
 /** Full patch text of one commit (`git show` with the commit header suppressed).
  *  Merge commits show their diff against the first parent (`-m --first-parent`
  *  is a no-op for regular commits), so a history click always has content.
- *  `--end-of-options` keeps a caller-supplied hash from parsing as an option. */
-export async function commitDiff(cwd: string, hash: string, selected?: string): Promise<string> {
-  return runGit(await repoRoot(cwd, selected), ['show', '--no-ext-diff', '--no-color', '--format=', '-m', '--first-parent', '--end-of-options', hash])
+ *  `--end-of-options` keeps a caller-supplied hash from parsing as an option.
+ *  `opts.path` trims the patch to ONE pathspec (`<hash> -- <path>` — "what did
+ *  THIS commit do to that file/directory"): the file-history modal expands a
+ *  commit onto the row it listed, and a whole-commit patch would bury the one
+ *  file's hunks under every sibling's. The path is an operand, not an option,
+ *  so it rides after a bare `--` (the hash's `--end-of-options` guard does not
+ *  cover it — the sentinel ends parsing at the hash, everything after `--` is
+ *  a pathspec anyway, and a leading `-` path cannot parse as a flag there). */
+export async function commitDiff(cwd: string, hash: string, selected?: string, opts?: { path?: string }): Promise<string> {
+  const args = ['show', '--no-ext-diff', '--no-color', '--format=', '-m', '--first-parent', '--end-of-options', hash]
+  const path = opts?.path
+  if (path !== undefined && path !== '') args.push('--', path)
+  return runGit(await repoRoot(cwd, selected), args)
 }
 
 /** Discard the worktree changes of one path (`git checkout -- <path>`; the index is untouched). */

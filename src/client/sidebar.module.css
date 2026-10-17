@@ -821,6 +821,180 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
   color: var(--dsw-alias-state-business-primary);
 }
 
+/* ── File history modal（查看 Git 历史）────────────────────────────────── */
+
+/* The dialog: wider than the 380px default (a patch wants width) and
+   height-capped so the list keeps a stable frame while paging. The doubled
+   class is the repo's override idiom (`.pluginModal.pluginModal`): one class
+   alone would race the primitive sheet on bundle order, two win outright. */
+.fileHistoryDialog.fileHistoryDialog {
+  width: min(760px, 100%);
+  height: min(600px, 100%);
+}
+
+/* One scrollport for the whole modal (header rides along — a history is one
+   continuous read, not a header plus a pane). */
+.fileHistoryContent.fileHistoryContent {
+  max-height: 100%;
+  overflow-y: auto;
+}
+
+.fileHistoryList {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.fileHistoryItem {
+  display: flex;
+  flex-direction: column;
+}
+
+/* One history row: line 1 = short-hash badge + subject + the copy-hash
+   button, line 2 = ref pills + author·time flushed right (the GitLens row's
+   shape, so the two histories read as one language). */
+.fileHistoryRow {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.fileHistoryRow:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.fileHistoryRow:focus-visible {
+  outline: none;
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+.fileHistoryRow[data-expanded='true'] {
+  background: var(--dsw-alias-interactive-bg-hover);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.fileHistoryRowLine1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fileHistoryRowHash {
+  flex: none;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: var(--dsw-alias-interactive-bg-active);
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-markdown-code-block-small);
+}
+
+.fileHistoryRowSubject {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--dsw-font-xxs-strong-12);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The copy-hash affordance: quiet (tertiary ink) until the row is hovered —
+   the row's primary gesture is expansion, the button must not compete. */
+.fileHistoryRowCopy {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  opacity: 0;
+}
+.fileHistoryRow:hover .fileHistoryRowCopy,
+.fileHistoryRowCopy:focus-visible,
+.fileHistoryRow[data-expanded='true'] .fileHistoryRowCopy {
+  opacity: 1;
+}
+.fileHistoryRowCopy:hover {
+  background: var(--dsw-alias-interactive-bg-active);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The brief "copied" label that replaces the button after a successful
+   write (the tree rows' own convention). */
+.fileHistoryRowCopied {
+  flex: none;
+  font: var(--dsw-font-xxxs-11);
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+}
+
+.fileHistoryRowLine2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.fileHistoryRowRef {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  font: var(--dsw-font-xxxs-strong-11);
+  color: var(--dsw-alias-brand-primary);
+  white-space: nowrap;
+}
+
+.fileHistoryRowMeta {
+  margin-left: auto;
+  font: var(--dsw-font-xxxs-11);
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+}
+
+/* The expanded row's patch: framed and inset under its row (the row's
+   squared-off bottom corners visually weld the two together), horizontally
+   scrollable because diff lines do not reflow. */
+.fileHistoryDiff {
+  margin: 0 0 6px;
+  padding: 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  background: var(--dsw-alias-bg-base);
+  overflow-x: auto;
+}
+
+/* The pager: the changes tab's 加载更多 button, transplanted (same geometry,
+   so paging a modal history feels like paging the panel's). */
+.fileHistoryMore {
+  display: block;
+  width: 100%;
+  margin: 4px 0 8px;
+  height: 28px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 3px;
+  background: transparent;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+.fileHistoryMore:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+.fileHistoryMore:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* A "Show in folder" reveal highlight: the target row stays tinted until
    the transient reveal set is cleared (a reload starts unhighlighted).
    The DSH business-blue surface (the same source the host's nav items use

@@ -987,7 +987,7 @@ function buildApi(
     },
     'git.log': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
-      const record = payload as { count?: unknown; skip?: unknown; files?: unknown }
+      const record = payload as { count?: unknown; skip?: unknown; files?: unknown; path?: unknown }
       const count = typeof record.count === 'number' && Number.isInteger(record.count) && record.count > 0
         ? record.count
         : undefined
@@ -997,11 +997,29 @@ function buildApi(
       // `files` opts into `--name-status` (per-entry touched-file rows). A
       // payload without the field takes the exact old path — no flag, no
       // parse change — so older callers see no difference.
-      return git.log(cwd, count, skip, selectedRepoOf(payload), record.files === true ? { files: true } : undefined)
+      // `path` narrows the log to one file/directory (the tree's 「查看 Git
+      // 历史」): optional string, and an EMPTY string is "no pathspec" so the
+      // branch log stays the branch log. Resolved through the status-path
+      // seam (absolute passthrough, repo-root join for relative) like the
+      // git.diff rows — the tree carries absolute paths, and git accepts an
+      // absolute pathspec inside its own worktree.
+      const rawPath = typeof record.path === 'string' && record.path !== '' ? record.path : undefined
+      const path = rawPath === undefined ? undefined : await resolveStatusPath(cwd, rawPath, selectedRepoOf(payload))
+      return git.log(cwd, count, skip, selectedRepoOf(payload), {
+        ...(record.files === true ? { files: true } : {}),
+        ...(path !== undefined ? { path } : {}),
+      })
     },
     'git.commit-diff': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
-      return { diff: await git.commitDiff(cwd, requireString(payload, 'hash'), selectedRepoOf(payload)) }
+      const repoRoot = selectedRepoOf(payload)
+      // Optional `path`: trim the patch to what THIS commit did to that one
+      // path (the file-history modal's expanded row). Same resolution seam and
+      // the same empty-string-is-absent rule as `git.log` above.
+      const record = payload as { path?: unknown }
+      const rawPath = typeof record.path === 'string' && record.path !== '' ? record.path : undefined
+      const path = rawPath === undefined ? undefined : await resolveStatusPath(cwd, rawPath, repoRoot)
+      return { diff: await git.commitDiff(cwd, requireString(payload, 'hash'), repoRoot, path !== undefined ? { path } : undefined) }
     },
     // The round-diff lens' ONE-SHOT patch: the worktree against an arbitrary
     // baseline revision, staged and unstaged together — aiming the rev at the

@@ -572,16 +572,27 @@ export const api = {
     call<{ ok: true }>('git.checkout', gitPayload(scope, worktree, { branch })),
   /** Recent commit history, lazily pageable (skip/count; defaults 0/30).
    *  `opts.files` asks the host for `--name-status` rows (each entry's
-   *  `files`); an old host silently ignores the flag and answers without. */
-  gitLog: (scope: SessionScope, count?: number, skip?: number, worktree?: string, signal?: AbortSignal, opts?: { files?: boolean }) =>
+   *  `files`); an old host silently ignores the flag and answers without.
+   *  `opts.path` narrows the log to one file/directory (the tree's 「查看 Git
+   *  历史」), `opts.follow` keeps a renamed FILE's log continuous across the
+   *  rename (`git log --follow`; a directory never follows). An opts-less
+   *  call reaches the host as exactly the old payload. */
+  gitLog: (scope: SessionScope, count?: number, skip?: number, worktree?: string, signal?: AbortSignal, opts?: { files?: boolean; path?: string; follow?: boolean }) =>
     call<GitLogEntry[]>('git.log', gitPayload(scope, worktree, {
       ...(count !== undefined ? { count } : {}),
       ...(skip !== undefined ? { skip } : {}),
       ...(opts?.files === true ? { files: true } : {}),
+      ...(opts?.path !== undefined && opts.path !== '' ? { path: opts.path } : {}),
+      ...(opts?.follow === true ? { follow: true } : {}),
     }), signal),
-  /** Full patch text of one commit (diff display for the history rows). */
-  gitCommitDiff: (scope: SessionScope, hash: string, worktree?: string, signal?: AbortSignal) =>
-    call<{ diff: string }>('git.commit-diff', gitPayload(scope, worktree, { hash }), signal),
+  /** Full patch text of one commit (diff display for the history rows).
+   *  `path` trims the patch to what the commit did to that one path — the
+   *  file-history modal expands a row onto the path it listed. */
+  gitCommitDiff: (scope: SessionScope, hash: string, worktree?: string, signal?: AbortSignal, path?: string) =>
+    call<{ diff: string }>('git.commit-diff', gitPayload(scope, worktree, {
+      hash,
+      ...(path !== undefined && path !== '' ? { path } : {}),
+    }), signal),
   /** The worktree's whole patch against an ARBITRARY baseline revision —
    *  staged and unstaged in one answer, so the round-diff lens can aim the
    *  rev at the newest pre-round commit and fetch the entire round's changes

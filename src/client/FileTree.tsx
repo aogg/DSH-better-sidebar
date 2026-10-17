@@ -40,7 +40,9 @@
  * "copied" label replacing the button after a successful write), and every
  * row offers「添加到搜索中」— a submenu feeding the content-search
  * include/exclude chips with this row's path (when the caller provides
- * `onAddToContentSearch`).
+ * `onAddToContentSearch`). Every row but the workspace root also gets
+ * 「查看 Git 历史」— the FileHistoryModal over that path's commits (a
+ * directory's modal lists its whole subtree's history).
  *
  * Clipboard (Windows file-manager semantics): 复制 / 剪切 take the WHOLE
  * current selection (right-clicking outside it first collapses the selection
@@ -69,7 +71,7 @@ import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import {
-  Button, IconArchiveOutlineRegular, IconChevronRightOutlineRegular, IconCloseFillRegular, IconCloseOutlineRegular, IconCodeOutlineRegular, IconCopyOutlineRegular,
+  Button, IconArchiveOutlineRegular, IconChevronRightOutlineRegular, IconClockOutlineRegular, IconCloseFillRegular, IconCloseOutlineRegular, IconCodeOutlineRegular, IconCopyOutlineRegular,
   IconDownloadOutlineRegular,
   IconEditOutlineRegular, IconFolderOpenRegular, IconLinkOutlineRegular, IconPlusOutlineRegular, IconTrashOutlineRegular,
   Menu, Modal, type MenuEntry, type MenuItem, writeClipboard,
@@ -88,6 +90,7 @@ import type { OpenInApp, OpenInAppEntry } from './open-in-app.ts'
 import type { OpenWithTarget } from './open-with.ts'
 import { relativeTo } from './paths.ts'
 import { t } from './locales.ts'
+import { FileHistoryModal } from './FileHistoryModal.tsx'
 import type { BetterSidebarService } from './service.ts'
 import { getTreeClipboard, setTreeClipboard, subscribeTreeClipboard, type TreeClipboardEntry } from './tree-clipboard.ts'
 import { startTransfer } from './transfer-client.ts'
@@ -747,6 +750,14 @@ export function FileTree(props: {
   }, [])
   /** Open context menu: the row path (and whether it is a directory) plus the cursor position. */
   const [rowMenu, setRowMenu] = useState<{ path: string; isDir: boolean; x: number; y: number } | null>(null)
+  /**
+   * The row whose git history the modal shows (`「查看 Git 历史」`). Opened
+   * from the context menu's onSelect, closed by the modal itself; cleared on
+   * a session swap like every other path-shaped state below. `null` = no
+   * modal (the modal only mounts while a target exists, so every open is a
+   * fresh fetch).
+   */
+  const [gitHistory, setGitHistory] = useState<{ path: string; isDir: boolean } | null>(null)
   // The plugin submenu can tower past the viewport; publish its flip geometry
   // for layout.css while the row menu is open.
   useSubmenuFlip(rowMenu)
@@ -1334,6 +1345,7 @@ export function FileTree(props: {
     anchorRef.current = null
     kindRef.current.clear()
     setRowMenu(null)
+    setGitHistory(null)
     setApps(null)
     setCopiedPath(null)
     setRenaming(null)
@@ -2730,6 +2742,17 @@ export function FileTree(props: {
           // 6: copy, then the mutations (never on the workspace root row).
           { id: 'relative', label: t('copyRelative'), icon: <IconCopyOutlineRegular size={14} /> },
           { id: 'absolute', label: t('copyAbsolute'), icon: <IconCopyOutlineRegular size={14} /> },
+          // 6.5:「查看 Git 历史」— one path's commit log in a modal (a
+          // directory lists its whole subtree). Files AND directories; never
+          // the workspace root, whose history is the branch log the changes
+          // tab already owns. Own separator: a read-only island between the
+          // copy pair and the destructive mutations.
+          ...(rowMenu !== null && rowMenu.path !== cwd
+            ? [
+                { id: 'git-history-sep', type: 'separator' } as MenuEntry,
+                { id: 'git-history', label: t('gitHistory'), icon: <IconClockOutlineRegular size={14} /> },
+              ]
+            : []),
           ...(rowMenu !== null && rowMenu.path !== cwd
             ? [
                 { id: 'mutate-sep', type: 'separator' } as MenuEntry,
@@ -2815,6 +2838,13 @@ export function FileTree(props: {
           }
           if (id === 'new-file') {
             startNewFile(target.path)
+            return
+          }
+          // 「查看 Git 历史」: remember the row (path + kind) and let the
+          // modal at the tree's root fetch its log — the menu closes here,
+          // the history outlives it.
+          if (id === 'git-history') {
+            setGitHistory({ path: target.path, isDir: target.isDir })
             return
           }
           if (id === 'rename') {
@@ -2924,6 +2954,20 @@ export function FileTree(props: {
             )}
           </div>
         </Modal>
+      )}
+
+      {/* The「查看 Git 历史」modal (the context menu's git-history entry):
+          one per open, mounted only while a target is set — closing it drops
+          the fetch state with the component. Sits at the tree root like the
+          menu and the confirmations above (portal-free: the primitives'
+          Modal portals itself). */}
+      {gitHistory !== null && cwd !== undefined && (
+        <FileHistoryModal
+          scope={{ sessionId, cwd }}
+          path={gitHistory.path}
+          isDir={gitHistory.isDir}
+          onClose={() => { setGitHistory(null) }}
+        />
       )}
     </div>
   )
