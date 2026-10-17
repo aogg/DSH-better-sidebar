@@ -243,9 +243,13 @@ describe('ChangesTab', () => {
 
       const sessionTab = lensTab(container, t('changesSessionLens'))
       await act(async () => { sessionTab!.click() })
-      // Two files grouped, newest first; the write chip carries its count.
-      expect(container.textContent).toContain('src/b.ts')
-      expect(container.textContent).toContain('src/a.ts')
+      // Two files grouped under the session tree's directory row (file rows
+      // carry their own names, the dir row the segment); the write chip
+      // carries its count.
+      expect(container.querySelector('button[data-dir-group="src"]')).not.toBeNull()
+      expect(container.querySelector('button[data-file-head="src/b.ts"]')).not.toBeNull()
+      expect(container.querySelector('button[data-file-head="src/a.ts"]')).not.toBeNull()
+      expect(container.textContent).toContain('b.ts')
       const chips = [...container.querySelectorAll('button[aria-pressed]')]
       expect(chips.some(chip => /写入\s*2|Write\s*2/.test(chip.textContent ?? ''))).toBe(true)
       // The git lens (its branch picker) is unmounted by the switch.
