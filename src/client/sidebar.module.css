@@ -862,7 +862,11 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
   font-size: 8px;
   line-height: 1;
   font-weight: 700;
-  color: #fff;
+  /* The glyph's white rides the host's static palette — `--dsw-static-neutral-bluish-00`
+     is `#fff` in BOTH modes, so the badge keeps its fixed overlay ink without carrying a
+     color literal (the skin contract lets `color` paint only through tokens); the literal
+     fallback keeps it white on hosts whose sheet predates that static token. */
+  color: var(--dsw-static-neutral-bluish-00, #fff);
   background: var(--dsw-alias-label-tertiary);
   box-shadow:
     0 0 0 1.5px rgba(255, 255, 255, 0.92),
