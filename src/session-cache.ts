@@ -18,7 +18,7 @@
  *   a refresh never lags an append that already happened. The plugin cannot
  *   stat the artifact itself — the service exposes no file path — so this
  *   sanctioned token IS the stat check. Revisions are comparable only within
- *   one service instance, which the per-service WeakMap below guarantees.
+ *   one service instance, which the per-service state map below guarantees.
  * - TTL entries (fallback, hosts without `stat`): a 5-minute window. The
  *   reasoning: a session answered from here is BY DEFINITION not in
  *   `ctx.sessions` — the route checks the live snapshot first — and a session
@@ -72,7 +72,15 @@ interface ServiceCacheState {
   statAvailable: boolean
 }
 
-const serviceCaches = new WeakMap<SidebarSessionPersistenceService, ServiceCacheState>()
+/** Per-service cache states, keyed by the service object itself. A cordis
+ *  service replacement yields a different service object and therefore a
+ *  fresh state — the safest reading of "a revision is comparable only against
+ *  revisions from the same instance". A strong Map (not a WeakMap) on
+ *  purpose: services are context singletons, so this holds a handful of
+ *  states for the process lifetime at most, and the stats/clear observers
+ *  need to enumerate them (WeakMap iteration needs an ES2023 lib this
+ *  project does not target); each state is LRU-bounded anyway. */
+const serviceCaches = new Map<SidebarSessionPersistenceService, ServiceCacheState>()
 
 /** Counters for manual verification — what the cache actually did. */
 export interface SessionCacheStats {
@@ -99,7 +107,6 @@ export function sessionCacheStats(): SessionCacheStats {
 
 /** Forget every cached answer (manual observation only). */
 export function clearSessionCache(): void {
-  // A WeakMap cannot be cleared wholesale; drop each state's entries.
   for (const state of serviceCaches.values()) {
     state.entries.clear()
     state.inflight.clear()
