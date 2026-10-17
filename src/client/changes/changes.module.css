@@ -614,6 +614,45 @@
 .commitFileCount { flex: none; font: var(--dsw-font-xxxs-11); color: var(--dsw-alias-label-tertiary); white-space: nowrap; }
 .commitFileEmpty { padding: 2px 4px; font-size: 11px; color: var(--dsw-alias-label-tertiary); }
 
+/* ── Round-diff lens (this round's changes as inline patches) ──────────── */
+
+/* Same frame as the other lenses: a fixed column with ONE outer scroll body
+   (the whole round lays out top to bottom). */
+.rounddiff { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.rounddiffList { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 6px 10px; }
+
+/* Per-file GROUP BODY scrolling, hooked onto DiffFiles' own DOM. The diff
+   module's class names are hashed per sheet, so this lens sheet cannot name
+   them; the DOM contract instead: DiffFiles renders one `.fileBlock` per
+   file = the header BUTTON (carrying `aria-expanded` when expandable)
+   followed by the DiffRows body div — the button's NEXT SIBLING. These
+   selectors key on exactly that shape, and
+   `tests/round-diff-lens.spec.tsx` pins it, so a DiffFiles DOM drift fails a
+   test instead of silently unmounting the rules.
+   - The file header STICKS under the list's top edge while its group scrolls
+     past (the git lens' `.group .groupHeader` pattern) — z-index and an
+     opaque base included, so rows never show through a stuck header (hover
+     and focus states keep the same base: the shared sheet's translucent hover
+     must not win on the stuck band).
+   - The body is capped (~360px) and scrolls INSIDE its group: one huge file
+     stays a group-internal scroll instead of pushing the rest of the round
+     away. Collapsed files render no body, so the cap applies only while
+     expanded. */
+.rounddiffList button[aria-expanded] {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--dsw-alias-bg-base);
+}
+.rounddiffList button[aria-expanded]:hover:not(:disabled),
+.rounddiffList button[aria-expanded]:focus-visible:not(:disabled) {
+  background: var(--dsw-alias-bg-base);
+}
+.rounddiffList button[aria-expanded] + div {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
 /* ── Shared preview pane ───────────────────────────────────────────────── */
 
 .redactBanner { flex: none; font: var(--dsw-font-xxxs-strong-11); padding: 2px 8px; border-radius: 2px; color: var(--dsw-alias-state-warn-primary); background: var(--dsw-alias-interactive-bg-hover); white-space: nowrap; }

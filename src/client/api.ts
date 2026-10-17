@@ -582,6 +582,13 @@ export const api = {
   /** Full patch text of one commit (diff display for the history rows). */
   gitCommitDiff: (scope: SessionScope, hash: string, worktree?: string, signal?: AbortSignal) =>
     call<{ diff: string }>('git.commit-diff', gitPayload(scope, worktree, { hash }), signal),
+  /** The worktree's whole patch against an ARBITRARY baseline revision —
+   *  staged and unstaged in one answer, so the round-diff lens can aim the
+   *  rev at the newest pre-round commit and fetch the entire round's changes
+   *  (committed or not) in a single call. Untracked files never appear (no
+   *  baseline contains them), matching every other git diff face. */
+  gitDiffRange: (scope: SessionScope, rev: string, worktree?: string, signal?: AbortSignal) =>
+    call<{ diff: string }>('git.diff-range', gitPayload(scope, worktree, { rev }), signal),
   /** One file's content at a revision (`git show <rev>:<path>`); null when the
    *  revision has no such path. The diff views' on-demand hunk-fold expansion
    *  reads both sides' full contents through this. */

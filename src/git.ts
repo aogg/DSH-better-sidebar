@@ -711,6 +711,26 @@ export async function diffHead(cwd: string, path: string | undefined, selected?:
   }
 }
 
+/**
+ * Diff text of the worktree against ANY baseline revision — staged and
+ * unstaged in ONE patch (the worktree-vs-rev shape of {@link diffHead},
+ * aimed at an arbitrary rev instead), which is what "this round changed"
+ * means for the changes tab's round-diff lens: it aims the call at the newest
+ * commit that predates the round, so every round change — round-committed or
+ * still uncommitted, added / modified / deleted / renamed — falls out of the
+ * one patch. Untracked files never appear (they are in no baseline to diff
+ * from), the same as every other git diff face.
+ *
+ * `--end-of-options` precedes the rev: a caller-supplied value beginning with
+ * `-` would otherwise parse as an OPTION (see show() / commitDiff() for the
+ * same guard). The empty-tree hash is a valid rev everywhere, so the unborn
+ * round shape (every commit inside the round) passes the all-virtual tree and
+ * reads every tracked file as new.
+ */
+export async function diffRange(cwd: string, rev: string, selected?: string): Promise<string> {
+  return runGit(await repoRoot(cwd, selected), ['diff', '--no-ext-diff', '--no-color', '-U3', '--end-of-options', rev])
+}
+
 /** Stage paths (all when path is undefined). */
 export async function stage(cwd: string, path: string | undefined, selected?: string): Promise<void> {
   await runGit(await repoRoot(cwd, selected), ['add', '-A', ...(path !== undefined ? ['--', path] : [])])

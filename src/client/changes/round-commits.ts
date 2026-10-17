@@ -11,6 +11,7 @@
  * key=val add` simply produces no record rather than a wrong one).
  */
 import type { SidebarSessionEvent } from '../../context-types.ts'
+import type { StatusTone } from '../ui/index.ts'
 import { resultIsError, type ToolResultMessageLike } from './ops.ts'
 
 /** One recognized `git add` execution. */
@@ -36,6 +37,21 @@ export interface GitAddRecord {
 
 /** One file a commit touched (the lazy `gitCommitDiff` fallback parses these). */
 export interface CommitFile { path: string; status: string }
+
+/** The name-status letter → the kit badge tone (shared by both round lenses:
+ *  the commits' touched-file lists and the round-diff's file summary rows). */
+const COMMIT_FILE_TONE: Record<string, StatusTone> = {
+  M: 'modified',
+  A: 'added',
+  D: 'deleted',
+  R: 'renamed',
+  C: 'renamed',
+}
+
+/** One name-status letter's badge tone; unknown letters read as neutral. */
+export function commitFileTone(status: string): StatusTone {
+  return COMMIT_FILE_TONE[status] ?? 'neutral'
+}
 
 /** Parse one tool-call arguments JSON body defensively (see ops.ts's twin). */
 function parseArgs(argsRaw: string): Record<string, unknown> {

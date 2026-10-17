@@ -738,9 +738,10 @@ describe('ChangesTab', () => {
       mount(root)
       await flushEffects()
 
-      // Order: the round commits sit LEFT of Git, the session lens last.
+      // Order: the round commits sit LEFT of Git, the session lens next, the
+      // round diff last.
       const tabs = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].map(tab => tab.textContent)
-      expect(tabs).toEqual([t('changesCommitsLensShort'), t('changesGitLens'), t('changesSessionLens')])
+      expect(tabs).toEqual([t('changesCommitsLensShort'), t('changesGitLens'), t('changesSessionLens'), t('changesRoundDiffLensShort')])
 
       const commitsTab = lensTab(container, t('changesCommitsLensShort'))
       await act(async () => { commitsTab!.click() })

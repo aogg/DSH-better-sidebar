@@ -1003,6 +1003,15 @@ function buildApi(
       const { cwd } = await gitCwdOf(payload)
       return { diff: await git.commitDiff(cwd, requireString(payload, 'hash'), selectedRepoOf(payload)) }
     },
+    // The round-diff lens' ONE-SHOT patch: the worktree against an arbitrary
+    // baseline revision, staged and unstaged together — aiming the rev at the
+    // newest commit that predates the round makes one call carry the whole
+    // round's changes (round-committed or not, A/M/D/R included). Same target
+    // selection as every git route above.
+    'git.diff-range': async (payload) => {
+      const { cwd } = await gitCwdOf(payload)
+      return { diff: await git.diffRange(cwd, requireString(payload, 'rev'), selectedRepoOf(payload)) }
+    },
     'git.discard': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
       const repoRoot = selectedRepoOf(payload)

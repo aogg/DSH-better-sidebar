@@ -1,14 +1,17 @@
 /**
- * The unified changes tab: one tab, three lenses on "what changed?" — Git
- * (repository truth: staged/unstaged files, commit box, history), the
+ * The unified changes tab: one tab, four lenses on "what changed?" — the
  * round commits (the session's own `git add` trail cross-checked against
- * `git log`, see {@link RoundCommitsLens}), and the session round (agent
- * truth: every file the model read, wrote, or edited). A 36px header carries
- * the host {@link SegmentedControl} and the current lens's refresh action;
- * every lens previews its selections in a shared resizable bottom pane
- * ({@link DiffPane}), and git targets expand into the dedicated diff tab
- * docked in the workbench's diff pane. The active lens and the pane height
- * persist in the tab's meta, so the tab reopens exactly where it was left.
+ * `git log`, see {@link RoundCommitsLens}), Git (repository truth:
+ * staged/unstaged files, commit box, history), the session round (agent
+ * truth: every file the model read, wrote, or edited) and the round diff
+ * (the whole round's changes as inline patches against the newest pre-round
+ * commit, see {@link RoundDiffLens}). A 36px header carries the host
+ * {@link SegmentedControl} and the current lens's refresh action; three
+ * lenses preview their selections in a shared resizable bottom pane
+ * ({@link DiffPane}) — the round diff lays its patches out inline instead —
+ * and git targets expand into the dedicated diff tab docked in the
+ * workbench's diff pane. The active lens and the pane height persist in the
+ * tab's meta, so the tab reopens exactly where it was left.
  *
  * The session events ride the host's `changes.ops` route (the client runtime
  * exposes no event-log face): the tab pulls the delta past its cursor and
@@ -33,6 +36,7 @@ import { DiffPane, clampPaneHeight, diffTabOf, type ChangesPreview } from './Dif
 import { extractFileOps, knownContentBefore, type FileOp } from './ops.ts'
 import { extractGitAdds, type GitAddRecord } from './round-commits.ts'
 import { RoundCommitsLens } from './RoundCommitsLens.tsx'
+import { RoundDiffLens } from './RoundDiffLens.tsx'
 import css from './changes.module.css'
 
 /** The default preview pane height (px) before the first drag. */
@@ -52,7 +56,7 @@ export function opCountOf(sessionId: string): number | undefined {
   return opCounts.get(sessionId)
 }
 
-type Lens = 'commits' | 'git' | 'session'
+type Lens = 'commits' | 'git' | 'session' | 'rounddiff'
 
 /** The persisted tab meta (JSON-serializable; rides the layout). */
 interface ChangesMeta {
@@ -70,7 +74,15 @@ type PreviewSelection =
 
 export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpenDiff }: TabComponentProps) {
   const meta = (tab.meta ?? {}) as ChangesMeta
-  const [lens, setLens] = useState<Lens>(meta.lens === 'session' ? 'session' : meta.lens === 'commits' ? 'commits' : 'git')
+  const [lens, setLens] = useState<Lens>(
+    meta.lens === 'session'
+      ? 'session'
+      : meta.lens === 'commits'
+        ? 'commits'
+        : meta.lens === 'rounddiff'
+          ? 'rounddiff'
+          : 'git',
+  )
   const [selection, setSelection] = useState<PreviewSelection | null>(null)
   const [paneHeight, setPaneHeight] = useState<number>(() => clampPaneHeight(
     typeof meta.previewH === 'number' ? meta.previewH : PANE_HEIGHT_DEFAULT,
@@ -197,9 +209,9 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
   }
 
   /** The header's refresh action: the git-backed lenses reload through their
-   *  shared tick (GitLens's queue, the commits lens's fetch), the session lens
-   *  re-pulls its event delta — and the commits lens ALSO re-pulls, since its
-   *  add evidence rides the same event window. */
+   *  shared tick (GitLens's queue, the commits lens's fetch, the round diff's
+   *  fetch), the session lens re-pulls its event delta — and the commits lens
+   *  ALSO re-pulls, since its add evidence rides the same event window. */
   const refreshCurrent = (): void => {
     if (lens === 'session') {
       void pull()
@@ -241,11 +253,13 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
           options={[
             // The round-commits lens sits LEFT of the git lens: the session's
             // own trail comes first, the repository's full view second. The
-            // segment shows the short name (three lenses share one 36px head);
+            // round diff rides last (its patches are the widest read). The
+            // segment shows the short name (four lenses share one 36px head);
             // the full name rides the hover title.
             { value: 'commits', label: t('changesCommitsLensShort'), title: t('changesCommitsLens') },
             { value: 'git', label: t('changesGitLens') },
             { value: 'session', label: t('changesSessionLens') },
+            { value: 'rounddiff', label: t('changesRoundDiffLensShort'), title: t('changesRoundDiffLens') },
           ]}
           onChange={chooseLens}
           label={t('changes')}
@@ -282,14 +296,23 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
               selectedRef={previewTarget !== null && previewTarget.kind === 'git' ? previewTarget.ref : null}
             />
           )
-          : (
-            <SessionLens
-              ops={ops}
-              loadError={opsError && ops.length === 0}
-              onPreview={previewOp}
-              selectedCallId={selection !== null && selection.kind === 'op' ? selection.callId : null}
-            />
-          )}
+          : lens === 'rounddiff'
+            ? (
+              <RoundDiffLens
+                scope={scope}
+                visible={visible}
+                refreshTick={refreshTick}
+                roundStart={roundStart}
+              />
+            )
+            : (
+              <SessionLens
+                ops={ops}
+                loadError={opsError && ops.length === 0}
+                onPreview={previewOp}
+                selectedCallId={selection !== null && selection.kind === 'op' ? selection.callId : null}
+              />
+            )}
       {previewTarget !== null && (
         <DiffPane
           key={previewKey(previewTarget)}

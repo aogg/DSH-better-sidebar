@@ -24,8 +24,8 @@ import { api } from '../api.ts'
 import { usePolling } from '../use-polling.ts'
 import { relativeTime, t } from '../locales.ts'
 import type { SidebarDiffRef } from '../state.ts'
-import { Notice, SectionHeader, StatusBadge, type StatusTone } from '../ui/index.ts'
-import { addPathInCommit, normalizeAddPath, parseDiffFiles, type CommitFile, type GitAddRecord } from './round-commits.ts'
+import { Notice, SectionHeader, StatusBadge } from '../ui/index.ts'
+import { addPathInCommit, commitFileTone, normalizeAddPath, parseDiffFiles, type CommitFile, type GitAddRecord } from './round-commits.ts'
 import css from './changes.module.css'
 
 /** How many commits one fetch asks for: the recent window, not eternity. */
@@ -37,21 +37,8 @@ const ROUND_POLL_MS = 10_000
 /** Slack around the approximate round boundary (see the module doc). */
 const ROUND_WINDOW_SLACK_MS = 60_000
 
-/** The name-status letter → the kit badge tone. */
-const FILE_TONE: Record<string, StatusTone> = {
-  M: 'modified',
-  A: 'added',
-  D: 'deleted',
-  R: 'renamed',
-  C: 'renamed',
-}
-
 /** A stable no-match set: a memoized row's props must keep their identity. */
 const NO_MATCH: ReadonlySet<string> = new Set<string>()
-
-function toneOf(status: string): StatusTone {
-  return FILE_TONE[status] ?? 'neutral'
-}
 
 export interface RoundCommitsLensProps {
   scope: SessionScope
@@ -378,7 +365,7 @@ const CommitRow = memo(function CommitRow(props: {
           {files.length === 0 && <span className={css.commitFileEmpty}>{t('changesCommitFileCount', { count: 0 })}</span>}
           {files.map(file => (
             <div key={`${file.status}:${file.path}`} className={css.commitFile} data-commit-file={file.path}>
-              <StatusBadge tone={toneOf(file.status)} title={file.path}>{file.status}</StatusBadge>
+              <StatusBadge tone={commitFileTone(file.status)} title={file.path}>{file.status}</StatusBadge>
               <span className={css.commitFilePath} title={file.path}>{file.path}</span>
               {matched.has(file.path) && <span className={css.addBadge} data-add-badge>{t('changesAddBadge')}</span>}
             </div>
