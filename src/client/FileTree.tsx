@@ -85,7 +85,7 @@ import {
   Menu, Modal, type MenuEntry, type MenuItem, writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { SiCursor, SiZedindustries } from 'react-icons/si'
-import { VscFolderOpened, VscLinkExternal, VscPin, VscPinned } from 'react-icons/vsc'
+import { VscFolderOpened, VscLinkExternal, VscPin, VscPinned, VscTerminal } from 'react-icons/vsc'
 import { api, archiveBuild, archiveDownloadUrl, archiveStatus, downloadUrl, SidebarApiError, type FsEntry, type FsLevel } from './api.ts'
 import { compactChain, compactLoadTargets } from './file-tree-compact.ts'
 import { DEFAULT_FILE_TREE_SORT, sortEntries, type FileTreeSort } from './file-tree-sort.ts'
@@ -692,6 +692,15 @@ export function FileTree(props: {
   /** Context-menu "open to the side" (file rows; absent → no entry). */
   onOpenFileSide?: (path: string) => void
   /**
+   * Context-menu 「打开终端」(directory rows; absent → no entry): the caller
+   * mints a NEW bottom-terminal instance aimed at the directory — never the
+   * running shell cd'd over. It answers `false` (or rejects) when nothing
+   * opened (no host terminal service, the page disabled), and the failure
+   * lands in the same strip as the host-backed rows instead of only reaching
+   * the console (#412 was silence in this exact spot).
+   */
+  onOpenTerminalAt?: (path: string) => void | boolean | Promise<void | boolean>
+  /**
    * The host's open-in-app handle (EditorHost builds it and injects it).
    * Absent, or reporting the host cannot hand paths to the desktop, hides the
    * HOST half of the "打开方式" section (the plugin's own targets stay).
@@ -788,7 +797,7 @@ export function FileTree(props: {
   // callbacks must not change identity when the caller re-renders).
   // `onReferenceFile` is read through `propsRef` like the other row callbacks.
   const {
-    sessionId, cwd, expanded, revealed, onOpenFileNewTab, onOpenFileSide,
+    sessionId, cwd, expanded, revealed, onOpenFileNewTab, onOpenFileSide, onOpenTerminalAt,
     openInApp, openWithTargets, openWithPinned, openWithSsh, onOpenWith, onToggleOpenWithPin,
     openWithShowPluginTargets, exclude, onAddToContentSearch,
     onPathRenamed, onPathDeleted, refreshTick, onUploadRequest, busy, hidden, visible, service,
@@ -2858,6 +2867,12 @@ export function FileTree(props: {
           ...(rowMenu?.isDir === true
             ? [{ id: 'new-file', label: t('newFile'), icon: <IconCodeOutlineRegular size={14} /> }]
             : []),
+          // 4.1:「打开终端」— a fresh bottom-terminal instance rooted at this
+          // directory (the dir action group's last row; files open terminals
+          // only through their directory).
+          ...(rowMenu?.isDir === true && onOpenTerminalAt !== undefined
+            ? [{ id: 'open-terminal', label: t('openTerminal'), icon: <VscTerminal size={14} /> }]
+            : []),
           // 5: ZIP of the current selection (≥2 rows, or one lone directory).
           ...(rowMenu === null ? [] : zipEntries(rowMenu)),
           // 5.5:「添加到搜索中」— feed the content-search include/exclude
@@ -2983,6 +2998,19 @@ export function FileTree(props: {
           }
           if (id === 'new-file') {
             startNewFile(target.path)
+            return
+          }
+          if (id === 'open-terminal') {
+            // The caller mints the terminal (a NEW bottom-terminal instance
+            // aimed at the directory — never the running shell cd'd over); a
+            // refusal or a rejection means nothing opened, so the failure
+            // lands in the same strip as the host-backed rows instead of only
+            // reaching the console (#412 was silence in this exact spot).
+            const pending = onOpenTerminalAt?.(target.path)
+            void Promise.resolve(pending).then(
+              (opened) => { if (opened === false) reportOpenFailure(target.path) },
+              () => { reportOpenFailure(target.path) },
+            )
             return
           }
           // 「查看 Git 历史」: remember the row (path + kind) and let the

@@ -77,6 +77,7 @@ export const ja: Record<string, string> = {
   editorEmptyHint: '右のファイルツリーまたは上のパス入力欄からファイルを選んでプレビュー',
   openFileNewTab: '新しいタブで開く',
   openFileSide: '横に開く',
+  openTerminal: 'ターミナルで開く',
   settingsOpenWithPluginTitle: 'プラグイン独自の「アプリで開く」を常に表示',
   settingsOpenWithPluginDesc: '既定では、ホストがローカルの関連アプリ（エクスプローラー / VS Code / Cursor / Zed / カスタムエディター、SSH リモート）を検出できない場合にのみ、プラグイン独自の「アプリで開く」を表示します。オンにするとホストのアプリとプラグインのターゲットが併存します',
   zipDownload: '圧縮してダウンロード',

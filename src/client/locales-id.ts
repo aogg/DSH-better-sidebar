@@ -75,6 +75,7 @@ export const id: Record<string, string> = {
   editorEmptyHint: 'Pilih berkas dari panel pohon atau input path di atas untuk mulai pratinjau',
   openFileNewTab: 'Buka di Tab Baru',
   openFileSide: 'Buka di Samping',
+  openTerminal: 'Buka di Terminal',
   settingsOpenWithPluginTitle: 'Selalu tampilkan opsi buka milik plugin',
   settingsOpenWithPluginDesc: 'Secara default opsi buka milik plugin hanya muncul saat host tidak mendeteksi aplikasi terkait di perangkat ini (File Manager / VS Code / Cursor / Zed / editor kustom, SSH jarak jauh); setelah diaktifkan, aplikasi host dan target plugin tampil berdampingan',
   zipDownload: 'Zip dan unduh',

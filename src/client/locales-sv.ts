@@ -60,6 +60,7 @@ export const sv: Record<string, string> = {
   editorEmptyHint: 'Välj en fil från trädpanelen eller sökvägsinmatningen ovan för att börja förhandsgranska',
   openFileNewTab: 'Öppna i ny flik',
   openFileSide: 'Öppna vid sidan',
+  openTerminal: 'Öppna i terminal',
   settingsOpenWithPluginTitle: 'Visa alltid pluginets egna "Öppna med"-mål',
   settingsOpenWithPluginDesc: 'Som standard visas pluginets egna "Öppna med"-mål bara när värden inte hittar någon lokalt associerad app (Filhanterare / VS Code / Cursor / Zed / anpassade editorer, SSH på distans); när det slås på finns värdens appar och pluginets mål sida vid sida',
   zipDownload: 'Zippa och ladda ner',

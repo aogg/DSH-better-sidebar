@@ -70,6 +70,7 @@ export const fr: Record<string, string> = {
   editorEmptyHint: 'Choisissez un fichier dans l’arborescence à droite ou dans le champ de chemin ci-dessus pour commencer l’aperçu',
   openFileNewTab: 'Ouvrir dans un nouvel onglet',
   openFileSide: 'Ouvrir de côté',
+  openTerminal: 'Ouvrir dans le terminal',
   settingsOpenWithPluginTitle: 'Toujours afficher les cibles « Ouvrir avec » du plugin',
   settingsOpenWithPluginDesc: 'Par défaut, les cibles « Ouvrir avec » du plugin ne s’affichent que si l’hôte ne détecte aucune application associée localement (Explorateur de fichiers / VS Code / Cursor / Zed / éditeurs personnalisés, SSH distant) ; une fois activé, les applications de l’hôte et les cibles du plugin coexistent',
   zipDownload: 'Compresser et télécharger',

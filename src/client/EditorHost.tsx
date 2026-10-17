@@ -39,6 +39,7 @@ import { fileOpKey, useFileOpStream } from './ops-stream.ts'
 import { updatePluginSettings, updateProjectSettings } from './plugin-settings.ts'
 import { PROJECT_SETTINGS_KEY } from '../prefs-shared.ts'
 import { createOpenInApp } from './open-in-app.ts'
+import { requestBottomTerminalAt, webTerminals } from './terminal-client.ts'
 import { TreePanel } from './TreePanel.tsx'
 import { t } from './locales.ts'
 import { relativeTo } from './paths.ts'
@@ -304,6 +305,30 @@ export function EditorHost(props: {
       const { node, leafId } = insertLeafAt(state.bottomSplits, pane.id, 'row', fresh, false)
       return { ...state, bottomSplits: node, activePane: leafId }
     })
+  }
+
+  /**
+   * The context menu's 「打开终端」 (directory rows): a NEW bottom-terminal
+   * instance (a fresh mint — its own tab, its own PTY; never the running
+   * shell cd'd over) aimed at the directory. The host's `view()` takes no
+   * working directory, so the directory rides the minted tab's meta
+   * (`requestBottomTerminalAt` → the descriptor's `createTab` → the lazy
+   * view's one `cd` once the shell is writable; see terminal-client.ts).
+   *
+   * Answers whether the open was even attempted: a host without the terminal
+   * service (the same probe the + menu's disabled row uses) or with the page
+   * disabled in the side card settings opens nothing, and the tree reports
+   * that in its strip instead of failing silently.
+   */
+  const openTerminalAt = (absolute: string): boolean => {
+    if (service === undefined) return false
+    if (webTerminals(ctx) === undefined) return false
+    if (!service.isTabEnabled('terminal-bottom')) return false
+    requestBottomTerminalAt(absolute)
+    // `terminal-bottom` is bottomOnly: this always lands in the workbench's
+    // own pane, and every open mints a fresh tab + instance (no dedupe).
+    service.openTab({ type: 'terminal-bottom' }, scope)
+    return true
   }
 
   /** The context menu's "open with" action: reveal the path in the OS file
@@ -620,6 +645,7 @@ export function EditorHost(props: {
           onOpenFile={openFile}
           onOpenFileNewTab={openFileNewTab}
           onOpenFileSide={openFileSide}
+          onOpenTerminalAt={openTerminalAt}
           openInApp={openInApp}
           openWithShowPluginTargets={openWithShowPluginTargets}
           gitBadges={gitBadges}
@@ -759,6 +785,7 @@ export function EditorHost(props: {
               onOpenFile={openFile}
               onOpenFileNewTab={openFileNewTab}
               onOpenFileSide={openFileSide}
+              onOpenTerminalAt={openTerminalAt}
               openInApp={openInApp}
               openWithShowPluginTargets={openWithShowPluginTargets}
               gitBadges={gitBadges}

@@ -60,6 +60,7 @@ export const pt: Record<string, string> = {
   editorEmptyHint: 'Escolha um arquivo na árvore do painel ou no campo de caminho acima para começar a pré-visualizar',
   openFileNewTab: 'Abrir em nova aba',
   openFileSide: 'Abrir ao lado',
+  openTerminal: 'Abrir no Terminal',
   settingsOpenWithPluginTitle: 'Mostrar sempre as opções "Abrir com" do plugin',
   settingsOpenWithPluginDesc: 'Por padrão, as opções "Abrir com" do plugin só aparecem quando o host não detecta nenhum aplicativo associado localmente (Gerenciador de arquivos / VS Code / Cursor / Zed / editores personalizados, SSH remoto); ao ativar, os aplicativos do host e os destinos do plugin coexistem',
   zipDownload: 'Compactar e baixar',

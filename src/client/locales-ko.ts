@@ -69,6 +69,7 @@ export const ko: Record<string, string> = {
   editorEmptyHint: '오른쪽 파일 트리나 위쪽 경로 입력란에서 파일을 선택해 미리보기를 시작하세요',
   openFileNewTab: '새 Tab으로 열기',
   openFileSide: '측면에 열기',
+  openTerminal: '터미널에서 열기',
   settingsOpenWithPluginTitle: '플러그인 자체 "앱에서 열기" 항상 표시',
   settingsOpenWithPluginDesc: '기본적으로 플러그인 자체의 "앱에서 열기"는 호스트가 로컬 연결 앱(파일 탐색기 / VS Code / Cursor / Zed / 사용자 지정 편집기, SSH 원격)을 감지하지 못할 때만 표시됩니다. 켜면 호스트 앱과 플러그인 대상이 함께 표시됩니다',
   zipDownload: '압축하여 다운로드',

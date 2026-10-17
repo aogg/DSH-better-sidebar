@@ -79,6 +79,7 @@ export const pl: Record<string, string> = {
   editorEmptyHint: 'Wybierz plik z panelu drzewa lub pola ścieżki powyżej, aby rozpocząć podgląd',
   openFileNewTab: 'Otwórz w nowej karcie',
   openFileSide: 'Otwórz z boku',
+  openTerminal: 'Otwórz w terminalu',
   settingsOpenWithPluginTitle: 'Zawsze pokazuj własne opcje „Otwórz za pomocą” wtyczki',
   settingsOpenWithPluginDesc: 'Domyślnie własne opcje „Otwórz za pomocą” wtyczki są pokazywane tylko wtedy, gdy host nie wykryje lokalnie skojarzonej aplikacji (Menedżer plików / VS Code / Cursor / Zed / niestandardowe edytory, SSH zdalny); po włączeniu aplikacje hosta i cele wtyczki współistnieją',
   zipDownload: 'Spakuj i pobierz',

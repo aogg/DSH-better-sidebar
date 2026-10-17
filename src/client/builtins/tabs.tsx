@@ -39,7 +39,7 @@ import { SubagentView } from '../SubagentView.tsx'
 import { consumeSidechatSeed, SideChatView, sidechatThreadIdOf } from '../SideChatView.tsx'
 import { isSidechatFloating } from '../sidechat-windows.ts'
 import { LazyTerminalBottom } from '../terminal-lazy.tsx'
-import { INSTANCE_FIELD, closeBottomTerminal, webTerminals } from '../terminal-client.ts'
+import { CWD_FIELD, INSTANCE_FIELD, closeBottomTerminal, consumeBottomTerminalCwd, webTerminals } from '../terminal-client.ts'
 import { api } from '../api.ts'
 import type { Context } from '../../context-types.ts'
 import type { TabDescriptor } from '../service.ts'
@@ -278,14 +278,27 @@ export function builtinTabs(ctx: Context): readonly TabDescriptor[] {
       // menu stacks as many live shells as the host grants slots for, and
       // two tabs never share one host process (terminal-client.ts keys the
       // host binding by instance+run).
-      createTab: () => ({
-        tab: {
-          id: `terminal-bottom:${crypto.randomUUID()}`,
-          type: 'terminal-bottom',
-          title: t('terminal'),
-          meta: { [INSTANCE_FIELD]: crypto.randomUUID() },
-        },
-      }),
+      //
+      // A mint may also carry a start directory (the file tree's 「打开终端」,
+      // parked by `requestBottomTerminalAt` immediately before its openTab —
+      // the same one-shot seed the side chat's thread bootstrap uses, since a
+      // createTab kind never sees the seed's own `meta`). The view spends the
+      // field once the shell is writable (TerminalView.tsx) and drops it, so
+      // a reload never re-runs the `cd`.
+      createTab: () => {
+        const startCwd = consumeBottomTerminalCwd()
+        return {
+          tab: {
+            id: `terminal-bottom:${crypto.randomUUID()}`,
+            type: 'terminal-bottom',
+            title: t('terminal'),
+            meta: {
+              [INSTANCE_FIELD]: crypto.randomUUID(),
+              ...(startCwd === undefined ? {} : { [CWD_FIELD]: startCwd }),
+            },
+          },
+        }
+      },
       // The service is probed, never injected (it is absent on deployments
       // without the host terminal controller): a missing service shows a
       // disabled menu row instead of a terminal that cannot start.

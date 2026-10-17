@@ -68,6 +68,7 @@ export const it: Record<string, string> = {
   editorEmptyHint: 'Scelga un file dal pannello dell’albero a destra o dal campo del percorso in alto per iniziare l’anteprima',
   openFileNewTab: 'Apri in una nuova scheda',
   openFileSide: 'Apri a lato',
+  openTerminal: 'Apri nel terminale',
   settingsOpenWithPluginTitle: 'Mostra sempre le destinazioni «Apri con» del plugin',
   settingsOpenWithPluginDesc: 'Per impostazione predefinita le destinazioni «Apri con» del plugin compaiono solo quando l’host non rileva applicazioni associate in locale (Esplora risorse / VS Code / Cursor / Zed / editor personalizzati, SSH remoto); una volta attivata, le app dell’host e le destinazioni del plugin convivono',
   zipDownload: 'Comprimi e scarica',

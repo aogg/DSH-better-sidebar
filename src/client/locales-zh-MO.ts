@@ -92,6 +92,7 @@ export const zhMO: Record<string, string> = {
   editorEmptyHint: '從右側檔案樹或上方路徑輸入框選擇檔案開始預覽',
   openFileNewTab: '在新 Tab 中開啟',
   openFileSide: '在側邊開啟',
+  openTerminal: '在終端開啟',
   settingsOpenWithPluginTitle: '永遠顯示插件自帶的開啟方式',
   settingsOpenWithPluginDesc: '預設只在宿主偵測不到本機關聯應用程式時顯示插件自帶的開啟方式（檔案總管 / VS Code / Cursor / Zed / 自訂編輯器、SSH 遠端）；開啟後宿主應用程式與插件目標並存',
   zipDownload: '壓縮並下載',

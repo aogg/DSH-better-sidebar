@@ -77,6 +77,7 @@ export const vi: Record<string, string> = {
   editorEmptyHint: 'Chọn tệp từ cây tệp bên phải hoặc ô nhập đường dẫn phía trên để xem trước',
   openFileNewTab: 'Mở trong Tab mới',
   openFileSide: 'Mở ở bên cạnh',
+  openTerminal: 'Mở trong Terminal',
   settingsOpenWithPluginTitle: 'Luôn hiển thị tùy chọn "Mở bằng" của plugin',
   settingsOpenWithPluginDesc: 'Mặc định, tùy chọn "Mở bằng" của plugin chỉ hiển thị khi máy chủ không phát hiện ứng dụng liên kết cục bộ (Trình quản lý tệp / VS Code / Cursor / Zed / trình soạn thảo tùy chỉnh, SSH từ xa); khi bật, ứng dụng của máy chủ và mục tiêu của plugin cùng tồn tại',
   zipDownload: 'Nén và tải xuống',

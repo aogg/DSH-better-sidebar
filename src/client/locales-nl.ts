@@ -75,6 +75,7 @@ export const nl: Record<string, string> = {
   editorEmptyHint: 'Kies een bestand uit het boompaneel of het pad-invoerveld hierboven om te beginnen met previewen',
   openFileNewTab: 'Openen in nieuw tabblad',
   openFileSide: 'Openen aan de zijkant',
+  openTerminal: 'Openen in terminal',
   settingsOpenWithPluginTitle: 'Eigen "Openen met"-doelen van de plugin altijd tonen',
   settingsOpenWithPluginDesc: 'Standaard worden de eigen "Openen met"-doelen van de plugin alleen getoond als de host geen lokaal gekoppelde app detecteert (Bestandsbeheerder / VS Code / Cursor / Zed / aangepaste editors, SSH op afstand); na inschakelen bestaan host-apps en plugin-doelen naast elkaar',
   zipDownload: 'Zippen en downloaden',

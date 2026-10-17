@@ -166,6 +166,58 @@ export const INSTANCE_FIELD = 'terminalInstance'
 const RUN_FIELD = 'terminalRun'
 
 /**
+ * The persisted `tab.meta` field carrying the directory a freshly minted
+ * terminal should `cd` into once it is writable.
+ *
+ * The host's `view(sessionId, key, contentId, terminalId?, shellPath?)` takes
+ * no working directory (its env `cwd` is the session workspace, read-only), so
+ * "open a terminal here" is a TWO-step dance: the minted tab carries this
+ * field, and {@link TerminalBottomView} (the lazy chunk that owns the model)
+ * writes one `cd` command the moment the view reports `writable`, then drops
+ * the field again — a reload reattaches the SAME process (already in the
+ * directory) and must not re-run the command.
+ */
+export const CWD_FIELD = 'terminalCwd'
+
+/**
+ * The directory the NEXT minted terminal-bottom tab should start in, parked by
+ * {@link requestBottomTerminalAt} and consumed by the descriptor's
+ * `createTab` — the same one-shot hand-off the side chat's thread seed uses
+ * (`consumeSidechatSeed`), because `createTab` mints the tab itself and a
+ * seed's `meta` never reaches a `createTab` kind.
+ */
+let pendingTerminalCwd: string | undefined
+
+/**
+ * Park `path` as the start directory of the NEXT terminal-bottom mint. Fire it
+ * immediately before the `openTab({ type: 'terminal-bottom' })` that is meant
+ * to consume it; an open that never mints (the type disabled in the side card
+ * settings, a sessionless store) leaves the value parked, and the NEXT mint —
+ * e.g. the workbench + menu — would start there. Callers should therefore gate
+ * on `isTabEnabled` before parking (the built-in caller in EditorHost does).
+ * @param path - the absolute directory the new shell should `cd` into.
+ */
+export function requestBottomTerminalAt(path: string): void {
+  pendingTerminalCwd = path
+}
+
+/** Take (and clear) the parked start directory; `undefined` = plain mint. */
+export function consumeBottomTerminalCwd(): string | undefined {
+  const cwd = pendingTerminalCwd
+  pendingTerminalCwd = undefined
+  return cwd
+}
+
+/** The start directory a tab carries (absent/corrupt meta reads as `undefined`). */
+export function terminalCwdOf(tab: { meta?: unknown }): string | undefined {
+  const meta = tab.meta !== null && typeof tab.meta === 'object' && !Array.isArray(tab.meta)
+    ? tab.meta as Record<string, unknown>
+    : {}
+  const cwd = meta[CWD_FIELD]
+  return typeof cwd === 'string' && cwd !== '' ? cwd : undefined
+}
+
+/**
  * The content identity of the bottom terminal at `run`.
  *
  * The host keys its recovery binding on `(sessionId, contentId)`, so a stable

@@ -69,6 +69,9 @@ export function TreePanel(props: {
   onOpenFileNewTab?: (path: string) => void
   /** File context-menu "open to the side" (passed through to FileTree). */
   onOpenFileSide?: (path: string) => void
+  /** Directory context-menu 「打开终端」 (passed through to FileTree;
+   *  `false`/rejection → the tree reports the failure in its strip). */
+  onOpenTerminalAt?: (path: string) => void | boolean | Promise<void | boolean>
   /** The host's open-in-app handle (passed through to FileTree; absent →
    *  the HOST half of the "打开方式" section is hidden). */
   openInApp?: OpenInApp
@@ -109,7 +112,7 @@ export function TreePanel(props: {
   service?: BetterSidebarService
 }) {
   const {
-    sessionId, cwd, expanded, revealed, onToggle, onOpenFile, onOpenFileNewTab, onOpenFileSide,
+    sessionId, cwd, expanded, revealed, onToggle, onOpenFile, onOpenFileNewTab, onOpenFileSide, onOpenTerminalAt,
     openInApp, openWithTargets, openWithPinned, openWithSsh, onOpenWith, onToggleOpenWithPin,
     openWithShowPluginTargets, gitBadges, exclude,
     onReferenceFile, onPathRenamed, onPathDeleted, onPathMoved, visible, full, service,
@@ -673,6 +676,7 @@ export function TreePanel(props: {
         onOpenFile={onOpenFile}
         onOpenFileNewTab={onOpenFileNewTab}
         onOpenFileSide={onOpenFileSide}
+        onOpenTerminalAt={onOpenTerminalAt}
         openInApp={openInApp}
         openWithTargets={openWithTargets}
         openWithPinned={openWithPinned}

@@ -50,7 +50,7 @@ import type { SidebarTab } from './state.ts'
 import { t } from './locales.ts'
 import { isDarkScheme, subscribeColorScheme } from './theme.ts'
 import {
-  bottomTerminalContentId, nextTerminalMeta, terminalInstanceOf, terminalRunOf, webTerminals,
+  CWD_FIELD, bottomTerminalContentId, nextTerminalMeta, terminalCwdOf, terminalInstanceOf, terminalRunOf, webTerminals,
   type HostTerminalEnvironment, type HostTerminalView, type HostTerminalViewState,
 } from './terminal-client.ts'
 import css from './terminal.module.css'
@@ -105,6 +105,30 @@ export function TerminalBottomView({ ctx, scope, tab, visible }: TerminalBottomP
     // terminal instead of adopting a binding whose process is gone.
     ctx.get('betterSidebar')?.updateTab(tab.id, { meta: nextTerminalMeta(tab) }, sessionId)
   }, [ctx, tab, sessionId])
+
+  // 「打开终端」's start directory: the mint parked it in the tab's meta (see
+  // CWD_FIELD in terminal-client.ts — the host's view() takes no cwd), and
+  // THIS is where it is spent: the moment the fresh shell is writable, one
+  // `cd` line is typed into it and the field is dropped again, so a reload —
+  // which reattaches the SAME process, already sitting in the directory —
+  // never re-runs the command. A view that never gains control (the user
+  // switching away, the service degrading) simply leaves the request parked.
+  const startCwd = terminalCwdOf(tab)
+  useEffect(() => {
+    if (model === undefined || startCwd === undefined || !state.writable) return
+    // A single-quoted POSIX cd (a quote inside the path becomes '\''), \r is
+    // the Enter keystroke. Deliberately no Windows variant: the plugin has no
+    // platform probe of its own (desktop-env.ts carries only the transport
+    // base), and guessing cmd's `cd /d` vs PowerShell's `Set-Location` would
+    // be wrong on exactly one of them — a shell that starts in the workspace
+    // root is recoverable, one that failed to parse its first command is not.
+    model.write(`cd '${startCwd.replace(/'/g, `'\\''`)}'\r`)
+    const rest = tab.meta !== null && typeof tab.meta === 'object' && !Array.isArray(tab.meta)
+      ? { ...(tab.meta as Record<string, unknown>) }
+      : {}
+    delete rest[CWD_FIELD]
+    ctx.get('betterSidebar')?.updateTab(tab.id, { meta: rest }, sessionId)
+  }, [model, startCwd, state.writable, ctx, tab, sessionId])
 
   if (service === undefined) {
     return (

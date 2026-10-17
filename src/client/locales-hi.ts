@@ -77,6 +77,7 @@ export const hi: Record<string, string> = {
   editorEmptyHint: 'पूर्वावलोकन शुरू करने के लिए दाएँ फ़ाइल ट्री या ऊपर पथ इनपुट से फ़ाइल चुनें',
   openFileNewTab: 'नए टैब में खोलें',
   openFileSide: 'बाजू में खोलें',
+  openTerminal: 'टर्मिनल में खोलें',
   settingsOpenWithPluginTitle: 'प्लगइन के अपने खोलने के विकल्प हमेशा दिखाएँ',
   settingsOpenWithPluginDesc: 'डिफ़ॉल्ट रूप से प्लगइन के अपने खोलने के विकल्प तभी दिखते हैं जब होस्ट को कोई स्थानीय संबद्ध ऐप न मिले (फ़ाइल मैनेजर / VS Code / Cursor / Zed / कस्टम एडिटर, SSH रिमोट); चालू करने पर होस्ट ऐप और प्लगइन लक्ष्य साथ-साथ रहते हैं',
   zipDownload: 'ज़िप कर डाउनलोड करें',
