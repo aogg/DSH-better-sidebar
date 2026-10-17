@@ -21,6 +21,19 @@
  * host's own designed compact look. When the row still cannot fit, the
  * host's scroll-on-activate keeps working exactly as before — no regression.
  *
+ * The ACTIVE chip needed one more fix: the host's close button (`×`) is
+ * absolutely positioned over the chip's right edge (`right: 4px`, 20px
+ * square) and the host's only "make room" measure is a fade mask over the
+ * active title's last 30px. On a content-sized chip with a CJK title the
+ * title box hugs the text, so the mask erases the trailing glyphs outright
+ * and the × covers them — 「文件变动」 renders as 「文件变 ×」. The patch
+ * reserves the ×'s overlay area with REAL padding on the active closable
+ * chip, and undoes the host's active fade mask: once the space is real
+ * padding the title box still hugs the text, so the mask would keep erasing
+ * the very glyphs it was supposed to protect. Only a genuinely clipped
+ * title (the host sets `data-dockkit-tab-clipped`) keeps its fade, as the
+ * truncation hint it is.
+ *
  * Why the selectors are the `data-dockkit-*` hooks: the strip row, its
  * scrolling tab row and every chip carry stable attributes
  * (`data-dockkit-strip` / `data-dockkit-strip-tabs` / `data-dockkit-tab`),
@@ -46,6 +59,18 @@ import css from '../sidebar.module.css'
  *   forces the row to overflow — and the host's own
  *   `data-dockkit-tab-clipped` fade mask covers the truncated title.
  * - the 6px side padding (host: 10px) saves 8px per chip.
+ * - the ACTIVE, closable chip (`aria-selected="true"`; `data-dockkit-tab-quiet`
+ *   chips excluded — a single unclosable tab renders no ×) reserves the ×'s
+ *   overlay area with `padding-right: 24px` (20px button + 4px `right`
+ *   offset): without real reserved space the absolutely positioned × sits on
+ *   top of the last title glyphs.
+ * - that same chip's title drops the host's active fade mask
+ *   (`mask-image: none`). The mask was the host's old "make room for the ×"
+ *   trick — fading the title's last 30px — and once the × area is real
+ *   padding it serves no purpose except erasing the trailing CJK glyphs
+ *   (the title box hugs the text, so the fade lands ON the text). A
+ *   genuinely clipped title (the host sets `data-dockkit-tab-clipped`)
+ *   keeps the fade as its truncation hint.
  * - inside a ≤480px container the decorative chip glyph hides (an
  *   `aria-hidden` span by contract, so the chip's accessible name keeps the
  *   title), saving ~20px more per chip. The class hash comes from the SAME
@@ -55,6 +80,8 @@ import css from '../sidebar.module.css'
 const STRIP_COMPRESSION_CSS = `
 [data-dockkit-strip] { container-type: inline-size; }
 [data-dockkit-strip-tabs] [data-dockkit-tab] { min-width: 0; padding-left: 6px; padding-right: 6px; }
+[data-dockkit-strip-tabs] [data-dockkit-tab][aria-selected="true"]:not([data-dockkit-tab-quiet]) { padding-right: 24px; }
+[data-dockkit-strip-tabs] [data-dockkit-tab][aria-selected="true"]:not([data-dockkit-tab-quiet]) > [data-dockkit-tab-title]:not([data-dockkit-tab-clipped]) { mask-image: none; }
 @container (max-width: 480px) {
   [data-dockkit-strip-tabs] [data-dockkit-tab] .${css.chipIcon} { display: none; }
 }
