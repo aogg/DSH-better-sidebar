@@ -650,7 +650,7 @@ export function GitLens(props: GitLensProps) {
     else logSkipRef.current += merged.prepended
     publishLog(merged.entries)
     setLogEnded(logResult.entries.length < LOG_BATCH)
-  }, [gitScopeNow])
+  }, [gitScopeNow, publishLog])
 
   /** One listing pass: re-read the worktree inventory, apply the first-pass
    *  automatic selection, then load the chosen checkout's derived surfaces.
