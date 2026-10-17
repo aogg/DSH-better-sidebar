@@ -20,6 +20,7 @@ import { Sidebar } from './Sidebar.tsx'
 import { RenderBoundary } from './RenderBoundary.tsx'
 import { createNativeTabRecords } from './native/tab-adapter.tsx'
 import { registerNativeSurface } from './native/index.ts'
+import { registerStripCompression } from './native/strip-compression.ts'
 import { registerBottomToggle } from './sidebar/bottom-toggle.tsx'
 import { registerStartLinks } from './sidebar/start-links.tsx'
 import { createNativeSurface } from './native/surface.ts'
@@ -192,6 +193,15 @@ export function apply(ctx: Context): void {
       reportFailure: (phase, error) => { fail(`native ${phase}`, error) },
     }),
     'dsh-better-sidebar: native right-Sidebar registrations',
+  )
+  // The HOST tab strip's chips compressed: dockkit's chips overflow the column
+  // and its scroll-the-active-chip-into-view effect then hides the other tabs
+  // whenever a right-side chip (the changes page) activates. Shrinking the
+  // chips lets the row fit without scrolling; the patch is static CSS scoped
+  // to the host's own data-dockkit-* attributes (see strip-compression.ts).
+  ctx.effect(
+    () => registerStripCompression(ctx),
+    'dsh-better-sidebar: native strip compression',
   )
   // The bottom workbench's expand/collapse button in DSH's session header
   // (the header's corner seat belongs to the native sidebar's own control).
