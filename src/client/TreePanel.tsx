@@ -85,6 +85,9 @@ export function TreePanel(props: {
    *  applications for the path (the `openWithPluginTargets` setting; passed
    *  through to FileTree). */
   openWithShowPluginTargets?: boolean
+  /** Paint TortoiseGit-style status badges on the tree's rows (the
+   *  `explorerGitBadges` setting; passed through to FileTree). */
+  gitBadges?: boolean
   onReferenceFile: (path: string, isDir: boolean) => void
   /** The explorerExclude pref patterns: the host filters the tree listing AND
    *  the name search with them (passed through to FileTree, and carried on the
@@ -108,7 +111,7 @@ export function TreePanel(props: {
   const {
     sessionId, cwd, expanded, revealed, onToggle, onOpenFile, onOpenFileNewTab, onOpenFileSide,
     openInApp, openWithTargets, openWithPinned, openWithSsh, onOpenWith, onToggleOpenWithPin,
-    openWithShowPluginTargets, exclude,
+    openWithShowPluginTargets, gitBadges, exclude,
     onReferenceFile, onPathRenamed, onPathDeleted, onPathMoved, visible, full, service,
   } = props
   const [query, setQuery] = useState('')
@@ -677,6 +680,7 @@ export function TreePanel(props: {
         onOpenWith={onOpenWith}
         onToggleOpenWithPin={onToggleOpenWithPin}
         openWithShowPluginTargets={openWithShowPluginTargets}
+        gitBadges={gitBadges}
         exclude={exclude}
         onReferenceFile={onReferenceFile}
         onAddToContentSearch={addToContentSearch}

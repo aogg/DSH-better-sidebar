@@ -27,7 +27,15 @@
  * Git ink: rows read the shared `useGitStatus` store (the changes page reads
  * the same snapshot) — a changed file's name takes its tone and a letter
  * badge, a directory with a change below it is tinted without a letter, and a
- * non-repo silently renders plain.
+ * non-repo silently renders plain. On top of that ink, rows can carry
+ * TortoiseGit-style status badges: a ~9px circular overlay pinned to the
+ * file icon's lower-right (green ✓ for a tracked clean path, the colored
+ * `!`/`✕`/`+`/`⇄`/`?` vocabulary otherwise; directories show their subtree's
+ * WORST tone). The badges are one setting (`explorerGitBadges`, default on);
+ * off, they vanish entirely and the tree renders exactly as before. Every
+ * mark reaches its memoized row as a PRIMITIVE string (`gitMark` /
+ * `gitDirMark`) — the same rule that keeps the store's per-poll objects out
+ * of the row props.
  *
  * Row actions: hovering a row reveals an @-reference button on the far right
  * (appends `@<relative path>` to the composer draft), and right-click opens a
@@ -173,6 +181,42 @@ function badgeToneOf(tone: GitTone): StatusTone {
 }
 
 /**
+ * The TortoiseGit-style badge vocabulary a row can carry: a git tone, or the
+ * special `'clean'` (tracked AND unchanged — the signature green ✓). A
+ * primitive string on purpose: it crosses into the memoized rows as a prop,
+ * and `React.memo` compares primitives by value, so a status poll that
+ * changed nothing re-renders no row at all.
+ */
+type GitMark = 'clean' | GitTone
+
+/**
+ * The badge's GLYPH, one character per mark (the TortoiseGit overlay words:
+ * the green checkmark of a clean tracked path, the red bang of an edit, the
+ * blue plus of an addition…). Characters, not SVG: at 9px one stroke reads
+ * and a path cannot.
+ */
+function gitMarkGlyph(mark: GitMark): string {
+  switch (mark) {
+    case 'clean': return '✓'
+    case 'conflict': return '!'
+    case 'modified': return '!'
+    case 'deleted': return '✕'
+    case 'added': return '+'
+    case 'renamed': return '⇄'
+    case 'copied': return '+'
+    case 'untracked': return '?'
+  }
+}
+
+/**
+ * The badge's tooltip word: the changed vocabulary the letter badges already
+ * speak (`gitToneLabel`), plus the one new word the overlay adds — "clean".
+ */
+function gitMarkLabel(mark: GitMark): string {
+  return mark === 'clean' ? t('gitStatusClean') : gitToneLabel(mark)
+}
+
+/**
  * The drop overlay's hero art: an arrow rising out of a notched tray
  * (upload zone — the same glyph family as the toolbar's upload icon) and a
  * tilted pair of photo cards (chat zone). Hand-drawn, but every ink is a
@@ -301,11 +345,18 @@ interface FileRowProps {
    */
   gitTone: GitTone | undefined
   gitLetter: string | undefined
+  /**
+   * The TortoiseGit-style overlay mark (`'clean'` or the tone), or undefined
+   * for "paint nothing" (badges off, non-repo, loading, truncated status, or
+   * a path outside the repository root). A primitive like the pair above —
+   * the same memo-by-value reasoning.
+   */
+  gitMark: GitMark | undefined
   actions: RowActions
 }
 
 const FileRow = memo(function FileRow(props: FileRowProps): ReactNode {
-  const { entry, depth, iconsVersion, service, selected, revealed, flash, dropTarget, copied, cut, gitTone, gitLetter, actions } = props
+  const { entry, depth, iconsVersion, service, selected, revealed, flash, dropTarget, copied, cut, gitTone, gitLetter, gitMark, actions } = props
   // Referenced so a registry change re-renders the row with its new icon.
   void iconsVersion
   const icon = service !== undefined ? service.fileIcon(entry.path, 14) : builtinFileIcon(entry.path, 14)
@@ -337,7 +388,17 @@ const FileRow = memo(function FileRow(props: FileRowProps): ReactNode {
       onDrop={(event) => { actions.drop(event, entry.path, false) }}
       onContextMenu={(event) => { actions.contextMenu(event, entry.path, false) }}
     >
-      {icon}
+      {/* The glyph rides in a positioning wrapper so the overlay badge can
+          pin to its lower-right without touching the row's flex layout (the
+          wrapper is exactly the icon's box — see `.explorerIcon`). */}
+      <span className={css.explorerIcon}>
+        {icon}
+        {gitMark !== undefined && (
+          <span className={css.explorerGitMark} data-mark={gitMark} title={gitMarkLabel(gitMark)}>
+            {gitMarkGlyph(gitMark)}
+          </span>
+        )}
+      </span>
       <span className={clsx(css.explorerName, gitTone !== undefined && css.explorerGitName)} data-git-tone={gitTone}>
         {entry.name}
       </span>
@@ -386,6 +447,12 @@ interface DirRowProps {
   dropTarget: boolean
   /** A change exists at or below this directory (tinted, never lettered). */
   gitChanged: boolean
+  /**
+   * The TortoiseGit-style overlay mark for this directory: its SUBTREE's
+   * worst tone, or `'clean'` under the same rules as {@link FileRowProps}.
+   * `gitMark`'s primitive (a string) so the memo survives idle polls.
+   */
+  gitDirMark: GitMark | undefined
   copied: boolean
   /** The row is on the clipboard as a CUT (dimmed until pasted or replaced). */
   cut: boolean
@@ -393,7 +460,7 @@ interface DirRowProps {
 }
 
 const DirRow = memo(function DirRow(props: DirRowProps): ReactNode {
-  const { entry, chain, depth, expanded, iconsVersion, service, selected, revealed, dropTarget, gitChanged, copied, cut, actions } = props
+  const { entry, chain, depth, expanded, iconsVersion, service, selected, revealed, dropTarget, gitChanged, gitDirMark, copied, cut, actions } = props
   void iconsVersion
   // The row's ACTIONS target the chain's deepest RENDERED link: that is the
   // directory the user sees expanded (`a/b/c`, or `a/b` after a segment
@@ -478,7 +545,16 @@ const DirRow = memo(function DirRow(props: DirRowProps): ReactNode {
       onDrop={(event) => { actions.drop(event, target.path, true) }}
       onContextMenu={(event) => { actions.contextMenu(event, target.path, true) }}
     >
-      {icon}
+      {/* Same positioning wrapper + overlay badge as a file row — the folder
+          glyph carries its subtree's worst tone. */}
+      <span className={css.explorerIcon}>
+        {icon}
+        {gitDirMark !== undefined && (
+          <span className={css.explorerGitMark} data-mark={gitDirMark} title={gitMarkLabel(gitDirMark)}>
+            {gitMarkGlyph(gitDirMark)}
+          </span>
+        )}
+      </span>
       <span className={clsx(css.explorerName, gitChanged && css.explorerDirChanged)}>
         {breadcrumb}
       </span>
@@ -516,12 +592,15 @@ interface RootRowProps {
   dropTarget: boolean
   /** A change exists at or below the root (tinted). */
   gitChanged: boolean
+  /** The root's overlay mark — the whole workspace subtree's worst tone (or
+   *  its green ✓). Same primitive rule as every row's mark. */
+  gitDirMark: GitMark | undefined
   copied: boolean
   actions: RowActions
 }
 
 const RootRow = memo(function RootRow(props: RootRowProps): ReactNode {
-  const { path, iconsVersion, service, dropTarget, gitChanged, copied, actions } = props
+  const { path, iconsVersion, service, dropTarget, gitChanged, gitDirMark, copied, actions } = props
   void iconsVersion
   const icon = service !== undefined ? service.folderIcon(path, true, 14) : builtinFolderIcon(true, 14)
   return (
@@ -535,7 +614,15 @@ const RootRow = memo(function RootRow(props: RootRowProps): ReactNode {
       onDrop={(event) => { actions.drop(event, path, true) }}
       onContextMenu={(event) => { actions.contextMenu(event, path, true) }}
     >
-      {icon}
+      {/* The root's glyph, wrapped and badged exactly like a directory row. */}
+      <span className={css.explorerIcon}>
+        {icon}
+        {gitDirMark !== undefined && (
+          <span className={css.explorerGitMark} data-mark={gitDirMark} title={gitMarkLabel(gitDirMark)}>
+            {gitMarkGlyph(gitDirMark)}
+          </span>
+        )}
+      </span>
       <span className={clsx(css.explorerName, gitChanged && css.explorerDirChanged)}>{baseName(path)}</span>
       {copied
         ? <span className={css.explorerCopied}>{t('copied')}</span>
@@ -677,6 +764,14 @@ export function FileTree(props: {
    */
   openWithShowPluginTargets?: boolean
   /**
+   * Whether rows paint TortoiseGit-style status badges (the editor card's
+   * `explorerGitBadges` toggle, read reactively by the caller). Default true;
+   * false renders exactly the pre-badge tree — the computed marks short-
+   * circuit to undefined, so not one row re-renders for the flag until it
+   * flips.
+   */
+  gitBadges?: boolean
+  /**
    * The explorer's row order (the header control's choice). Absent → the
    * server's own order, which {@link DEFAULT_FILE_TREE_SORT} reproduces, so an
    * older caller renders exactly what it rendered before the control existed.
@@ -699,6 +794,7 @@ export function FileTree(props: {
     onPathRenamed, onPathDeleted, refreshTick, onUploadRequest, busy, hidden, visible, service,
   } = props
   const sort = props.sort ?? DEFAULT_FILE_TREE_SORT
+  const gitBadges = props.gitBadges !== false
   /** The live props for the stable callbacks below (identity churns per render). */
   const propsRef = useRef(props)
   propsRef.current = props
@@ -2207,6 +2303,52 @@ export function FileTree(props: {
   const gitStatus = useGitStatus({ sessionId, cwd }, { visible: visible !== false })
 
   /**
+   * Whether a path may wear the green ✓ ("tracked and unchanged"). The
+   * dangerous one of the two marks: a WRONG clean check would tell the user
+   * "nothing to worry about" over a changed file, so it only answers from a
+   * COMPLETE status answer — a repo, a known root, and NOT truncated (a
+   * truncated `git status` dropped rows; the paths it did report look clean
+   * for exactly the reason the mark must not trust them: their changes may
+   * sit in the dropped tail). Paths outside the root (a linked container's
+   * row, a drive-relative oddity) stay unmarked too — git has no answer for
+   * them, and "no answer" must not paint as "clean".
+   */
+  const gitCleanMarkOf = (absolutePath: string): 'clean' | undefined => {
+    const snapshot = gitStatus.snapshot
+    const repoRoot = snapshot?.root
+    if (snapshot === null || snapshot.isRepo !== true || repoRoot === undefined) return undefined
+    if (snapshot.truncated === true) return undefined
+    if (absolutePath !== repoRoot
+      && !absolutePath.startsWith(`${repoRoot}/`)
+      && !absolutePath.startsWith(`${repoRoot}\\`)) return undefined
+    return 'clean'
+  }
+
+  /**
+   * A FILE row's badge mark: the status store's tone when the path is
+   * changed, else the green ✓ under the rules above, else nothing. Primitive
+   * in, primitive out — the memoized row compares it by value.
+   */
+  const gitMarkOf = (absolutePath: string): GitMark | undefined => {
+    if (!gitBadges) return undefined
+    const status = gitStatus.statusOf(absolutePath)
+    if (status !== undefined) return status.tone
+    return gitCleanMarkOf(absolutePath)
+  }
+
+  /**
+   * A DIRECTORY (or root) row's badge mark: the subtree's WORST tone from the
+   * store's directory index (`dirToneOf`), else the same green ✓, else
+   * nothing.
+   */
+  const gitDirMarkOf = (absoluteDir: string): GitMark | undefined => {
+    if (!gitBadges) return undefined
+    const tone = gitStatus.dirToneOf(absoluteDir)
+    if (tone !== undefined) return tone
+    return gitCleanMarkOf(absoluteDir)
+  }
+
+  /**
    * Fold chains (VSCode "compact folders"): resolved ONCE per level-cache
    * revision and REUSED while it stands. {@link DirRow} is memoized on prop
    * identity, so handing it a freshly built array on every render would
@@ -2508,6 +2650,7 @@ export function FileTree(props: {
                   revealed={chain.some(link => revealedSet.has(link.path))}
                   dropTarget={dropTarget === tail.path}
                   gitChanged={gitStatus.dirHasChanges(entry.path)}
+                  gitDirMark={gitDirMarkOf(entry.path)}
                   copied={copiedPath === entry.path}
                   cut={cutPaths.has(entry.path) || cutPaths.has(tail.path)}
                   actions={actions}
@@ -2530,6 +2673,7 @@ export function FileTree(props: {
               dropTarget={dropTarget === parentOf(entry.path)}
               gitTone={git?.tone}
               gitLetter={git?.letter}
+              gitMark={gitMarkOf(entry.path)}
               copied={copiedPath === entry.path}
               cut={cutPaths.has(entry.path)}
               actions={actions}
@@ -2597,6 +2741,7 @@ export function FileTree(props: {
             service={service}
             dropTarget={dropTarget === root}
             gitChanged={gitStatus.dirHasChanges(root)}
+            gitDirMark={gitDirMarkOf(root)}
             copied={copiedPath === root}
             actions={actions}
           />

@@ -88,6 +88,15 @@ export interface SidebarPrefs {
    */
   editorGitGutter: boolean
   /**
+   * Whether the file tree paints TortoiseGit-style status badges (a ~9px
+   * circular overlay at the file icon's lower-right): the green ✓ of a tracked
+   * clean path, the red ! of a modification, and the rest of the overlay
+   * vocabulary. One switch for the whole feature; OFF restores the plain tree
+   * (the existing name ink and letter badges stay — they are the pre-badge
+   * behavior, not part of this switch).
+   */
+  explorerGitBadges: boolean
+  /**
    * VS Code `files.exclude`-style glob patterns (the editor card's gear
    * popup manages the list): matched entries are REMOVED from the file tree
    * and the name search entirely — dot-prefixed rows otherwise render
@@ -198,6 +207,9 @@ export const SIDEBAR_PREFS_DEFAULTS: SidebarPrefs = {
   agentOpenTools: false,
   editorExplorer: false,
   editorGitGutter: true,
+  // The overlay badges are the feature's whole point — ON by default, like
+  // the editor gutter they sit beside.
+  explorerGitBadges: true,
   explorerExclude: [...EXPLORER_EXCLUDE_DEFAULTS],
   customCss: '',
   htmlViewerNoSandbox: false,

@@ -101,7 +101,27 @@ export function statusOfXY(xy: string): GitFileStatus | undefined {
   }
 }
 
-/** The store's normalized path key (case-insensitive, '/' separators). */
+/**
+ * The TortoiseGit-style severity ladder of the overlay vocabulary: which tone
+ * WINS when a directory's subtree holds several. A conflict demands action
+ * before anything else, a deletion can eat work, and so on down to an
+ * untracked file — the same intuition TortoiseGit's overlay set encodes, and
+ * the order the directory badge shows (`dirToneOf` answers the WORST tone
+ * under the directory, because that is the one the user must notice).
+ */
+const TONE_SEVERITY: Readonly<Record<GitTone, number>> = {
+  conflict: 6,
+  deleted: 5,
+  modified: 4,
+  added: 3,
+  renamed: 2,
+  copied: 1,
+  untracked: 0,
+}
+
+/**
+ * The store's normalized path key (case-insensitive, '/' separators).
+ */
 function normPath(path: string): string {
   return path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 }
@@ -149,14 +169,20 @@ function sameStatus(a: GitStatusResult, b: GitStatusResult): boolean {
 interface Index {
   /** Normalized absolute path → status (files only). */
   files: Map<string, GitFileStatus>
-  /** Normalized absolute directories that contain at least one changed file. */
-  dirs: Set<string>
+  /**
+   * Normalized absolute directory → the WORST tone anywhere in its subtree
+   * (the {@link TONE_SEVERITY} ladder decides). The file tree's TortoiseGit
+   * badges read this directly (`dirToneOf`); the plain membership question
+   * (`dirHasChanges`) stays a `.has()` on the same map, so its old callers
+   * see no difference.
+   */
+  dirs: Map<string, GitTone>
 }
 
 /** Build the lookup index for one snapshot (once per snapshot, O(rows × depth)). */
 function buildIndex(snapshot: GitStatusResult): Index {
   const files = new Map<string, GitFileStatus>()
-  const dirs = new Set<string>()
+  const dirs = new Map<string, GitTone>()
   const root = snapshot.root
   if (!snapshot.isRepo || root === undefined) return { files, dirs }
   for (const entry of snapshot.entries) {
@@ -164,11 +190,22 @@ function buildIndex(snapshot: GitStatusResult): Index {
     if (status === undefined) continue
     const absolute = normPath(joinRoot(root, entry.path))
     files.set(absolute, status)
+    // Propagate the file's tone UP the ancestor chain, keeping the worst one
+    // seen (`dirToneOf` = the subtree's most severe). The early break is the
+    // original Set version's, promoted to severities: the walk may stop at
+    // the first ancestor whose stored tone already outranks this file's,
+    // because an ancestor's tone is ALWAYS ≥ its children's — every write to
+    // a directory carried the same tone (or a worse one) to everything above
+    // it, so a stronger stored tone implies the whole chain above is strong
+    // too. Without that invariant the break would under-report a directory
+    // two levels up; with it, each changed file costs O(depth) map writes at
+    // most, exactly what the Set build cost.
     let at = absolute.lastIndexOf('/')
     while (at > 0) {
       const dir = absolute.slice(0, at)
-      if (dirs.has(dir)) break
-      dirs.add(dir)
+      const existing = dirs.get(dir)
+      if (existing !== undefined && TONE_SEVERITY[existing] >= TONE_SEVERITY[status.tone]) break
+      dirs.set(dir, status.tone)
       at = dir.lastIndexOf('/')
     }
   }
@@ -372,7 +409,7 @@ function release(slot: Slot, poll: boolean): void {
 /** The index for the current snapshot, rebuilt only when the snapshot changed. */
 function indexOf(slot: Slot): Index {
   if (slot.index === null || slot.indexSource !== slot.snapshot) {
-    slot.index = slot.snapshot === null ? { files: new Map(), dirs: new Set() } : buildIndex(slot.snapshot)
+    slot.index = slot.snapshot === null ? { files: new Map(), dirs: new Map() } : buildIndex(slot.snapshot)
     slot.indexSource = slot.snapshot
   }
   return slot.index
@@ -402,6 +439,13 @@ export interface GitStatusView {
   statusOf(absolutePath: string): GitFileStatus | undefined
   /** Whether `absoluteDir` or anything under it has a change. */
   dirHasChanges(absoluteDir: string): boolean
+  /**
+   * The WORST tone anywhere under `absoluteDir` (the TortoiseGit severity
+   * ladder), or undefined when the subtree is clean/unknown. What the file
+   * tree's directory badges paint — a plain "has changes" boolean cannot tell
+   * a conflict-red row from an untracked one.
+   */
+  dirToneOf(absoluteDir: string): GitTone | undefined
 }
 
 /**
@@ -445,6 +489,10 @@ export function useGitStatus(
     (absoluteDir: string) => indexOf(slot).dirs.has(normPath(absoluteDir)),
     [slot],
   )
+  const dirToneOf = useCallback(
+    (absoluteDir: string) => indexOf(slot).dirs.get(normPath(absoluteDir)),
+    [slot],
+  )
 
-  return { snapshot: slot.snapshot, loading: slot.loading, error: slot.error, refresh, statusOf, dirHasChanges }
+  return { snapshot: slot.snapshot, loading: slot.loading, error: slot.error, refresh, statusOf, dirHasChanges, dirToneOf }
 }

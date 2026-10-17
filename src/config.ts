@@ -94,6 +94,10 @@ export const PrefsSchema: z<SidebarPrefs> = z.object({
   agentOpenTools: z.boolean().default(false),
   editorExplorer: z.boolean().default(false),
   editorGitGutter: z.boolean().default(true),
+  // The file tree's TortoiseGit-style overlay badges (green ✓ on clean paths
+  // and friends). ON by default — the same "git ink is the point" stance as
+  // the editor gutter above.
+  explorerGitBadges: z.boolean().default(true),
   explorerExclude: z.array(z.string()).default([...EXPLORER_EXCLUDE_DEFAULTS]),
   customCss: z.string(),
   htmlViewerNoSandbox: z.boolean().default(false),

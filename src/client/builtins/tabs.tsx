@@ -91,6 +91,13 @@ export function builtinTabs(ctx: Context): readonly TabDescriptor[] {
           title: () => t('explorerExclude'),
           desc: () => t('explorerExcludeDesc'),
           patternsPlaceholder: t('explorerExcludePlaceholder'),
+        }, {
+          // The tree's TortoiseGit-style status badges (green ✓ overlay on a
+          // tracked clean path, the colored ! / ✕ / + vocabulary otherwise).
+          // One plain boolean, default on; off restores the plain tree.
+          key: 'explorerGitBadges',
+          title: () => t('settingsExplorerGitBadgesTitle'),
+          desc: () => t('settingsExplorerGitBadgesDesc'),
         }],
         // Plugin-owned rows (values live in `pluginSettings['editor']`): the
         // plugin's own open-with targets are shown only when the host reports

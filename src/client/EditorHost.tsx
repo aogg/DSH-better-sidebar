@@ -226,6 +226,14 @@ export function EditorHost(props: {
   // settings page and the tree's menu see one value. Absent/false keeps the
   // host-first behavior (the tree decides what to hide).
   const openWithShowPluginTargets = editorBlob.openWithPluginTargets === true
+  // The tree's TortoiseGit-style badge switch (the editor card's declarative
+  // toggle): same reactive prefs read as `inPlace` above — a bare boolean
+  // snapshot, so flipping it re-renders the tree and nothing else. Absent
+  // means ON (the parse already defaults it; `!== false` is belt and braces).
+  const gitBadges = useSyncExternalStore(
+    useCallback((callback: () => void) => store.subscribe(callback), [store]),
+    useCallback(() => store.getSnapshot().prefs.explorerGitBadges !== false, [store]),
+  )
   // A path-less tab shows the empty-state hint in merged mode — and in split
   // mode it is the standalone explorer (tree-only, see the render below). A
   // folder tab is a folder window in BOTH modes: the tree rooted at the
@@ -614,6 +622,7 @@ export function EditorHost(props: {
           onOpenFileSide={openFileSide}
           openInApp={openInApp}
           openWithShowPluginTargets={openWithShowPluginTargets}
+          gitBadges={gitBadges}
           openWithTargets={openWithTargets}
           openWithPinned={openWithConfig.pinned}
           openWithSsh={openWithSshActive(openWithConfig)}
@@ -752,6 +761,7 @@ export function EditorHost(props: {
               onOpenFileSide={openFileSide}
               openInApp={openInApp}
               openWithShowPluginTargets={openWithShowPluginTargets}
+              gitBadges={gitBadges}
               openWithTargets={openWithTargets}
               openWithPinned={openWithConfig.pinned}
               openWithSsh={openWithSshActive(openWithConfig)}

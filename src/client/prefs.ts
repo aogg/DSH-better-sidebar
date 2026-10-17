@@ -65,6 +65,9 @@ export function parsePrefs(value: unknown): SidebarPrefs {
     editorGitGutter: typeof record.editorGitGutter === 'boolean'
       ? record.editorGitGutter
       : SIDEBAR_PREFS_DEFAULTS.editorGitGutter,
+    explorerGitBadges: typeof record.explorerGitBadges === 'boolean'
+      ? record.explorerGitBadges
+      : SIDEBAR_PREFS_DEFAULTS.explorerGitBadges,
     explorerExclude: stringArrayOf(record.explorerExclude),
     customCss: typeof record.customCss === 'string'
       ? record.customCss

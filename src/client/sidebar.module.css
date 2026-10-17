@@ -821,6 +821,67 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
   color: var(--dsw-alias-state-business-primary);
 }
 
+/* ── TortoiseGit-style status badges (the tree's overlay vocabulary) ───── */
+
+/* The icon's positioning context: every row glyph (file art or folder) sits
+   in one sized wrapper so the badge can pin to its lower-right corner
+   without the row's flex layout knowing a badge exists. `line-height: 0`
+   keeps the wrapper exactly the glyph's box (an inline svg would otherwise
+   add baseline leading and stretch the 28px row). */
+.explorerIcon {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+/* The badge itself: a ~9px filled circle at the icon's lower-right (the
+   TortoiseGit overlay position — read with the eye, not looked for). The
+   glyph is a character (✓ ! ✕ + ⇄ ?) in white on the status color, legible
+   at 9px because each is one stroke; the double ring (near-white inner +
+   faint dark outer) is the light/dark guarantee: on a dark theme the white
+   ring separates the badge from dim icon art, on a light theme the dark
+   outer edge keeps the pale marks (yellow, green) from dissolving into the
+   row background. Fixed status colors are deliberate: the overlay vocabulary
+   is the SAME palette in every theme (that is what makes it scannable), the
+   way TortoiseGit ships one icon set for all of Windows. */
+.explorerGitMark {
+  position: absolute;
+  right: -3px;
+  bottom: -2px;
+  box-sizing: border-box;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  font-size: 8px;
+  line-height: 1;
+  font-weight: 700;
+  color: #fff;
+  background: var(--dsw-alias-label-tertiary);
+  box-shadow:
+    0 0 0 1.5px rgba(255, 255, 255, 0.92),
+    0 0 0 2.5px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+}
+
+/* The overlay vocabulary, one mark per tone (clean's green ✓ is the
+   TortoiseGit signature). Characters render centered; `⇄` is two glyphs
+   wide at 8px, so it drops a size to stay inside the 9px circle. */
+.explorerGitMark[data-mark='clean'] { background: #2da44e; }
+.explorerGitMark[data-mark='modified'] { background: #d1242f; }
+.explorerGitMark[data-mark='deleted'] { background: #b62324; }
+.explorerGitMark[data-mark='added'] { background: #1f6feb; }
+.explorerGitMark[data-mark='renamed'] { background: #8250df; font-size: 7px; }
+.explorerGitMark[data-mark='copied'] { background: #8250df; }
+.explorerGitMark[data-mark='conflict'] { background: #bf8700; }
+.explorerGitMark[data-mark='untracked'] { background: #6e40c9; }
+
 /* ── File history modal（查看 Git 历史）────────────────────────────────── */
 
 /* The dialog: wider than the 380px default (a patch wants width) and
