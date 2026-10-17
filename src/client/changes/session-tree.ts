@@ -16,7 +16,7 @@
  * `change-tree.ts` on purpose: that module's API and behavior stay untouched
  * (its specs pin them), and this one differs in its leaf payload anyway.
  */
-import type { FileOp } from './ops.ts'
+import type { FileOp, FileOpKind } from './ops.ts'
 
 /** One touched file (a leaf), carrying the round's operations on it. */
 export interface SessionFile {
@@ -176,4 +176,25 @@ export function ancestorDirs(path: string): string[] {
     dirs.push(segments.slice(0, index).join('/'))
   }
   return dirs
+}
+
+/** The fixed badge order of a folded file header: edits first (the round's
+ *  substance), then whole-file writes, then reads. */
+const FOLD_KIND_ORDER = ['edit', 'write', 'read'] as const
+
+/**
+ * The op kinds one file's FOLDED header badges: every kind that occurs in the
+ * group, deduplicated, in the fixed {@link FOLD_KIND_ORDER}. The header used
+ * to badge only the NEWEST op's kind — a subagent's edits followed by a later
+ * plain read of the same path folded down to a lone 读取 pill and, under the
+ * 「全部」 filter, the round read as untouched (session f1fa85ec, Backend.php /
+ * Index.php). One badge per occurred kind keeps the summary truthful without
+ * unfolding anything.
+ * @param ops - the file's operations, newest first (the group's own order).
+ * @returns the distinct kinds in fixed order; empty only for an empty group.
+ */
+export function foldedKindsOf(ops: readonly FileOp[]): FileOpKind[] {
+  const seen = new Set<FileOpKind>()
+  for (const op of ops) seen.add(op.kind)
+  return FOLD_KIND_ORDER.filter(kind => seen.has(kind))
 }

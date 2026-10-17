@@ -6,8 +6,10 @@
  * changes-tab.spec.tsx; this spec pins the fold mechanics the tree itself
  * adds: directory rows start expanded and fold on click, a single-child chain
  * reads as one `a/b/c` row, the file header names the file only (the full
- * path rides the title), a preview selection re-opens its own collapsed chain,
- * and a kind filter removes emptied branches whole.
+ * path rides the title), the FOLDED header badges every distinct op kind the
+ * group contains (edit→write→read, deduplicated), a preview selection
+ * re-opens its own collapsed chain, and a kind filter removes emptied
+ * branches whole.
  */
 import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
@@ -116,6 +118,43 @@ describe('SessionLens directory tree', () => {
       expect(head!.getAttribute('title')).toBe('a/b/c/deep.ts')
       expect(head!.textContent).toContain('deep.ts')
       expect(head!.textContent).not.toContain('/')
+    } finally {
+      view.unmount()
+    }
+  })
+
+  it('badges every distinct op kind on a folded file header, edit before read', () => {
+    // The f1fa85ec regression shape: a subagent edits Backend.php, the main
+    // session later READS the same path (newest first below). The folded
+    // header used to badge only the newest op's kind — a lone 读取 pill that
+    // hid the edits under the 全部 filter. One badge per occurred kind, fixed
+    // edit→write→read order, keeps the summary truthful.
+    const editOp = op('edit', 'src/app/Backend.php')
+    const readOp = op('read', 'src/app/Backend.php')
+    const view = renderLens([readOp, editOp])
+    try {
+      const head = fileHead(view.container, 'src/app/Backend.php')!
+      const badges = [...head.querySelectorAll<HTMLElement>('[data-tone]')]
+      expect(badges.map(badge => badge.getAttribute('data-tone'))).toEqual(['edit', 'read'])
+      expect(badges.map(badge => badge.textContent)).toEqual([t('changesEdit'), t('changesRead')])
+    } finally {
+      view.unmount()
+    }
+  })
+
+  it('deduplicates the folded badges when one kind repeats in the group', () => {
+    // Two edits + one read: still exactly one 编辑 badge and one 读取 badge.
+    const editOp = op('edit', 'src/app/Index.php')
+    const secondEdit = op('edit', 'src/app/Index.php', 1_700_000_000_001)
+    const readOp = op('read', 'src/app/Index.php', 1_700_000_000_002)
+    const view = renderLens([readOp, secondEdit, editOp])
+    try {
+      const head = fileHead(view.container, 'src/app/Index.php')!
+      const kinds = [...head.querySelectorAll<HTMLElement>('[data-tone]')]
+        .map(badge => badge.getAttribute('data-tone'))
+      expect(kinds).toEqual(['edit', 'read'])
+      // The count pill still reports the whole group (3 ops).
+      expect(head.querySelector('[data-op-count="3"]')).not.toBeNull()
     } finally {
       view.unmount()
     }

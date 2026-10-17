@@ -8,8 +8,11 @@
  * a directory that first appears in a later poll is born open. Each file's op
  * history is FOLDED by default: the header discloses it (chevron +
  * `aria-expanded`; the file's own name on the row, the full path in the
- * title), and the folded header carries the summary — how many ops the file
- * has and how fresh the newest one is. A preview selection inside a folded
+ * title), and the folded header carries the summary — one kind badge per kind
+ * the group contains (deduplicated in the fixed edit→write→read order; the
+ * newest op alone once read as a plain 读取 and hid the round's edits), how
+ * many ops the file has and how fresh the newest one is. A preview selection
+ * inside a folded
  * group auto-expands the group AND every directory above it, so an op clicked
  * elsewhere (or restored from the pane) is always visible. Clicking an op
  * previews it in the tab's shared bottom pane (see {@link DiffPane}): writes
@@ -24,7 +27,7 @@ import { builtinFileIcon, builtinFolderIcon } from '../file-icons.tsx'
 import { formatBytes } from '../diff/rows.ts'
 import { Chip, Notice, StatusBadge } from '../ui/index.ts'
 import { groupByFile, type FileOp, type FileOpKind } from './ops.ts'
-import { ancestorDirs, buildSessionTree, type SessionDir, type SessionFile } from './session-tree.ts'
+import { ancestorDirs, buildSessionTree, foldedKindsOf, type SessionDir, type SessionFile } from './session-tree.ts'
 import css from './changes.module.css'
 
 /** The op-kind filter chips: 'all' or one concrete kind. */
@@ -123,8 +126,10 @@ export function SessionLens({ ops, loadError, onPreview, selectedCallId }: Sessi
 
   /** One file row: the disclosure chevron + the file's artwork + its own NAME
    *  (the full path rides the title) + — only while folded — the summary rung
-   *  (op count + the newest op's kind badge and relative time). Disclosing
-   *  reveals the op history rows below. */
+   *  (one kind badge per kind the group actually contains, deduplicated in the
+   *  fixed edit→write→read order — the newest op alone once hid edits behind a
+   *  later read's 读取 badge — plus the newest op's relative time and the op
+   *  count). Disclosing reveals the op history rows below. */
   const renderFile = (node: SessionFile): ReactNode => {
     const open = expandedFiles.has(node.path)
     const newest = node.ops[0]
@@ -147,7 +152,9 @@ export function SessionLens({ ops, loadError, onPreview, selectedCallId }: Sessi
           <span className={css.filePathText}>{node.name}</span>
           {!open && newest !== undefined && (
             <span className={css.fileHeadSummary}>
-              <StatusBadge tone={newest.kind}>{t(KIND_LABEL[newest.kind])}</StatusBadge>
+              {foldedKindsOf(node.ops).map(kind => (
+                <StatusBadge key={kind} tone={kind}>{t(KIND_LABEL[kind])}</StatusBadge>
+              ))}
               <span className={css.opTime}>{relativeTime(new Date(newest.time).toISOString())}</span>
               <span className={css.countPill} data-op-count={node.ops.length}>{node.ops.length}</span>
             </span>
