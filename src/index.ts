@@ -64,6 +64,7 @@ import { createAssistantLiveBuffer, type AssistantLiveBuffer } from './assistant
 import { readJsonBody, readTextBody, requireString, SidebarError, writeError, writeJson, writeOk } from './wire.ts'
 import { streamFileToResponse } from './file-stream.ts'
 import { readPersistedSession } from './session-store.ts'
+import { readPersistedSessionCached } from './session-cache.ts'
 import { collectSubtreeIds, mergeSubtreeEvents, type SubtreeEventPart } from './changes-subtree.ts'
 import { BlockAssembler, createUserMessage, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import {
@@ -1297,7 +1298,11 @@ function buildApi(
         let events: readonly SidebarSessionEvent[] | undefined = ctx.sessions.get(sessionId)?.snapshotEvents()
         if (events === undefined && persistence !== undefined) {
           try {
-            events = (await readPersistedSession(persistence, sessionId)).events
+            // Cold read through the session cache: a finished session's
+            // persisted log parses once, then every poll is one `stat` (or a
+            // TTL hit). A live session never reaches this line — the in-memory
+            // snapshot above answers first.
+            events = (await readPersistedSessionCached(persistence, sessionId)).events
           } catch {
             // Cold read unavailable (session never persisted): an empty
             // window is the honest answer, not a wire error.
@@ -1324,7 +1329,10 @@ function buildApi(
         let events: readonly SidebarSessionEvent[] | undefined = ctx.sessions.get(id)?.snapshotEvents()
         if (events === undefined && persistence !== undefined) {
           try {
-            events = (await readPersistedSession(persistence, id)).events
+            // Same cache as the single-log path: each subtree member's cold
+            // read is validated (or TTL'd) independently, so a poll that
+            // touches N children pays at most N `stat` calls, never N parses.
+            events = (await readPersistedSessionCached(persistence, id)).events
           } catch {
             if (isRoot) rootReadable = false
           }

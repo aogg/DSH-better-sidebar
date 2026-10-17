@@ -56,6 +56,23 @@ export function opCountOf(sessionId: string): number | undefined {
   return opCounts.get(sessionId)
 }
 
+/**
+ * The append-merge identity of one session event: its (type, callId) pair —
+ * the fold's own key (a tool call and its result share the callId but not the
+ * type), so two events with the same identity fold to the same bytes and the
+ * re-send the subtree server's closed bound produces can be dropped on
+ * arrival. `null` for an event without a usable callId: it is appended
+ * undeduplicated, because a lost real event can never be re-fetched (the
+ * cursor already moved past it) while a duplicate is harmless.
+ */
+function identityOf(event: SidebarSessionEvent): string | null {
+  const data = event.data as { callId?: unknown; message?: { source?: { callId?: unknown } } }
+  const callId = event.type === 'tool/call'
+    ? data.callId
+    : data.message?.source?.callId
+  return typeof callId === 'string' ? `${event.type}\u0000${callId}` : null
+}
+
 type Lens = 'commits' | 'git' | 'session' | 'rounddiff'
 
 /** The persisted tab meta (JSON-serializable; rides the layout). */
@@ -162,17 +179,34 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
       // An aborted poll belongs to a torn-down run: its answer must never
       // publish state (the transport may deliver it anyway).
       if (generation !== pollGen.current || signal?.aborted === true) return
-      // Nothing new: KEEP the previous fold's identity. Re-folding an
-      // unchanged window produced a fresh array every 2.5s, which defeated
-      // every downstream memo — the session lens re-encoded each op body into
-      // a Blob to size it, on every idle tick.
-      if (events.length === 0 && lastSeq <= seqRef.current && opsRef.current.length > 0) {
+      // Nothing new: KEEP the previous fold's identity and touch nothing that
+      // renders — not even the tick counter. This is a finished session's
+      // steady state (the server answers an empty window), so the idle 2.5 s
+      // poll must cost ZERO renders; `setOpsError(false)` is a bail-out
+      // no-op while the flag is already false, and a real recovery from an
+      // error still clears the banner with the one render it needs.
+      if (events.length === 0 && lastSeq <= seqRef.current) {
         setOpsError(false)
         return
       }
       if (events.length > 0) {
-        const merged = [...eventsRef.current, ...events]
-        eventsRef.current = merged.length > EVENTS_CAP ? merged.slice(merged.length - EVENTS_CAP) : merged
+        // Append the delta MERGED BY IDENTITY: the subtree server answers on
+        // a CLOSED bound (`>= afterSeq` — see ./changes-subtree.ts), so its
+        // boundary event rides again on every delta that carries anything
+        // new. A repeated (type, callId) pair is exactly that re-send — the
+        // fold below is keyed by callId, so refolding it changes nothing —
+        // while a genuinely new event always carries a pair the window has
+        // not seen. Events without a usable callId (the fold skips them
+        // anyway) are appended without dedup so nothing real is ever dropped.
+        const seen = new Set(eventsRef.current.map(identityOf))
+        const fresh = events.filter(event => {
+          const id = identityOf(event)
+          return id === null || !seen.has(id)
+        })
+        if (fresh.length > 0) {
+          const merged = [...eventsRef.current, ...fresh]
+          eventsRef.current = merged.length > EVENTS_CAP ? merged.slice(merged.length - EVENTS_CAP) : merged
+        }
       }
       if (lastSeq > seqRef.current) seqRef.current = lastSeq
       const folded = extractFileOps(eventsRef.current)
