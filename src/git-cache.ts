@@ -35,7 +35,7 @@
  * function directly, which is exactly the pre-cache behavior.
  */
 import { resolve } from 'node:path'
-import { runGit } from './git.ts'
+import * as git from './git.ts'
 
 /** Entries held at most (one answer ≈ one route+repo+params key; a handful of
  *  worktrees × a few filters × paging pages stays far below this). */
@@ -141,7 +141,7 @@ async function headOf(root: string): Promise<string | null> {
   if (cached !== undefined && Date.now() - cached.at < HEAD_MICRO_TTL_MS) return cached.head
   const pending = headInFlight.get(id)
   if (pending !== undefined) return pending
-  const promise = runGit(root, ['rev-parse', 'HEAD'])
+  const promise = git.runGit(root, ['rev-parse', 'HEAD'])
     .then(sha => sha.trim())
     .catch(() => null)
     .then((head) => {
