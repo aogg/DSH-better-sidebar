@@ -128,7 +128,7 @@ export function TerminalBottomView({ ctx, scope, tab, visible }: TerminalBottomP
       : {}
     delete rest[CWD_FIELD]
     ctx.get('betterSidebar')?.updateTab(tab.id, { meta: rest }, sessionId)
-  }, [model, startCwd, state.writable, ctx, tab, sessionId])
+  }, [model, startCwd, state?.writable, ctx, tab, sessionId])
 
   if (service === undefined) {
     return (
