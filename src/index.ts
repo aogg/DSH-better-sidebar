@@ -49,6 +49,11 @@ import { createSidechatPushHub } from './sidechat-push.ts'
 import { launchExternal } from './open-external.ts'
 import { createArchiveTasks, respondArchiveDownload, type ArchiveTasks } from './archive-route.ts'
 import * as git from './git.ts'
+// The changes tab's git reads go through this process-local cache (HEAD-guarded
+// answers, TTL + stale-while-revalidate for the worktree-content routes, LRU
+// bound, in-flight dedupe). Wire protocol unchanged — same routes, payloads,
+// response shapes. Mutating routes invalidate through the same module.
+import { cachedGitRead, gitCacheKey, gitCacheRootOf, invalidateGitCacheFor } from './git-cache.ts'
 import { SettingsConflictError } from '@deepseek-ai/dsh-settings'
 import { AgentOpenRegistry, registerOpenTool, type AgentOpenRequest } from './agent-opens.ts'
 import { buildSubagentLiveApi, type SidebarSubagentLiveRoutes } from './subagent-live-route.ts'
@@ -919,7 +924,17 @@ function buildApi(
       // list belongs to the SELECTED child, not the container. Thread the
       // validated repoRoot so linked checkouts of a chosen child appear.
       const base = selected !== undefined ? await git.repoRoot(cwd, selected).catch(() => cwd) : cwd
-      return git.worktrees(base)
+      // Volatile: the inventory's change counts follow every checkout's files,
+      // not just HEAD — TTL + stale-while-revalidate, not a plain sha guard.
+      // The key resolves the ROOT so a cwd inside the repository shares the
+      // entry (and the invalidation finds it).
+      const root = await gitCacheRootOf(cwd, selected)
+      return cachedGitRead(
+        root,
+        gitCacheKey('git.worktrees', [root]),
+        () => git.worktrees(base),
+        true,
+      )
     },
     'git.status': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
@@ -946,20 +961,29 @@ function buildApi(
       const { cwd } = await gitCwdOf(payload)
       const record = payload as { path?: unknown }
       const path = record.path === undefined ? undefined : requireString(payload, 'path')
-      await git.stage(cwd, path, selectedRepoOf(payload))
+      const selected = selectedRepoOf(payload)
+      await git.stage(cwd, path, selected)
+      // Mutations drop the repository's cached answers (worktree change
+      // counts, index state, …) so the next read recomputes — the same hook
+      // every mutating git route below runs.
+      await invalidateGitCacheFor(cwd, selected)
       return { ok: true }
     },
     'git.unstage': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
       const record = payload as { path?: unknown }
       const path = record.path === undefined ? undefined : requireString(payload, 'path')
-      await git.unstage(cwd, path, selectedRepoOf(payload))
+      const selected = selectedRepoOf(payload)
+      await git.unstage(cwd, path, selected)
+      await invalidateGitCacheFor(cwd, selected)
       return { ok: true }
     },
     'git.commit': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
       const message = requireString(payload, 'message')
-      await git.commit(cwd, message, selectedRepoOf(payload))
+      const selected = selectedRepoOf(payload)
+      await git.commit(cwd, message, selected)
+      await invalidateGitCacheFor(cwd, selected)
       return { ok: true }
     },
     // Ship a commit without leaving the panel. Both target the selected
@@ -968,21 +992,32 @@ function buildApi(
     // branch (pull is --ff-only) is the user's to resolve in a terminal.
     'git.push': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
-      await git.push(cwd, selectedRepoOf(payload))
+      const selected = selectedRepoOf(payload)
+      await git.push(cwd, selected)
+      // Push moves the remote-tracking refs the log's `%D` decorations print,
+      // so the cached pages are dropped like any other mutation's.
+      await invalidateGitCacheFor(cwd, selected)
       return { ok: true }
     },
     'git.pull': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
-      await git.pull(cwd, selectedRepoOf(payload))
+      const selected = selectedRepoOf(payload)
+      await git.pull(cwd, selected)
+      await invalidateGitCacheFor(cwd, selected)
       return { ok: true }
     },
     'git.branch': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
-      return git.branches(cwd, selectedRepoOf(payload))
+      const selected = selectedRepoOf(payload)
+      // HEAD-guarded: the branch answer moves when HEAD moves (checkout).
+      const root = await gitCacheRootOf(cwd, selected)
+      return cachedGitRead(root, gitCacheKey('git.branch', [root]), () => git.branches(cwd, selected))
     },
     'git.checkout': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
-      await git.checkout(cwd, requireString(payload, 'branch'), selectedRepoOf(payload))
+      const selected = selectedRepoOf(payload)
+      await git.checkout(cwd, requireString(payload, 'branch'), selected)
+      await invalidateGitCacheFor(cwd, selected)
       return { ok: true }
     },
     'git.log': async (payload) => {
@@ -1005,10 +1040,21 @@ function buildApi(
       // absolute pathspec inside its own worktree.
       const rawPath = typeof record.path === 'string' && record.path !== '' ? record.path : undefined
       const path = rawPath === undefined ? undefined : await resolveStatusPath(cwd, rawPath, selectedRepoOf(payload))
-      return git.log(cwd, count, skip, selectedRepoOf(payload), {
-        ...(record.files === true ? { files: true } : {}),
-        ...(path !== undefined ? { path } : {}),
-      })
+      const selected = selectedRepoOf(payload)
+      // HEAD-guarded: a page of the log is a pure function of HEAD (plus the
+      // decorations `push`/tags move, which the mutation invalidation of those
+      // routes covers). The RESOLVED path is part of the key, so the tree's
+      // 「查看 Git 历史」 filter can never share an entry with the unfiltered
+      // branch log or another spelling of the same path.
+      const root = await gitCacheRootOf(cwd, selected)
+      return cachedGitRead(
+        root,
+        gitCacheKey('git.log', [root, count ?? 30, skip ?? 0, record.files === true, path ?? '']),
+        () => git.log(cwd, count, skip, selected, {
+          ...(record.files === true ? { files: true } : {}),
+          ...(path !== undefined ? { path } : {}),
+        }),
+      )
     },
     'git.commit-diff': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
@@ -1019,7 +1065,16 @@ function buildApi(
       const record = payload as { path?: unknown }
       const rawPath = typeof record.path === 'string' && record.path !== '' ? record.path : undefined
       const path = rawPath === undefined ? undefined : await resolveStatusPath(cwd, rawPath, repoRoot)
-      return { diff: await git.commitDiff(cwd, requireString(payload, 'hash'), repoRoot, path !== undefined ? { path } : undefined) }
+      const hash = requireString(payload, 'hash')
+      // HEAD-guarded (a commit's patch is immutable; the guard only bounds the
+      // entries' lifetime). The resolved path splits the per-file expansion
+      // from the whole-commit patch.
+      const root = await gitCacheRootOf(cwd, repoRoot)
+      return cachedGitRead(
+        root,
+        gitCacheKey('git.commit-diff', [root, hash, path ?? '']),
+        () => git.commitDiff(cwd, hash, repoRoot, path !== undefined ? { path } : undefined),
+      ).then(diff => ({ diff }))
     },
     // The round-diff lens' ONE-SHOT patch: the worktree against an arbitrary
     // baseline revision, staged and unstaged together — aiming the rev at the
@@ -1028,22 +1083,42 @@ function buildApi(
     // selection as every git route above.
     'git.diff-range': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
-      return { diff: await git.diffRange(cwd, requireString(payload, 'rev'), selectedRepoOf(payload)) }
+      const selected = selectedRepoOf(payload)
+      const rev = requireString(payload, 'rev')
+      // VOLATILE, the one route the HEAD guard cannot cover alone: the patch
+      // is the worktree AGAINST the rev, so every edit (committed or not)
+      // changes it. TTL + stale-while-revalidate: a re-opened lens paints the
+      // 10 s-old patch instantly while one background diff refreshes the
+      // entry; a panel-side commit clears it outright (the mutation hook).
+      const root = await gitCacheRootOf(cwd, selected)
+      return cachedGitRead(
+        root,
+        gitCacheKey('git.diff-range', [root, rev]),
+        () => git.diffRange(cwd, rev, selected).then(diff => ({ diff })),
+        true,
+      )
     },
     'git.discard': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
       const repoRoot = selectedRepoOf(payload)
       await git.discard(cwd, await resolveStatusPath(cwd, requireString(payload, 'path'), repoRoot), repoRoot)
+      // Discard rewrites worktree content: the volatile entries (worktree
+      // counts, the round-diff patch) must not survive it either.
+      await invalidateGitCacheFor(cwd, repoRoot)
       return { ok: true }
     },
     'git.revert': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
-      await git.revert(cwd, requireString(payload, 'hash'), selectedRepoOf(payload))
+      const selected = selectedRepoOf(payload)
+      await git.revert(cwd, requireString(payload, 'hash'), selected)
+      await invalidateGitCacheFor(cwd, selected)
       return { ok: true }
     },
     'git.cherry-pick': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
-      await git.cherryPick(cwd, requireString(payload, 'hash'), selectedRepoOf(payload))
+      const selected = selectedRepoOf(payload)
+      await git.cherryPick(cwd, requireString(payload, 'hash'), selected)
+      await invalidateGitCacheFor(cwd, selected)
       return { ok: true }
     },
     'git.show': async (payload) => {
