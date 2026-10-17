@@ -26,7 +26,7 @@ import type {
   TasksAgentNode, TasksFoldNode, TasksNodeState, TasksNodeTask, TasksWorkflowNode,
 } from './tasks-model.ts'
 import { activityGlyph } from './activity-icons.tsx'
-import { t, type CopyKey } from './locales.ts'
+import { formatStamp, formatStampFull, t, type CopyKey } from './locales.ts'
 import css from './tasks-graph.module.css'
 
 /** Preview cap of one tool-call argument line. */
@@ -253,6 +253,40 @@ export function primaryTask(tasks: readonly TasksNodeTask[]): TasksNodeTask | un
 }
 
 /**
+ * The creation sequence of a shared task, read off the host's durable id:
+ * the task board issues ids as `task-N` where N is the team's own creation
+ * counter, so the number IS the creation order — no clock involved.
+ * Answers undefined for an id the regex does not recognize (the caller then
+ * renders no seq rather than a wrong one).
+ */
+export function teamTaskSeq(taskId: string): number | undefined {
+  const match = /^task-(\d+)$/.exec(taskId)
+  if (match === null) return undefined
+  const seq = Number(match[1])
+  return Number.isSafeInteger(seq) ? seq : undefined
+}
+
+/**
+ * The creation stamp of one node card — `#N` plus, when a creation time
+ * exists, the compact absolute stamp (`#3 · 10-17 09:12`), with the labelled
+ * full-precision string as the hover title. The ROOT card answers undefined
+ * (the main session has no creation concept here), and a synthesized
+ * workflow member contributes its seq alone (no time to attest).
+ */
+export function creationStamp(
+  node: TasksAgentNode | TasksWorkflowNode,
+): { text: string; title: string } | undefined {
+  const seq = node.createdAtSeq
+  if (seq === undefined) return undefined
+  const parts = [`${t('createdSeqLabel')} #${seq}`]
+  if (node.createdAt !== undefined) parts.push(`${t('createdAtLabel')} ${formatStampFull(node.createdAt)}`)
+  return {
+    text: node.createdAt === undefined ? `#${seq}` : `#${seq} · ${formatStamp(node.createdAt)}`,
+    title: parts.join(' · '),
+  }
+}
+
+/**
  * The node's shared-task line: an icon, the primary task's subject, its
  * status word, and a `+N` tail when the agent owns more. Renders nothing
  * without tasks, so non-team nodes keep the three-line shape.
@@ -264,6 +298,12 @@ export function TaskLine(props: {
   const tasks = props.tasks ?? []
   const primary = primaryTask(tasks)
   if (primary === undefined) return null
+  /**
+   * The task's creation seq rides the SUBJECT's front (`#3 …`) — the line is
+   * one ellipsizing run, so the prefix ages with the subject instead of
+   * claiming a column on a 280px card.
+   */
+  const seq = teamTaskSeq(primary.id)
   return (
     <span
       role="button"
@@ -282,7 +322,9 @@ export function TaskLine(props: {
       }}
     >
       <span className={css.taskGlyph} aria-hidden="true"><IconChecklistOutlineRegular size={9} /></span>
-      <span className={css.taskSubject}>{primary.subject}</span>
+      <span className={css.taskSubject} title={primary.subject}>
+        {seq !== undefined ? `#${seq} ` : ''}{primary.subject}
+      </span>
       <span className={css.taskState}>{t(taskStatusKey(primary.status))}</span>
       {tasks.length > 1 && <span className={css.taskMore}>{`+${tasks.length - 1}`}</span>}
     </span>

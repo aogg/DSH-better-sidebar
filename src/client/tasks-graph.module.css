@@ -296,6 +296,25 @@
   border-color: color-mix(in srgb, var(--dsw-alias-label-primary) 24%, transparent);
 }
 
+/* The creation stamp (#N · 10-17 09:12) rides the badge row's END: the row
+   every card already has, so the layout reserves no extra line for it. Mono
+   micro-type in the tertiary ink, right-aligned; `flex: 1` with `min-width: 0`
+   makes it the row's yielding cell — a long phase title squeezes the stamp to
+   an ellipsis, never the other way round. */
+.cardStamp {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  text-align: right;
+  font: var(--dsw-font-xxxs-11);
+  font-family: var(--ds-font-family-code, monospace);
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .cardName {
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -1682,6 +1701,22 @@
   white-space: nowrap;
 }
 
+/* The board row's creation stamp (#N · MM-DD HH:mm): the same mono micro
+   voice as the owner cell beside it, with tabular figures so a stamp never
+   re-truncates when the minute ticks over. Capped, so a wide stamp eats the
+   subject's flex space before it pushes the owner and Tag off the line. */
+.teamTaskStamp {
+  flex: none;
+  max-width: 96px;
+  font: var(--dsw-font-xxxs-11);
+  font-family: var(--ds-font-family-code, monospace);
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* The empty well keeps the row rhythm: one 28px line whose text starts on the
    same x as a row's subject, so the footer's create button reads as the next
    step under it instead of a detached block. */
@@ -1859,6 +1894,18 @@
   color: var(--dsw-alias-label-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The drawer row's creation stamp (#N · MM-DD HH:mm): the meta's own mono
+   voice, one rung dimmer. It never yields — the seq is the row's stable
+   handle — while the meta line beside it is the one that ellipsizes. */
+.jobsStamp {
+  flex: none;
+  font: var(--dsw-font-xxxs-11);
+  font-family: var(--ds-font-family-code, monospace);
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-tertiary);
   white-space: nowrap;
 }
 

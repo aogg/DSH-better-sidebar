@@ -27,8 +27,9 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarTeamTaskView } from '../context-types.ts'
 import type { TeamMemberRow } from './team-projection.ts'
-import { taskDotState, taskStatusLabel, taskTone } from './tasks-shared.tsx'
-import { t } from './locales.ts'
+import { taskDotState, taskStatusLabel, taskTone, teamTaskSeq } from './tasks-shared.tsx'
+import { formatStamp, formatStampFull, t } from './locales.ts'
+import { observeTaskFirstSeen, taskFirstSeen } from './team-task-firstseen.ts'
 import css from './tasks-graph.module.css'
 
 /**
@@ -94,10 +95,12 @@ function taskMenuItems(
  */
 function TeamTaskRow(props: {
   task: SidebarTeamTaskView
+  /** The team root — keys this browser's first-seen record for the task. */
+  rootId: string
   teammates: readonly TeamMemberRow[]
   onOpenTask(task: SidebarTeamTaskView, anchor: HTMLElement): void
 }): ReactNode {
-  const { task, teammates, onOpenTask } = props
+  const { task, rootId, teammates, onOpenTask } = props
   const [menuOpen, setMenuOpen] = useState(false)
   /** The row itself: the anchor every window opened from this row shares. */
   const rowRef = useRef<HTMLDivElement>(null)
@@ -106,6 +109,23 @@ function TeamTaskRow(props: {
     const row = rowRef.current
     if (row !== null) onOpenTask(task, row)
   }
+
+  /**
+   * The row's creation stamp: `#N` off the host's own `task-N` id, the time
+   * off this browser's first-seen record (the host publishes none). No
+   * record — an old task, another browser's creation — reads `—` and the
+   * title says exactly what the stamp attests instead of inventing a time.
+   */
+  const seq = teamTaskSeq(task.id)
+  const firstSeen = taskFirstSeen(rootId, task.id)
+  const stamp = seq === undefined
+    ? undefined
+    : {
+      text: firstSeen === undefined ? `#${seq} · —` : `#${seq} · ${formatStamp(firstSeen)}`,
+      title: firstSeen === undefined
+        ? `${t('createdSeqLabel')} #${seq} · ${t('createdAtUnknownNote')}`
+        : `${t('createdSeqLabel')} #${seq} · ${t('createdAtLabel')} ${formatStampFull(firstSeen)}`,
+    }
 
   return (
     // The row is a flex line so the trailing Menu can sit beside the press
@@ -121,6 +141,9 @@ function TeamTaskRow(props: {
       >
         <StateDot size={6} state={taskDotState(task)} />
         <span className={css.teamTaskSubject} title={task.subject}>{task.subject}</span>
+        {stamp !== undefined && (
+          <span className={css.teamTaskStamp} title={stamp.title}>{stamp.text}</span>
+        )}
         {task.ownerName !== undefined && (
           <span className={css.teamTaskOwner} title={task.ownerName}>{task.ownerName}</span>
         )}
@@ -166,10 +189,14 @@ export interface TeamBoardProps {
 }
 
 export function TeamBoard(props: TeamBoardProps): ReactNode {
-  const { members, tasks, onOpenTask, collapsed, onToggleCollapsed } = props
+  const { rootId, members, tasks, onOpenTask, collapsed, onToggleCollapsed } = props
   const [ownerFilter, setOwnerFilter] = useState<string | undefined>(undefined)
 
   const live = useMemo(() => tasks.filter(task => task.status !== 'deleted'), [tasks])
+  // Batch-record this browser's first-seen moment for every task BEFORE the
+  // list renders — idempotent, never overwrites, so a poll that re-renders
+  // the same rows cannot age an earlier observation.
+  observeTaskFirstSeen(rootId, live)
   const shown = useMemo(
     () => live.filter(task => ownerFilter === undefined || task.ownerName === ownerFilter),
     [live, ownerFilter],
@@ -226,6 +253,7 @@ export function TeamBoard(props: TeamBoardProps): ReactNode {
               <TeamTaskRow
                 key={task.id}
                 task={task}
+                rootId={rootId}
                 teammates={teammates}
                 onOpenTask={onOpenTask}
               />

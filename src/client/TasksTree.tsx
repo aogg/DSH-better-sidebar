@@ -23,8 +23,8 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TasksAgentNode, TasksFoldNode, TasksNode, TasksWorkflowNode } from './tasks-model.ts'
 import {
-  AgentGlyph, agentChip, agentMeta, FoldGlyph, foldPreviews, foldTally, LiveLine, nodeDotState,
-  stateLabel, TaskLine, WorkflowGlyph, workflowMeta,
+  AgentGlyph, agentChip, agentMeta, creationStamp, FoldGlyph, foldPreviews, foldTally, LiveLine,
+  nodeDotState, stateLabel, TaskLine, WorkflowGlyph, workflowMeta,
 } from './tasks-shared.tsx'
 import { FoldToggleButton, ViewModeToggle } from './TasksGraph.tsx'
 import { useAutoAnimateRef } from './use-auto-animate.ts'
@@ -164,6 +164,12 @@ export function TasksTree(props: TasksTreeProps): ReactNode {
     /** The mode chip this row shows (also decides what the mono line holds). */
     const chip = node.kind === 'agent' ? agentChip(node) : undefined
     /**
+     * The row's creation stamp (`#3 · 10-17 09:12`): it trails the mono meta
+     * line the row already carries, so the 28px rhythm grows by no row. The
+     * root (no creation concept) and the fold aggregates answer undefined.
+     */
+    const stamp = node.kind === 'fold' ? undefined : creationStamp(node)
+    /**
      * The row's own wrapper is the child of its parent's level: it draws the
      * elbow that connects it to that level's thread, and the LAST sibling stops
      * its segment at the row's marker so the thread never hangs past the group.
@@ -263,7 +269,13 @@ export function TasksTree(props: TasksTreeProps): ReactNode {
             <span className={css.treeGlyph} aria-hidden="true"><WorkflowGlyph /></span>
             <span className={css.treeContent}>
               <span className={css.treeTitle} title={node.run.name}>{node.run.name}</span>
-              <span className={css.treeMeta}>{workflowMeta(node)}</span>
+              <span
+                className={css.treeMeta}
+                title={stamp !== undefined ? `${workflowMeta(node)} · ${stamp.title}` : undefined}
+              >
+                {workflowMeta(node)}
+                {stamp !== undefined && ` · ${stamp.text}`}
+              </span>
             </span>
             {disclosure}
           </div>
@@ -303,8 +315,17 @@ export function TasksTree(props: TasksTreeProps): ReactNode {
                 {chip !== undefined && <span className={css.treeChip}>{chip}</span>}
               </span>
               {/* With the chip carrying the mode, the mono line holds what is
-                  left: the node's own state (and, for the root, its identity). */}
-              <span className={css.treeMeta}>{chip === undefined ? agentMeta(node) : stateLabel(node.state)}</span>
+                  left: the node's own state (and, for the root, its identity)
+                  — plus the creation stamp when the node has one. */}
+              <span
+                className={css.treeMeta}
+                title={stamp !== undefined
+                  ? `${chip === undefined ? agentMeta(node) : stateLabel(node.state)} · ${stamp.title}`
+                  : undefined}
+              >
+                {chip === undefined ? agentMeta(node) : stateLabel(node.state)}
+                {stamp !== undefined && ` · ${stamp.text}`}
+              </span>
               {node.state === 'running' && <LiveLine live={node.live} />}
               <TaskLine tasks={node.tasks} onOpenTask={onOpenTask} />
             </span>

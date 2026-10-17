@@ -29,9 +29,10 @@ import { api } from './api.ts'
 import { markdownTextProps } from './markdown-labels.tsx'
 import { useMarkdownSurface } from './use-markdown-surface.ts'
 import { FloatingWindow } from './FloatingWindow.tsx'
-import { taskBlocked, taskDotState, taskStatusLabel, taskTone } from './tasks-shared.tsx'
+import { teamTaskSeq, taskBlocked, taskDotState, taskStatusLabel, taskTone } from './tasks-shared.tsx'
+import { markTaskFirstSeen, taskFirstSeen } from './team-task-firstseen.ts'
 import type { TeamMemberRow } from './team-projection.ts'
-import { t } from './locales.ts'
+import { formatStampFull, t } from './locales.ts'
 import css from './tasks-graph.module.css'
 
 /** The wire code of a stale-revision write (see src/team-routes.ts). */
@@ -118,11 +119,32 @@ function TaskViewBody(props: {
   const { task } = props
   const surface = useMarkdownSurface({ ctx: props.ctx, sessionId: props.sessionId })
   const body = task.description.trim()
+  /**
+   * The read-only creation line: the seq off the host's `task-N` id, the time
+   * off this browser's first-seen record (the host's task view carries no
+   * creation time). No record → the seq alone, with the unknown-time note in
+   * the title instead of an invented stamp.
+   */
+  const seq = teamTaskSeq(task.id)
+  const firstSeen = taskFirstSeen(props.sessionId, task.id)
+  const createdTitle = seq === undefined
+    ? undefined
+    : firstSeen === undefined
+      ? `${t('createdSeqLabel')} #${seq} · ${t('createdAtUnknownNote')}`
+      : `${t('createdSeqLabel')} #${seq} · ${t('createdAtLabel')} ${formatStampFull(firstSeen)}`
   return (
     <>
       <div className={css.jobPopMeta}>
         <span className={css.popKey}>{t('teamTaskOwner')}</span>
         <span className={css.jobPopValue}>{task.ownerName ?? t('teamTaskUnowned')}</span>
+        {seq !== undefined && (
+          <>
+            <span className={css.popKey}>{t('teamTaskCreated')}</span>
+            <span className={css.jobPopValue} title={createdTitle}>
+              {firstSeen === undefined ? `#${seq}` : `#${seq} · ${formatStampFull(firstSeen)}`}
+            </span>
+          </>
+        )}
         {task.blockedBy.length > 0 && (
           <>
             <span className={css.popKey}>{t('teamTaskBlockedBy')}</span>
@@ -307,6 +329,13 @@ export function TaskWindow(props: TaskWindowProps): ReactNode {
     if (nextSubject === '') return
     void mutate(() => (creating
       ? api.teamsTaskCreate(rootId, { subject: nextSubject, description: description.trim() })
+        .then((result) => {
+          // This browser authored the task: pin its first-seen record to NOW
+          // (overwriting any poll's later observation), so the window's
+          // 创建 line reads the true creation moment.
+          if (result.ok) markTaskFirstSeen(rootId, result.value.id)
+          return result
+        })
       : api.teamsTaskUpdate(rootId, {
         taskId: task.id,
         expectedRevision: task.revision,

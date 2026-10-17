@@ -51,7 +51,7 @@ function prefersReducedMotion(): boolean {
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches
 }
 import {
-  activityLine, agentChip, agentMeta, flatten, foldErrorTally, foldPreviews, FoldGlyph,
+  activityLine, agentChip, agentMeta, creationStamp, flatten, foldErrorTally, foldPreviews, FoldGlyph,
   foldTally, TaskLine, WorkflowGlyph, workflowMeta,
 } from './tasks-shared.tsx'
 import { CardBar, CardTop, phaseClass, type CardKind } from './tasks-card.tsx'
@@ -664,6 +664,8 @@ function renderAgentNode(
   const activity = activityLine(node)
   /** The identity word beside the kind badge (one badge row, no meta line). */
   const chip = agentChip(node)
+  /** The card's creation stamp (undefined on the root: no creation concept). */
+  const stamp = creationStamp(node)
   /**
    * The newest assistant text, under the name: what the node is SAYING (a
    * running child) or said last (a settled one). The bar keeps the merged
@@ -678,7 +680,7 @@ function renderAgentNode(
       data-depth={node.depth}
       role="button"
       tabIndex={-1}
-      aria-label={`${node.label} ${agentMeta(node)}`}
+      aria-label={`${node.label} ${agentMeta(node)}${stamp !== undefined ? ` ${stamp.title}` : ''}`}
       aria-current={node.current ? 'true' : undefined}
       className={clsx(
         css.node,
@@ -698,6 +700,7 @@ function renderAgentNode(
         depth={node.depth}
         {...(node.phase === undefined ? {} : { phase: node.phase })}
         {...(chip === undefined ? {} : { chip })}
+        {...(stamp === undefined ? {} : { stamp: stamp.text, stampTitle: stamp.title })}
         {...(tail === undefined ? {} : { text: { value: tail, lines: textTailLines(tail) } })}
         name={node.label}
       >
@@ -723,6 +726,7 @@ function renderWorkflowNode(
   clickAllowed: () => boolean,
 ): ReactNode {
   const running = node.run.status === 'running'
+  const stamp = creationStamp(node)
   return (
     <div
       key={node.id}
@@ -730,7 +734,7 @@ function renderWorkflowNode(
       data-depth={node.depth}
       role="button"
       tabIndex={-1}
-      aria-label={`${node.run.name} ${workflowMeta(node)}`}
+      aria-label={`${node.run.name} ${workflowMeta(node)}${stamp !== undefined ? ` ${stamp.title}` : ''}`}
       className={clsx(css.node, css.nodeWorkflow, !running && css.nodeSettled)}
       style={style}
       onClick={(event) => {
@@ -743,6 +747,7 @@ function renderWorkflowNode(
         depth={node.depth}
         name={node.run.name}
         meta={workflowMeta(node)}
+        {...(stamp === undefined ? {} : { stamp: stamp.text, stampTitle: stamp.title })}
       />
       <CardBar
         state={running ? 'running' : 'done'}

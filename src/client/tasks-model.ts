@@ -91,6 +91,21 @@ export interface TasksAgentNode {
   tasks?: TasksNodeTask[]
   /** Synthesized from a workflow run's member row (no catalog entry). */
   synthesized?: boolean
+  /**
+   * Epoch ms the agent was created — the catalog row's `createdAt`, passed
+   * through. Absent on the ROOT card (the main session has no creation
+   * concept on this page) and on synthesized workflow members (no catalog
+   * row exists for them).
+   */
+  createdAt?: number
+  /**
+   * 1-based creation sequence among the siblings under the node's own parent:
+   * the catalog's children ranked by `createdAt` ascending (the entries
+   * already arrive in creation order; the rank is their ordinal). A
+   * synthesized workflow member carries its run's own member `seq` instead,
+   * so it still reads as an ordered worker.
+   */
+  createdAtSeq?: number
   /** Jump target of the row (absent on the root node). */
   childAddress?: SidebarSubagentAddress
 }
@@ -103,6 +118,10 @@ export interface TasksWorkflowNode {
   /** Tree depth (see {@link TasksAgentNode.depth}). */
   depth: number
   run: WorkflowRunView
+  /** Epoch ms the run started (`WorkflowRunView.startedAt`). */
+  createdAt?: number
+  /** 1-based creation sequence among the runs of the same origin (startedSeq order). */
+  createdAtSeq?: number
 }
 
 /**
@@ -390,6 +409,17 @@ export function buildTasksModel(input: TasksModelInput): TasksNode[] {
   const appendChildren = (parentId: string, depth: number): void => {
     const catalog = catalogs[parentId]
     const entries = catalog?.state === 'ready' ? catalog.entries : []
+    /**
+     * The children's creation sequence: the catalog rows arrive in creation
+     * order, so the 1-based rank is their ordinal — ranked defensively by
+     * `createdAt` ascending (stable sort keeps the catalog order on ties) so
+     * a host that reorders its rows cannot scramble the numbering.
+     */
+    const createdSeqById = new Map<string, number>()
+    entries
+      .map((entry, index) => ({ entry, index }))
+      .sort((left, right) => (left.entry.createdAt - right.entry.createdAt) || (left.index - right.index))
+      .forEach((ranked, index) => { createdSeqById.set(ranked.entry.id, index + 1) })
     const agentChildren: TasksAgentNode[] = []
     for (const entry of entries) {
       const summary = byId[entry.id]
@@ -417,6 +447,7 @@ export function buildTasksModel(input: TasksModelInput): TasksNode[] {
       const state: TasksNodeState = activity === 'running'
         ? 'running'
         : team !== undefined ? teamState(team.status) : 'done'
+      const createdSeq = createdSeqById.get(entry.id)
       agentChildren.push({
         kind: 'agent',
         id: entry.id,
@@ -433,6 +464,8 @@ export function buildTasksModel(input: TasksModelInput): TasksNode[] {
         ...(metrics?.[entry.id] !== undefined ? { metrics: metrics[entry.id] } : {}),
         ...(team !== undefined ? { team } : {}),
         ...(tasksByNode.get(entry.id) !== undefined ? { tasks: tasksByNode.get(entry.id) } : {}),
+        ...(createdSeq !== undefined
+          ? { createdAt: entry.createdAt, createdAtSeq: createdSeq } : {}),
         hasChildren: !isKnownLeaf(catalogs, entry.id),
         childAddress: { parentSessionId: parentId, childSessionId: entry.id, mode: entry.mode },
       })
@@ -440,11 +473,17 @@ export function buildTasksModel(input: TasksModelInput): TasksNode[] {
 
     // Workflow runs of this agent: member agents with a catalog row are
     // re-parented under the run; the rest are synthesized from run data.
+    // Runs rank 1-based per origin in startedSeq order (the fold returns them
+    // in run-start order; the sort is defensive against a reordered merge).
     const runNodes: TasksWorkflowNode[] = []
     const memberNodes: TasksAgentNode[][] = []
-    for (const run of runsByOrigin.get(parentId) ?? []) {
+    const originRuns = [...(runsByOrigin.get(parentId) ?? [])]
+      .sort((left, right) => left.startedSeq - right.startedSeq)
+    for (const [runIndex, run] of originRuns.entries()) {
       const runNode: TasksWorkflowNode = {
         kind: 'workflow', id: `run:${run.runId}`, parentId, depth: depth + 1, run,
+        createdAt: run.startedAt,
+        createdAtSeq: runIndex + 1,
       }
       runNodes.push(runNode)
       const members: TasksAgentNode[] = []
@@ -480,6 +519,9 @@ export function buildTasksModel(input: TasksModelInput): TasksNode[] {
               activity: member.outcome === undefined ? 'running' : 'inactive',
               current: member.childId !== '' && member.childId === currentSessionId,
               synthesized: true,
+              // No catalog row → no host creation time; the run member's own
+              // `seq` is the only creation order this node can honestly wear.
+              createdAtSeq: member.seq,
               ...(childKnown && metrics?.[member.childId] !== undefined
                 ? { metrics: metrics[member.childId] } : {}),
               ...(childKnown && tasksByNode.get(member.childId) !== undefined

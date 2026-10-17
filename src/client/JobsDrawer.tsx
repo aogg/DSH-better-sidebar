@@ -34,7 +34,7 @@ import {
 } from './subagent-jobs.ts'
 import { FloatingWindow } from './FloatingWindow.tsx'
 import { useAutoAnimateRef } from './use-auto-animate.ts'
-import { t } from './locales.ts'
+import { formatStamp, formatStampFull, t } from './locales.ts'
 import css from './tasks-graph.module.css'
 
 /** How long the kill button stays armed before it needs re-confirming. */
@@ -86,6 +86,28 @@ export function JobsDrawer(props: JobsDrawerProps): ReactNode {
     () => new Set(rows.map(row => row.ownerSessionId)).size > 1,
     [rows],
   )
+
+  /**
+   * Each row's creation sequence: the jobs of one OWNER SESSION ranked by
+   * `startedAt` ascending into a 1-based number (the order the host's
+   * registry issued them). Cross-owner rows number independently — the seq
+   * answers "which job of this agent is this", not a page-wide count.
+   */
+  const jobSeqById = useMemo(() => {
+    const byOwner = new Map<string, TreeJob[]>()
+    for (const row of rows) {
+      const list = byOwner.get(row.ownerSessionId)
+      if (list === undefined) byOwner.set(row.ownerSessionId, [row])
+      else list.push(row)
+    }
+    const seqs = new Map<string, number>()
+    for (const list of byOwner.values()) {
+      ;[...list]
+        .sort((left, right) => left.job.startedAt - right.job.startedAt)
+        .forEach((row, index) => { seqs.set(row.job.id, index + 1) })
+    }
+    return seqs
+  }, [rows])
 
   // The kill button stays armed only briefly; a stray click must never kill.
   useEffect(() => {
@@ -148,6 +170,7 @@ export function JobsDrawer(props: JobsDrawerProps): ReactNode {
             const elapsed = live
               ? now - job.startedAt
               : (job.finishedAt ?? job.startedAt) - job.startedAt
+            const seq = jobSeqById.get(job.id)
             const secondary = [
               ...(multiOwner ? [row.ownerTitle] : []),
               ...(job.detail !== undefined && job.detail !== '' ? [job.detail] : []),
@@ -172,6 +195,14 @@ export function JobsDrawer(props: JobsDrawerProps): ReactNode {
                   <Tag tone="quiet">{job.kind}</Tag>
                   <span className={css.jobsLabel} title={job.label}>{job.label}</span>
                   <Tag tone={jobTone(job)}>{jobStatusLabel(job.status, t)}</Tag>
+                  {seq !== undefined && (
+                    <span
+                      className={css.jobsStamp}
+                      title={`${t('createdSeqLabel')} #${seq} · ${t('createdAtLabel')} ${formatStampFull(job.startedAt)}`}
+                    >
+                      {`#${seq} · ${formatStamp(job.startedAt)}`}
+                    </span>
+                  )}
                   <span className={css.jobsMeta}>{secondary}</span>
                 </Button>
                 {/*

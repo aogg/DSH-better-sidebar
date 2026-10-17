@@ -1512,9 +1512,12 @@ describe('Tasks page: node metrics and the sidebar transcript jump', () => {
       (container.querySelector('button[aria-label="展开已完成的节点"]') as HTMLButtonElement).click()
     })
     const card = container.querySelector('[data-graph-node="child-0"]') as HTMLElement
-    // The chip is a child of the badge row, not a row of its own.
+    // The chip is a child of the badge row, not a row of its own. The card's
+    // creation stamp (`#N · time`, from the catalog row's createdAt) rides
+    // the same row since the creation-info feature, so the row text is a
+    // superset of the kind + chip pair.
     const badges = card.querySelector('[data-card-kind="subagent"]')?.parentElement as HTMLElement
-    expect(badges.textContent).toBe('子代理一次性')
+    expect(badges.textContent).toContain('子代理一次性')
     unmount()
   })
 })

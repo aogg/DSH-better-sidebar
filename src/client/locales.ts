@@ -617,6 +617,10 @@ export const zh = {
   teamTaskDetail: '任务详情',
   teamTaskNoDescription: '暂无描述，点击「编辑」补充',
   teamTaskBlockedBy: '被阻塞',
+  teamTaskCreated: '创建',
+  createdSeqLabel: '创建序号',
+  createdAtLabel: '创建时间',
+  createdAtUnknownNote: '宿主未提供创建时间，此处为本浏览器首次记录',
   teamTaskSubjectPlaceholder: '一句话说明要做什么',
   teamTaskDescriptionPlaceholder: '补充说明（可选）',
   teamFilterAll: '全部',
@@ -1295,6 +1299,10 @@ export const en: Record<keyof typeof zh, string> = {
   teamTaskDetail: 'Task detail',
   teamTaskNoDescription: 'No description yet — click Edit to add one',
   teamTaskBlockedBy: 'Blocked by',
+  teamTaskCreated: 'Created',
+  createdSeqLabel: 'Created seq',
+  createdAtLabel: 'Created at',
+  createdAtUnknownNote: 'The host provides no creation time; this is when this browser first recorded the task.',
   teamTaskSubjectPlaceholder: 'One line describing the work',
   teamTaskDescriptionPlaceholder: 'Extra context (optional)',
   teamFilterAll: 'All',
@@ -1589,4 +1597,30 @@ export function relativeTime(iso: string): string {
   const date = new Date(then)
   const pad = (value: number): string => String(value).padStart(2, '0')
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+/** Two-digit pad shared by the absolute stamp helpers (local time, like relativeTime). */
+function stampPad(value: number): string {
+  return String(value).padStart(2, '0')
+}
+
+/**
+ * The compact absolute stamp the Tasks page's rows and cards carry:
+ * `MM-DD HH:mm` within the current year, `YYYY-MM-DD HH:mm` across a year
+ * boundary (the year prefix only when it is not the obvious one).
+ */
+export function formatStamp(then: number): string {
+  if (!Number.isFinite(then)) return ''
+  const date = new Date(then)
+  const md = `${stampPad(date.getMonth() + 1)}-${stampPad(date.getDate())}`
+  const hm = `${stampPad(date.getHours())}:${stampPad(date.getMinutes())}`
+  return date.getFullYear() === new Date().getFullYear() ? `${md} ${hm}` : `${date.getFullYear()}-${md} ${hm}`
+}
+
+/** The full absolute stamp for tooltips and detail rows: `YYYY-MM-DD HH:mm:ss`. */
+export function formatStampFull(then: number): string {
+  if (!Number.isFinite(then)) return ''
+  const date = new Date(then)
+  return `${date.getFullYear()}-${stampPad(date.getMonth() + 1)}-${stampPad(date.getDate())} `
+    + `${stampPad(date.getHours())}:${stampPad(date.getMinutes())}:${stampPad(date.getSeconds())}`
 }

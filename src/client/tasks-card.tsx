@@ -103,6 +103,15 @@ export function CardTop(props: {
    * word on every card and spent a 16px row saying it.
    */
   chip?: string
+  /**
+   * The creation stamp (`#3 · 10-17 09:12`) riding the badge row's END — the
+   * one row every card already has, so a stamp of its own would cost the
+   * layout a row it does not reserve. Mono micro-type in the tertiary ink,
+   * right-aligned; it yields (ellipsis) before the badges do.
+   */
+  stamp?: string
+  /** The stamp's hover title (labels + full-precision time). */
+  stampTitle?: string
   /** The node's name (already resolved by the model). */
   name: string
   /** The mono meta line under the name. */
@@ -136,6 +145,9 @@ export function CardTop(props: {
           </span>
         )}
         {chip !== undefined && chip !== '' && <span className={css.kindChip}>{chip}</span>}
+        {props.stamp !== undefined && (
+          <span className={css.cardStamp} title={props.stampTitle}>{props.stamp}</span>
+        )}
       </span>
       <span className={clsx(css.cardName, props.extraClass)} title={props.name}>{props.name}</span>
       {props.meta !== undefined && props.meta !== '' && (
