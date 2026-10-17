@@ -25,6 +25,14 @@
  * banner (refresh, branch switch, history paging). Branch and history
  * failures used to land under the commit box, which read as "your commit
  * failed" for an action the user never ran.
+ *
+ * Refreshes fold INSTEAD of resetting: the server caches the git reads, so a
+ * refresh usually answers "nothing changed" — the merge below then hands
+ * back the previous array and React skips the re-render entirely — and a
+ * refresh that only added commits PREPENDS them (see
+ * {@link mergeLogFirstPage}), keeping the displayed rows (deep pages
+ * included) and the paging position coherent. Only a real worktree/scope
+ * switch (`clearDerived`) empties the surfaces.
  */
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import {
@@ -115,6 +123,72 @@ interface FileMenuState {
 /** History batch size: the log loads lazily in pages so a long history never
  *  floods the panel at once (the end of the log is reached by paging). */
 const LOG_BATCH = 20
+
+/**
+ * Fold one fresh FIRST log page into the history already on screen, so a
+ * refresh that only added commits prepends them instead of resetting the list
+ * (the server's cache makes "nothing changed" the common case, and this makes
+ * "a few commits landed" nearly as cheap visually — the rows below the new
+ * heads keep their DOM identity).
+ *
+ * Rules, in order:
+ * - An empty fresh page changes nothing (a failed read keeps the old rows; the
+ *   lens's `logFailed` flag carries the failure).
+ * - A different walk identity (`sameWalk`: same history path filter AND same
+ *   selected checkout) or an empty list → replace wholesale: the displayed
+ *   rows answer a different question than the fresh page.
+ * - Otherwise locate the displayed head inside the fresh page. Everything
+ *   before that position is NEW commits landed on top → prepend them and keep
+ *   the old rows (deep pages included; they are re-reached by paging).
+ * - The overlap must be CONTINUOUS: from the located position on, the fresh
+ *   page has to repeat the displayed head element-for-element. A mid-overlap
+ *   divergence (rebase / force-push / more new commits than one page) cannot
+ *   be expressed as a prepend → replace wholesale and let the caller reset
+ *   the paging position.
+ * - A "new" entry that is already displayed deeper down would render twice
+ *   (drift between merge points) — that too falls back to replace.
+ *
+ * Zero-change guarantee: when nothing is prepended the CURRENT array
+ * reference comes back, so `setState` bails out and a cache-hit refresh
+ * re-renders nothing at all.
+ */
+function mergeLogFirstPage(
+  current: readonly GitLogEntry[],
+  fresh: readonly GitLogEntry[],
+  sameWalk: boolean,
+): { entries: readonly GitLogEntry[]; prepended: number; replaced: boolean } {
+  const replace = { entries: fresh, prepended: 0, replaced: true }
+  if (fresh.length === 0) return { entries: current, prepended: 0, replaced: false }
+  if (!sameWalk || current.length === 0) return replace
+  const overlap = fresh.findIndex(entry => entry.hashFull === current[0]!.hashFull)
+  if (overlap < 0) return replace
+  for (let index = 0; overlap + index < fresh.length && index < current.length; index++) {
+    if (fresh[overlap + index]!.hashFull !== current[index]!.hashFull) return replace
+  }
+  const added = fresh.slice(0, overlap)
+  if (added.length === 0) return { entries: current, prepended: 0, replaced: false }
+  const shown = new Set(current.map(entry => entry.hashFull))
+  if (added.some(entry => shown.has(entry.hashFull))) return replace
+  return { entries: [...added, ...current], prepended: added.length, replaced: false }
+}
+
+/** Whether two branch-name lists carry the same content (same-length check
+ *  first, so a changed list short-circuits before the element compare). */
+function sameNames(current: readonly string[], next: readonly string[]): boolean {
+  return current.length === next.length && current.every((name, index) => name === next[index])
+}
+
+/** Whether two inventories answer the same: every row's path, branch, currency
+ *  and change count must match. The 30 s poll mints a fresh array each tick —
+ *  content equality, not array identity, decides whether the selectors band
+ *  re-renders. */
+function sameWorktrees(current: readonly GitWorktree[], next: readonly GitWorktree[]): boolean {
+  return current.length === next.length && current.every((entry, index) => {
+    const other = next[index]!
+    return entry.path === other.path && entry.branch === other.branch
+      && entry.current === other.current && entry.changes === other.changes
+  })
+}
 
 /** Cadence of the background worktree re-list: the shared status store already
  *  polls the selected checkout's status, so the inventory (a different call)
@@ -363,6 +437,35 @@ export function GitLens(props: GitLensProps) {
   const [repoChoices, setRepoChoices] = useState<string[]>([])
   const [branchNames, setBranchNames] = useState<string[]>([])
   const [logEntries, setLogEntries] = useState<GitLogEntry[]>([])
+  /** The history's live mirror, readable by the async refresh chain without
+   *  depending on render-scoped state (the merge and the paging position are
+   *  decided OUTSIDE any setState updater, which React may invoke twice). */
+  const logEntriesRef = useRef<readonly GitLogEntry[]>([])
+  /** Publish one history list: the ref mirrors first, then state. When the
+   *  list is the SAME reference React bails the update out — the zero-change
+   *  refresh renders nothing. */
+  const publishLog = (entries: readonly GitLogEntry[]): void => {
+    logEntriesRef.current = entries
+    setLogEntries(entries as GitLogEntry[])
+  }
+  /** The walk identity the displayed history answers to: the history path
+   *  filter AND the selected checkout. A refresh may fold its fresh first
+   *  page into the displayed rows only when both still match; anything else
+   *  (a filter edit, a worktree switch) replaces the list wholesale. */
+  const logWalkRef = useRef<{ path: string | null; target: string | undefined }>({ path: null, target: undefined })
+  /**
+   * The `--skip` position the NEXT history page starts at — the walk position
+   * the displayed list ends at, NOT the displayed row count. The two are the
+   * same while the list is a plain prefix walk of HEAD, but a prepend of k
+   * new commits shifts every walk position by k while adding exactly k rows,
+   * so the ref advances by k with the list and paging stays aligned (no
+   * repeats, no skipped commits). Rewrites between merge points can make the
+   * displayed set diverge from the walk; the load-more dedupe drops any
+   * already-displayed entry from the VIEW while the walk position still
+   * advances by the fetched page's own length, so a phantom can never append
+   * twice.
+   */
+  const logSkipRef = useRef(0)
   /** Whether the history was fully paged (a batch shorter than LOG_BATCH). */
   const [logEnded, setLogEnded] = useState(false)
   const [logLoadingMore, setLogLoadingMore] = useState(false)
@@ -492,17 +595,28 @@ export function GitLens(props: GitLensProps) {
     setSelectedWorktree(target)
   }
 
-  /** Drop every checkout-derived surface before another one loads. */
+  /** Drop every checkout-derived surface before another one loads. ONLY a
+   *  real worktree/scope switch may run this — a plain refresh must keep the
+   *  history on screen while it revalidates (the merge below handles the
+   *  outcome), so the list never blanks out mid-refresh. The walk identity
+   *  and the paging position belong to the OLD checkout and reset with it. */
   const clearDerived = (): void => {
     setBranchNames([])
-    setLogEntries([])
+    publishLog([])
     setLogEnded(false)
     setLogLoadingMore(false)
     setLogFailed(false)
     setActionError(null)
+    logWalkRef.current = { path: null, target: undefined }
+    logSkipRef.current = 0
   }
 
-  /** Load the branch choices and the first history page of one checkout. */
+  /** Load the branch choices and the first history page of one checkout.
+   *  The history folds INCREMENTALLY: same walk (filter + checkout) and a
+   *  continuous overlap → only the new heads are prepended (rows keep their
+   *  identity); otherwise the first page replaces the list and paging resets.
+   *  A refresh whose answer matches what is displayed touches no state the
+   *  list reads — the server cache makes that the steady state. */
   const loadTarget = useCallback(async (target: string | undefined): Promise<void> => {
     const generation = scopeGen.current
     const gitScope = gitScopeNow()
@@ -514,10 +628,25 @@ export function GitLens(props: GitLensProps) {
       ),
     ])
     if (generation !== scopeGen.current) return
-    setBranchNames(branchResult.names)
-    setLogEntries(logResult.entries)
-    setLogEnded(logResult.entries.length < LOG_BATCH)
+    // Content-guarded: an unchanged branch answer must not re-render the
+    // selectors band.
+    setBranchNames(names => (sameNames(names, branchResult.names) ? names : branchResult.names))
     setLogFailed(logResult.failed)
+    if (logResult.failed) {
+      // A failed read keeps the displayed history (never blank a working list
+      // because one refresh failed); the error shows through `logFailed` when
+      // the list is empty. The paging position and walk identity stay as they
+      // were — they still describe the rows on screen.
+      return
+    }
+    const filter = pathFilterRef.current
+    const walk = logWalkRef.current
+    const merged = mergeLogFirstPage(logEntriesRef.current, logResult.entries, walk.path === filter && walk.target === target)
+    logWalkRef.current = { path: filter, target }
+    if (merged.replaced) logSkipRef.current = logResult.entries.length
+    else logSkipRef.current += merged.prepended
+    publishLog(merged.entries)
+    setLogEnded(logResult.entries.length < LOG_BATCH)
   }, [gitScopeNow])
 
   /** One listing pass: re-read the worktree inventory, apply the first-pass
@@ -533,7 +662,9 @@ export function GitLens(props: GitLensProps) {
       return
     }
     if (signal?.aborted === true || generation !== scopeGen.current) return
-    setWorktrees(listed)
+    // Content-guarded: a poll whose inventory answered identically keeps the
+    // previous array reference, so the selectors band does not re-render.
+    setWorktrees(previous => (sameWorktrees(previous, listed) ? previous : listed))
     const current = listed.find(entry => entry.current)
     const stillListed = chosenPathRef.current !== undefined
       && listed.some(entry => entry.path === chosenPathRef.current)
@@ -819,11 +950,23 @@ export function GitLens(props: GitLensProps) {
       // the skip counts commits of the filtered walk host-side (`git log
       // --skip` applies after the pathspec narrows the commit walk), so the
       // "shorter batch = end of log" rule below holds filtered as-is.
-      const next = await api.gitLog(gitScopeNow(), LOG_BATCH, logEntries.length, target, undefined, logOptsOf(pathFilterRef.current))
+      //
+      // `logSkipRef` — not the displayed row count — is the paging position:
+      // an incremental merge that prepended k new commits shifted the walk by
+      // exactly k rows (see the ref's contract above), so this continues
+      // right after the last displayed commit. Entries already displayed (a
+      // rewrite landing between two merges) are dropped from the view, while
+      // the walk position still advances by the fetched page's own length —
+      // dedupe can hide a row, never duplicate one, and never advances the
+      // walk less than the page consumed.
+      const next = await api.gitLog(gitScopeNow(), LOG_BATCH, logSkipRef.current, target, undefined, logOptsOf(pathFilterRef.current))
       // A worktree switch clears the old history; never append a late page
       // from that checkout into the new one.
       if (generation !== scopeGen.current || target !== chosenPathRef.current) return
-      setLogEntries(entries => [...entries, ...next])
+      const shown = new Set(logEntriesRef.current.map(entry => entry.hashFull))
+      const appended = next.filter(entry => !shown.has(entry.hashFull))
+      logSkipRef.current += next.length
+      if (appended.length > 0) publishLog([...logEntriesRef.current, ...appended])
       if (next.length < LOG_BATCH) setLogEnded(true)
     } catch (reason) {
       if (generation === scopeGen.current && target === chosenPathRef.current) {
