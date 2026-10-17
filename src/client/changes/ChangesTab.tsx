@@ -268,8 +268,6 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
     adoptedGitRequest.current = seq
     setGitPathFilter(typeof next.gitPathFilter === 'string' && next.gitPathFilter !== '' ? next.gitPathFilter : null)
     setLens('git')
-    // Only a meta write can carry a request; `lens` state is written here, not read.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.meta])
 
   /** Set/clear the git lens' path filter (GitLens's chip; persisted like the
