@@ -115,7 +115,7 @@ export function TerminalBottomView({ ctx, scope, tab, visible }: TerminalBottomP
   // switching away, the service degrading) simply leaves the request parked.
   const startCwd = terminalCwdOf(tab)
   useEffect(() => {
-    if (model === undefined || startCwd === undefined || !state.writable) return
+    if (model === undefined || startCwd === undefined || state?.writable !== true) return
     // A single-quoted POSIX cd (a quote inside the path becomes '\''), \r is
     // the Enter keystroke. Deliberately no Windows variant: the plugin has no
     // platform probe of its own (desktop-env.ts carries only the transport
