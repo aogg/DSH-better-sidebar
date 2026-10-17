@@ -39,6 +39,7 @@ import { fileOpKey, useFileOpStream } from './ops-stream.ts'
 import { updatePluginSettings, updateProjectSettings } from './plugin-settings.ts'
 import { PROJECT_SETTINGS_KEY } from '../prefs-shared.ts'
 import { createOpenInApp } from './open-in-app.ts'
+import { gitHistoryRequestMeta } from './changes/ChangesTab.tsx'
 import { requestBottomTerminalAt, webTerminals } from './terminal-client.ts'
 import { TreePanel } from './TreePanel.tsx'
 import { t } from './locales.ts'
@@ -46,7 +47,7 @@ import { relativeTo } from './paths.ts'
 import { resolveSidebarPath } from './paths.ts'
 import { clearRetargetedPath, closePathTabs, consumeRetargetedPath, pathTabKey, retargetPathTabs } from './tree-mutations.ts'
 import type { EditorToolbarControls, EditorToolbarState, FileViewerDescriptor } from './service.ts'
-import { firstLeaf, insertLeafAt, leafWithTab, mintTabId, pathWithinCwd, revealPaths, type SidebarStore, type SidebarTab } from './state.ts'
+import { firstLeaf, allLeaves, insertLeafAt, leafWithTab, mintTabId, pathWithinCwd, revealPaths, type SidebarStore, type SidebarTab } from './state.ts'
 import css from './sidebar.module.css'
 
 type EditorLoad =
@@ -328,6 +329,47 @@ export function EditorHost(props: {
     // `terminal-bottom` is bottomOnly: this always lands in the workbench's
     // own pane, and every open mints a fresh tab + instance (no dedupe).
     service.openTab({ type: 'terminal-bottom' }, scope)
+    return true
+  }
+
+  /**
+   * The context menu's 「查看 Git 历史」: open the changes tab's git lens
+   * with the row's path as its history filter (a directory pathspec covers
+   * the whole subtree — git's own rule; the lens passes it to every
+   * `git log` page).
+   *
+   * The tab is `single`, so the open either MINTS it (the seed meta lands
+   * verbatim on both lanes) or FOCUSES the open one. A focus is where the
+   * lanes diverge: the native right-Sidebar re-delivers the navigation and
+   * the record adopts the seed meta per revision, while a workbench focus
+   * re-activates without touching meta — so the workbench's copy (the only
+   * one visible in `bottomSplits`) is patched directly here.
+   *
+   * Answers whether the open was attempted: a host without the service, or
+   * with the changes page disabled in the side card settings, opens nothing
+   * and the tree reports it instead of failing silently.
+   */
+  const openGitHistory = (absolute: string): boolean => {
+    if (service === undefined) return false
+    if (!service.isTabEnabled('git')) return false
+    const request = gitHistoryRequestMeta(absolute)
+    service.openTab({ type: 'git', meta: request }, scope)
+    const state = service.getSnapshot().state
+    if (state !== undefined) {
+      const open = allLeaves(state.bottomSplits)
+        .flatMap(leaf => leaf.tabs)
+        .find(candidate => candidate.type === 'git')
+      if (open !== undefined) {
+        // Native tabs never appear in bottomSplits, so this patch either
+        // re-states the seed on the tab this open just minted (harmless) or
+        // delivers it to a workbench tab the focus path skipped.
+        service.updateTab(
+          open.id,
+          { meta: { ...((open.meta ?? {}) as Record<string, unknown>), ...request } },
+          scope.sessionId,
+        )
+      }
+    }
     return true
   }
 
@@ -646,6 +688,7 @@ export function EditorHost(props: {
           onOpenFileNewTab={openFileNewTab}
           onOpenFileSide={openFileSide}
           onOpenTerminalAt={openTerminalAt}
+          onOpenGitHistory={openGitHistory}
           openInApp={openInApp}
           openWithShowPluginTargets={openWithShowPluginTargets}
           gitBadges={gitBadges}
@@ -786,6 +829,7 @@ export function EditorHost(props: {
               onOpenFileNewTab={openFileNewTab}
               onOpenFileSide={openFileSide}
               onOpenTerminalAt={openTerminalAt}
+              onOpenGitHistory={openGitHistory}
               openInApp={openInApp}
               openWithShowPluginTargets={openWithShowPluginTargets}
               gitBadges={gitBadges}

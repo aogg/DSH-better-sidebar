@@ -63,6 +63,56 @@
 /* A single branch has nothing to choose: it reads as the row's label. */
 .branchLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxxs-11); }
 
+/* ── History path filter (the 「查看 Git 历史」 hand-off) ──────────────── */
+/* Inactive: one input sized like a short .select. Active: the chip names the
+   path the log is narrowed to, its clear button restoring the input. All
+   token ink — theme.spec pins the sheet to carry no color literals. */
+.pathFilter { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 12px 0; }
+
+.pathFilterInput {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 3px;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxxs-11);
+}
+.pathFilterInput::placeholder { color: var(--dsw-alias-label-tertiary); }
+.pathFilterInput:focus { outline: none; border-color: var(--dsw-alias-border-l1); }
+
+.pathFilterChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  height: 22px;
+  padding: 0 2px 0 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  background: var(--dsw-alias-interactive-bg-active);
+  font: var(--dsw-font-xxxs-11);
+  color: var(--dsw-alias-label-secondary);
+}
+.pathFilterPath { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pathFilterClear {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+.pathFilterClear:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+
 /* ── Change groups (one directory tree each) ───────────────────────────── */
 
 /* One group is its own block so its sticky header is released exactly when the

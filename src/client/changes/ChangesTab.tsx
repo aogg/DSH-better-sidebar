@@ -62,6 +62,35 @@ type Lens = 'commits' | 'git' | 'session' | 'rounddiff'
 interface ChangesMeta {
   lens?: Lens
   previewH?: number
+  /**
+   * The git lens' history path filter: an absolute path (the tree's 「查看
+   * Git 历史」 hands one over) or a repo-relative pathspec the reader typed;
+   * absent = the unfiltered branch log. Persisted so the filter survives the
+   * lens switches (GitLens unmounts/remounts) and reloads.
+   */
+  gitPathFilter?: string
+  /**
+   * The monotonic request number the LAST 「查看 Git 历史」 hand-off rode in
+   * on. ChangesTab adopts a filter only from a seq it has not adopted yet, so
+   * the tab's own meta writes (lens picks, pane heights) never replay an old
+   * request, and re-opening the SAME path still re-arms the git lens.
+   */
+  gitPathFilterSeq?: number
+}
+
+/**
+ * The meta patch that delivers one 「查看 Git 历史」 request to the changes
+ * tab: switch to the git lens and filter its history to `path` (a directory
+ * pathspec covers the whole subtree — git's own rule). The seq makes every
+ * request distinguishable from the tab's own meta writes, including a repeat
+ * click on the same path. The opener spreads this over an existing tab's meta
+ * (workbench lane) or seeds a fresh open with it (native lane) — see
+ * EditorHost's `openGitHistory`.
+ */
+let gitPathFilterSeqCounter = 0
+export function gitHistoryRequestMeta(path: string): { lens: 'git'; gitPathFilter: string; gitPathFilterSeq: number } {
+  gitPathFilterSeqCounter += 1
+  return { lens: 'git', gitPathFilter: path, gitPathFilterSeq: gitPathFilterSeqCounter }
 }
 
 /** What the user selected to preview: a git ref, or the IDENTITY of a session
@@ -84,6 +113,15 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
           : 'git',
   )
   const [selection, setSelection] = useState<PreviewSelection | null>(null)
+  /**
+   * The git lens' history path filter (the meta field's live copy). Held HERE
+   * — not inside GitLens — because GitLens is conditionally mounted: a lens
+   * switch away and back must keep the filter, and the tree's 「查看 Git
+   * 历史」 must reach it while the git lens is not even on screen.
+   */
+  const [gitPathFilter, setGitPathFilter] = useState<string | null>(
+    typeof meta.gitPathFilter === 'string' && meta.gitPathFilter !== '' ? meta.gitPathFilter : null,
+  )
   const [paneHeight, setPaneHeight] = useState<number>(() => clampPaneHeight(
     typeof meta.previewH === 'number' ? meta.previewH : PANE_HEIGHT_DEFAULT,
   ))
@@ -208,6 +246,39 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
     patchMeta({ lens: next })
   }
 
+  /**
+   * Adopt an externally delivered 「查看 Git 历史」 request: the meta's
+   * `gitPathFilterSeq` is a request number no mount of this tab has adopted
+   * yet. The ref starts at the MOUNT meta's seq (a persisted request was
+   * already applied by the initial state above — replaying it would yank a
+   * reader who deliberately switched lenses back to git), so only a genuinely
+   * new hand-off — including a repeat click on the same path — lands.
+   */
+  const adoptedGitRequest = useRef<number | null>(
+    typeof meta.gitPathFilterSeq === 'number' && Number.isSafeInteger(meta.gitPathFilterSeq)
+      ? meta.gitPathFilterSeq
+      : null,
+  )
+  useEffect(() => {
+    const next = (tab.meta ?? {}) as ChangesMeta
+    const seq = typeof next.gitPathFilterSeq === 'number' && Number.isSafeInteger(next.gitPathFilterSeq)
+      ? next.gitPathFilterSeq
+      : null
+    if (seq === null || seq === adoptedGitRequest.current) return
+    adoptedGitRequest.current = seq
+    setGitPathFilter(typeof next.gitPathFilter === 'string' && next.gitPathFilter !== '' ? next.gitPathFilter : null)
+    setLens('git')
+    // Only a meta write can carry a request; `lens` state is written here, not read.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab.meta])
+
+  /** Set/clear the git lens' path filter (GitLens's chip; persisted like the
+   *  lens choice — clearing stores the field's ABSENCE, not an empty string). */
+  const changeGitPathFilter = (next: string | null): void => {
+    setGitPathFilter(next)
+    patchMeta({ gitPathFilter: next ?? undefined })
+  }
+
   /** The header's refresh action: the git-backed lenses reload through their
    *  shared tick (GitLens's queue, the commits lens's fetch, the round diff's
    *  fetch), the session lens re-pulls its event delta — and the commits lens
@@ -279,6 +350,8 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
             store={store}
             visible={visible}
             refreshTick={refreshTick}
+            pathFilter={gitPathFilter}
+            onPathFilterChange={changeGitPathFilter}
             onOpenFile={onOpenFile ?? (() => { /* no-op */ })}
             onPreview={previewGit}
             selectedRef={previewTarget !== null && previewTarget.kind === 'git' ? previewTarget.ref : null}

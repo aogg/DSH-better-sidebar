@@ -28,8 +28,8 @@
  */
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import {
-  Button, IconChevronRightOutlineRegular, IconCodeOutlineRegular, IconCopyOutlineRegular, IconPlusOutlineRegular,
-  IconSparkleRegular, IconTrashOutlineRegular, Menu, writeClipboard,
+  Button, IconChevronRightOutlineRegular, IconCloseOutlineRegular, IconCodeOutlineRegular, IconCopyOutlineRegular,
+  IconPlusOutlineRegular, IconSparkleRegular, IconTrashOutlineRegular, Menu, writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Context } from '../../context-types.ts'
 import type { GitLineCounts, GitLogEntry, GitStatusEntry, GitStatusResult, GitWorktree, SessionScope } from '../api.ts'
@@ -131,6 +131,18 @@ const COMMIT_BOX_MAX_ROWS = 6
 /** A stable empty entry list: the tree memo must not rebuild on every render
  *  just because `snapshot?.entries ?? []` minted a new array. */
 const NO_ENTRIES: readonly GitStatusEntry[] = []
+
+/**
+ * The gitLog `opts` carrying the active history path filter: `undefined` when
+ * no filter is set, so the unfiltered call's wire payload (and argv) stay
+ * byte-identical to the pre-filter shape. A path — a file's, or a directory's
+ * whole subtree — narrows `git log` to the commits touching it; paging still
+ * works because the host's `--skip` counts commits of the FILTERED walk (the
+ * same paging the tree's old history modal ran with a pathspec).
+ */
+function logOptsOf(filter: string | null): { path: string } | undefined {
+  return filter === null || filter === '' ? undefined : { path: filter }
+}
 
 /**
  * A CONTENT key for one status answer. The shared store mints a brand-new
@@ -309,13 +321,28 @@ export interface GitLensProps {
   visible: boolean
   /** Bumped by the tab header's refresh action (0 = never asked). */
   refreshTick?: number
+  /**
+   * The active history path filter (the changes tab owns it — meta-persisted,
+   * so it outlives this lens's unmount on a lens switch). An absolute path
+   * from the tree's 「查看 Git 历史」, or a repo-relative pathspec typed into
+   * the filter input; null = the unfiltered branch log.
+   */
+  pathFilter?: string | null
+  /** Set/clear the history path filter (absent → the lens renders no filter
+   *  UI and the prop, if any, is taken as read-only). */
+  onPathFilterChange?: (next: string | null) => void
   /** The tab's context, for the registered file/folder icon chain (absent →
    *  the host's built-in artwork, exactly like the file tree falls back). */
   ctx?: Context
 }
 
 export function GitLens(props: GitLensProps) {
-  const { scope, onOpenFile, onPreview, selectedRef, visible, refreshTick = 0, ctx } = props
+  const { scope, onOpenFile, onPreview, selectedRef, visible, refreshTick = 0, ctx, pathFilter = null, onPathFilterChange } = props
+  /** The filter at call time: the refresh chain's callbacks are stable, so
+   *  they read the CURRENT filter through this ref instead of closing over
+   *  the prop that was live when they were built. */
+  const pathFilterRef = useRef(pathFilter)
+  pathFilterRef.current = pathFilter
 
   const service = ctx?.get('betterSidebar')
   /** The file row's artwork: a registered icon wins, else the host's own
@@ -391,6 +418,9 @@ export function GitLens(props: GitLensProps) {
    *  changes on both sides folds independently in each section (and the two
    *  groups never fight over one key). Default: everything expanded. */
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set<string>())
+  /** The path-filter input's buffer (the inactive half of the filter UI; a
+   *  committed filter replaces the input with its chip). */
+  const [filterDraft, setFilterDraft] = useState('')
 
   /** The selected checkout, readable synchronously by the refresh chain
    *  without making every callback depend on the state it writes. */
@@ -478,7 +508,7 @@ export function GitLens(props: GitLensProps) {
     const gitScope = gitScopeNow()
     const [branchResult, logResult] = await Promise.all([
       api.gitBranch(gitScope, target).catch(() => ({ current: '', names: [] as string[] })),
-      api.gitLog(gitScope, LOG_BATCH, 0, target).then(
+      api.gitLog(gitScope, LOG_BATCH, 0, target, undefined, logOptsOf(pathFilterRef.current)).then(
         entries => ({ entries, failed: false }),
         () => ({ entries: [] as GitLogEntry[], failed: true }),
       ),
@@ -609,6 +639,21 @@ export function GitLens(props: GitLensProps) {
     // Only the tick drives this effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshTick])
+
+  // A path-filter change rewrites the history's source list: reload through
+  // the usual refresh chain (loadTarget reads the NEW filter through the
+  // ref). The mount/visibility loads already ran with the initial filter, so
+  // the first effect pass is skipped — only real edits reload.
+  const filterLoadArmed = useRef(false)
+  useEffect(() => {
+    if (!filterLoadArmed.current) {
+      filterLoadArmed.current = true
+      return
+    }
+    void refresh(false)
+    // Only the filter drives this effect; `refresh` is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathFilter])
 
   /** The inventory poll: a linked checkout created mid-session shows up
    *  without a manual refresh (the status poll itself belongs to the store). */
@@ -770,7 +815,11 @@ export function GitLens(props: GitLensProps) {
     setLogLoadingMore(true)
     setViewError(null)
     try {
-      const next = await api.gitLog(gitScopeNow(), LOG_BATCH, logEntries.length, target)
+      // The path filter rides EVERY page (the first as much as this one), and
+      // the skip counts commits of the filtered walk host-side (`git log
+      // --skip` applies after the pathspec narrows the commit walk), so the
+      // "shorter batch = end of log" rule below holds filtered as-is.
+      const next = await api.gitLog(gitScopeNow(), LOG_BATCH, logEntries.length, target, undefined, logOptsOf(pathFilterRef.current))
       // A worktree switch clears the old history; never append a late page
       // from that checkout into the new one.
       if (generation !== scopeGen.current || target !== chosenPathRef.current) return
@@ -973,6 +1022,54 @@ export function GitLens(props: GitLensProps) {
               </select>
             )
             : <span className={css.branchLabel} title={`${t('branch')}: ${branch}`}>{branch}</span>)}
+        </div>
+      )}
+
+      {/* The history path filter — the 「查看 Git 历史」 hand-off's visible
+          half. Inactive: one input (Enter commits a repo-relative pathspec);
+          active: the chip names the path the log is narrowed to (workspace-
+          relative when it sits under the window, absolute otherwise) with a
+          clear button that reloads the full branch log. Lives in the
+          non-scrolling head like the selectors above, so the filter stays
+          readable while the filtered list scrolls under it. */}
+      {isRepo && onPathFilterChange !== undefined && (
+        <div className={css.pathFilter} data-git-path-filter="">
+          {pathFilter === null ? (
+            <input
+              className={css.pathFilterInput}
+              type="text"
+              placeholder={t('gitLensPathFilter')}
+              aria-label={t('gitLensPathFilter')}
+              value={filterDraft}
+              onChange={(event) => { setFilterDraft(event.currentTarget.value) }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  const next = filterDraft.trim()
+                  if (next !== '') onPathFilterChange(next)
+                }
+                if (event.key === 'Escape') setFilterDraft('')
+              }}
+            />
+          ) : (
+            <span
+              className={css.pathFilterChip}
+              title={`${t('gitLensPathFilter')}: ${pathFilter}`}
+            >
+              <span className={css.pathFilterPath}>{relativeTo(repoRoot ?? selectedWorktree ?? scope.cwd ?? '', pathFilter)}</span>
+              <button
+                type="button"
+                className={css.pathFilterClear}
+                aria-label={t('gitLensPathFilterClear')}
+                title={t('gitLensPathFilterClear')}
+                onClick={() => {
+                  setFilterDraft('')
+                  onPathFilterChange(null)
+                }}
+              >
+                <IconCloseOutlineRegular size={11} />
+              </button>
+            </span>
+          )}
         </div>
       )}
 
