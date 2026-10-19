@@ -127,6 +127,7 @@ describe('host plugin smoke', () => {
       '/sidebar/ws/agent-opens',
       '/sidebar/ws/fs-watch',
       '/sidebar/ws/sidechat',
+      '/sidebar/ws/session',
     ])
     // Teardown runs without throwing.
     for (const cleanup of effects) cleanup()
