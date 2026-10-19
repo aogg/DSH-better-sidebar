@@ -21,12 +21,13 @@ import {
   VscCommentDiscussion,
   VscGitCommit,
   VscGlobe,
+  VscHistory,
   VscLayers,
   VscSettingsGear,
   VscTerminal,
 } from 'react-icons/vsc'
 /** The styled wrapper classes; typed so a renamed rule fails the build. */
-const css = styles as Record<'files' | 'changes' | 'tasks' | 'sidechat' | 'terminal' | 'browser' | 'settings', string>
+const css = styles as Record<'files' | 'changes' | 'tasks' | 'sidechat' | 'terminal' | 'browser' | 'settings' | 'history', string>
 
 /** One tab type's glyph, sized by the caller's surface (14px in a strip). */
 export type TabIcon = (size: number) => ReactNode
@@ -74,3 +75,10 @@ export const browserTabIcon: TabIcon = (size) =>
 /** Settings — primary ink, a control rather than an activity. */
 export const settingsTabIcon: TabIcon = (size) =>
   themed(css.settings, <VscSettingsGear size={size} />)
+
+/**
+ * Prompt history — the accent, a personal archive rather than a live
+ * activity: the same accent family the changes chip borrows for its lens.
+ */
+export const historyTabIcon: TabIcon = (size) =>
+  themed(css.history, <VscHistory size={size} />)

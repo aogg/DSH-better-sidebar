@@ -32,7 +32,7 @@ import { useCallback, useEffect, useState, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { IconCloseFillRegular, IconSettingsOutlineRegular, ShortcutKeys } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Context } from '../../context-types.ts'
-import { changesTabIcon, filesTabIcon, sidechatTabIcon, tasksTabIcon, terminalTabIcon } from '../builtins/tab-icons.tsx'
+import { changesTabIcon, filesTabIcon, historyTabIcon, sidechatTabIcon, tasksTabIcon, terminalTabIcon } from '../builtins/tab-icons.tsx'
 import { mountedSessionId } from '../native/surface.ts'
 import { t } from '../locales.ts'
 import type { SidebarStore } from '../state.ts'
@@ -43,12 +43,14 @@ import css from './start-links.module.css'
 
 /** 一个入口的展示与动作（kind 也写进 data-dsh-start-link 供测试/样式锚定）。 */
 interface StartLink {
-  kind: 'files' | 'changes' | 'terminal' | 'jobs' | 'sidechat' | 'settings'
+  kind: 'files' | 'changes' | 'terminal' | 'jobs' | 'sidechat' | 'history' | 'settings'
   label: () => string
   icon: (size: number) => React.ReactNode
   /** 终端按钮的快捷键提示（宿主 catalog 的 unboxed 键帽；探测不到给静态回退）。 */
   keys?: readonly string[]
   aria?: string
+  /** 悬停提示（「历史发送」的说明文案比标签长，title 与 aria 同文案）。 */
+  title?: string
 }
 
 /** 宿主快捷键目录的结构化探测面（只取 terminal.new 的展示键帽）。 */
@@ -97,6 +99,12 @@ export function openStartLink(kind: StartLink['kind'], ctx: Context, service: Be
       return
     case 'sidechat':
       service.openTab({ type: 'sidechat' })
+      return
+    case 'history':
+      // 「历史发送」：打开共享的提示词历史页（type: 'history'，单实例去重）。
+      // openTab 的插件分支在无活动会话时内部静默返回——hero 相位可以没有会话，
+      // 点击不抛错。
+      service.openTab({ type: 'history' })
       return
     case 'terminal':
       // 宿主命令面按契约作用于「在屏会话」，无在屏会话时调用会 throw——先读
@@ -179,6 +187,13 @@ export function StartLinks(props: { ctx: Context; service: BetterSidebarService;
     },
     { kind: 'jobs', label: () => t('subagent'), icon: tasksTabIcon },
     { kind: 'sidechat', label: () => t('sideChat'), icon: sidechatTabIcon },
+    {
+      kind: 'history',
+      label: () => t('historySent'),
+      icon: historyTabIcon,
+      aria: t('startHistoryAria'),
+      title: t('startHistoryAria'),
+    },
     { kind: 'settings', label: () => t('startSettings'), icon: settingsStartIcon },
   ]
   return (
@@ -191,6 +206,7 @@ export function StartLinks(props: { ctx: Context; service: BetterSidebarService;
             className={css.pill}
             data-dsh-start-link={link.kind}
             aria-label={link.aria}
+            {...(link.title !== undefined ? { title: link.title } : {})}
             aria-expanded={link.kind === 'settings' && store !== undefined ? settingsOpen : undefined}
             onClick={() => {
               if (link.kind === 'settings' && store !== undefined) {

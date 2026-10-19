@@ -60,6 +60,7 @@ import { buildSubagentLiveApi, type SidebarSubagentLiveRoutes } from './subagent
 import { buildTeamsApi, type SidebarTeamsRoutes } from './team-routes.ts'
 import { buildWorkflowsApi, type SidebarWorkflowRoutes } from './workflow-routes.ts'
 import { buildSidechatApi } from './sidechat-routes.ts'
+import { buildPromptHistoryApi } from './prompt-history-routes.ts'
 import { createAssistantLiveBuffer, type AssistantLiveBuffer } from './assistant-live.ts'
 import { readJsonBody, readTextBody, requireString, SidebarError, writeError, writeJson, writeOk } from './wire.ts'
 import { streamFileToResponse } from './file-stream.ts'
@@ -721,6 +722,10 @@ function buildApi(
   // the tree root leading no team → `{team:null}`. Mutations ride the
   // service's own CAS result union (conflicts stay distinct).
   const teamsApi: SidebarTeamsRoutes = buildTeamsApi(ctx)
+  // Prompt history (历史发送): reads never persist anything — records fold
+  // fresh from the session logs per request; only the annotations
+  // (comments/tags/related groups) own a JSON file. Degrades per
+  // src/prompt-history-routes.ts (no list capability → the current session).
   return {
     'session.phase': async (payload) => {
       const sessionId = requireString(payload, 'sessionId')
@@ -1358,6 +1363,12 @@ function buildApi(
     // there is no `teams.view` route (see src/team-routes.ts).
     'teams.taskCreate': (payload) => teamsApi.taskCreate(payload),
     'teams.taskUpdate': (payload) => teamsApi.taskUpdate(payload),
+    // Prompt history (the start page's 「历史发送」 tab): records are read
+    // fresh from the session logs on every list (never persisted by this
+    // plugin), while comments/tags/related-groups persist in the plugin's own
+    // JSON file (see src/prompt-history-routes.ts). Route keys ARE the wire
+    // method names, so the record spreads in like the side chat's.
+    ...buildPromptHistoryApi(ctx),
     // The side card preferences. The settings service is optional in the
     // composition; while absent the routes report undefined and the client
     // keeps the schema defaults. Writes are revision-guarded: a stale editor

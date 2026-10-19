@@ -26,6 +26,17 @@ import type {
   SidebarUpdateTeamTaskRequest,
 } from '../context-types.ts'
 import type { WorkflowRunView } from '../workflow-runs.ts'
+import type { HistorySendRecord } from '../prompt-history-extract.ts'
+import type { HistoryAnnotationOpInput, HistoryAnnotations } from '../prompt-history-store.ts'
+
+/** The `history.list` response: the cross-session user-prompt records. */
+export interface HistoryListResult {
+  available: true
+  sessions: { id: string; cwd?: string; records: HistorySendRecord[]; truncated: boolean }[]
+  /** The session enumeration degraded to the current session (the host has
+   *  no stored-header list capability, or listing failed host-side). */
+  degraded: boolean
+}
 
 /** One wire failure. */
 export class SidebarApiError extends Error {
@@ -719,6 +730,20 @@ export const api = {
       patch,
       ...(expectedRevision !== undefined ? { expectedRevision } : {}),
     }),
+  /**
+   * 「历史发送」：跨会话的用户发送记录（发送记录本身不持久化，宿主每次从
+   * 会话日志现读；单会话默认只回最近 50 条，`truncated` 标记超出）。宿主
+   * 没有 persistence 服务时抛 503 `history-error`（页签内联降级提示）。
+   */
+  historyList: (payload: { sessionId?: string; limit?: number } = {}) =>
+    call<HistoryListResult>('history.list', payload),
+  /** 「历史发送」注解库全量（评论/标签/关联组，记录 key → 注解）。 */
+  historyAnnotationsGet: () =>
+    call<HistoryAnnotations>('history.annotationsGet', {}),
+  /** 归并一个「历史发送」注解写操作，返回写后的全量注解库。`commentAdd` /
+   *  `groupCreate` 的 `id`/`time` 由服务端铸造（wire 负载不带）。 */
+  historyAnnotationsUpdate: (op: HistoryAnnotationOpInput) =>
+    call<HistoryAnnotations>('history.annotationsUpdate', { op }),
   /** External open for the file tree's "open with" menu. Remote SSH editor
    *  URLs are launched on the browser/client machine; reveal and local URLs
    *  keep using the host's platform opener. */

@@ -30,6 +30,7 @@ export type SidebarErrorCode =
   | 'subagents-unavailable'
   | 'settings-rejected'
   | 'settings-conflict'
+  | 'history-error'
   | 'internal'
 
 /** One API failure with its wire code and HTTP status. */

@@ -38,11 +38,24 @@ function setup(): { service: ReturnType<typeof createBetterSidebarService>; stor
 }
 
 describe('built-in tab registrations', () => {
-  it('registers the 7 built-in tabs (the host owns the right-sidebar terminal and browser)', () => {
+  it('registers the 8 built-in tabs (the host owns the right-sidebar terminal and browser)', () => {
     const { service } = setup()
     expect(service.getTabs().map(t => t.id).sort()).toEqual(
-      ['diff', 'editor', 'git', 'settings', 'sidechat', 'subagent', 'terminal-bottom'],
+      ['diff', 'editor', 'git', 'history', 'settings', 'sidechat', 'subagent', 'terminal-bottom'],
     )
+  })
+
+  it('the history tab is the start page\'s 历史发送 door (single, visible, real page)', () => {
+    const { service } = setup()
+    const history = service.getTab('history')
+    expect(history).toBeDefined()
+    // One shared page: a second open focuses the existing one (the hero
+    // pill's openTab({ type: 'history' }) dedupes against it).
+    expect(history?.single).toBe(true)
+    expect(history?.hidden).not.toBe(true)
+    expect(history?.icon).toBeDefined()
+    expect(history?.component).toBeDefined()
+    expect(history?.bottomOnly).not.toBe(true)
   })
 
   it('the settings tab is the sidebar start page\'s 设置 door (single, visible, real page)', () => {

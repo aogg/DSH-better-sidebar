@@ -42,3 +42,9 @@
   /* The gear is a control, not an activity: ink, like the terminal chip. */
   color: var(--dsw-alias-label-primary);
 }
+
+.history {
+  /* The prompt-history chip is a personal archive, not a live activity: the
+     brand accent, like the changes chip's lens. */
+  color: var(--dsw-alias-accent, var(--dsw-alias-brand-primary, var(--dsw-alias-label-primary)));
+}

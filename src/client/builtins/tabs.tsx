@@ -25,7 +25,7 @@
  */
 import { IconCodeOutlineRegular, IconPanelLeftOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
-  changesTabIcon, filesTabIcon, settingsTabIcon, sidechatTabIcon, tasksTabIcon, terminalTabIcon,
+  changesTabIcon, filesTabIcon, historyTabIcon, settingsTabIcon, sidechatTabIcon, tasksTabIcon, terminalTabIcon,
 } from './tab-icons.tsx'
 import { t } from '../locales.ts'
 import { openSidebarFile } from '../sidebar-file.ts'
@@ -38,6 +38,7 @@ import { SettingsPage } from '../SettingsPage.tsx'
 import { SubagentView } from '../SubagentView.tsx'
 import { consumeSidechatSeed, SideChatView, sidechatThreadIdOf } from '../SideChatView.tsx'
 import { isSidechatFloating } from '../sidechat-windows.ts'
+import { HistoryView } from '../HistoryView.tsx'
 import { LazyTerminalBottom } from '../terminal-lazy.tsx'
 import { CWD_FIELD, INSTANCE_FIELD, closeBottomTerminal, consumeBottomTerminalCwd, webTerminals } from '../terminal-client.ts'
 import { api } from '../api.ts'
@@ -254,6 +255,25 @@ export function builtinTabs(ctx: Context): readonly TabDescriptor[] {
       },
       component: ({ ctx, scope, tab, visible }) => (
         <SideChatView ctx={ctx} scope={scope} tab={tab} visible={visible} />
+      ),
+    },
+    {
+      // 「历史发送」(the start page's prompt-history door): the hero pill's
+      // openTab({ type: 'history' }) lands here — one shared page listing
+      // the prompts the user has sent across sessions, grouped by session.
+      // Records are read fresh from the session logs by the history.list
+      // route (never persisted by the plugin); comments, tags and related
+      // groups persist server-side (see src/prompt-history-routes.ts).
+      id: 'history',
+      title: () => t('historySent'),
+      description: () => t('guideDescHistory'),
+      icon: historyTabIcon,
+      // Between the side chat (35) and the bottom terminal (40): a tool
+      // page, but a visible door on the guide and in the + menu.
+      order: 38,
+      single: true,
+      component: ({ scope, visible }) => (
+        <HistoryView visible={visible} sessionId={scope.sessionId} />
       ),
     },
     {
