@@ -349,6 +349,10 @@ function CollapsibleRow(props: {
  *  (the main conversation's MessageIconActions feedback window). */
 const COPY_FLASH_MS = 1000
 
+/** How long the composer's copy-id button flashes its tooltip/aria to
+ *  已复制 after a SUCCESSFUL clipboard write, before flipping back. */
+const COPY_ID_FLASH_MS = 1500
+
 /**
  * One settled answer's copy action: an icon button FIXED under the answer —
  * always visible, never hover-gated. It copies the answer's raw markdown and
@@ -634,6 +638,11 @@ export function SideChatView(props: {
    *  transcript tail at send time, so an OLDER identical message cannot
    *  retire the echo. */
   const [echo, setEcho] = useState<{ text: string; seq: number } | null>(null)
+  /** Transient flash for the composer's copy-id button: true for ~1.5s after a
+   *  SUCCESSFUL clipboard write, then restored. A failed write (or a tab with
+   *  no thread yet) never lights it up — no success without a copy. */
+  const [copiedId, setCopiedId] = useState(false)
+  const copiedIdTimerRef = useRef<number | undefined>(undefined)
 
   const cacheRef = useRef<ThreadCache>({ entries: [], live: [], pending: [] })
   // The previous poll's rows (see the mapping's reuse pass below).
@@ -775,6 +784,13 @@ export function SideChatView(props: {
     setSaved(false)
     setInfo(null)
     setEcho(null)
+    // The copy-id flash belongs to the previous thread's interaction; a
+    // rebinding retires it together with its pending restore timer.
+    setCopiedId(false)
+    if (copiedIdTimerRef.current !== undefined) {
+      window.clearTimeout(copiedIdTimerRef.current)
+      copiedIdTimerRef.current = undefined
+    }
     if (threadId !== undefined) {
       void fetchInfo(threadId)
       window.setTimeout(() => composerRef.current?.focus(), 0)
@@ -832,6 +848,7 @@ export function SideChatView(props: {
   useEffect(() => () => {
     controllerRef.current?.abort()
     if (invalidateRef.current !== undefined) window.clearTimeout(invalidateRef.current)
+    if (copiedIdTimerRef.current !== undefined) window.clearTimeout(copiedIdTimerRef.current)
   }, [])
 
   // When the wire recovers (disconnected → connected), pull immediately
@@ -1228,6 +1245,23 @@ export function SideChatView(props: {
     }
   }
 
+  /** Copy-id (the button right of archive): a plain click copies the bound
+   *  thread's session id; Ctrl/⌘+click copies the human-facing reference
+   *  sentence around it instead, so the id can be pasted straight into an AI
+   *  chat. The 已复制 flash only fires when the write actually succeeded. */
+  const handleCopyId = useCallback((event: React.MouseEvent<HTMLButtonElement>): void => {
+    if (threadId === undefined) return
+    const text = event.ctrlKey || event.metaKey
+      ? t('sideChatCopyIdText', { id: threadId })
+      : threadId
+    void writeClipboard(text).then(ok => {
+      if (!ok) return
+      setCopiedId(true)
+      if (copiedIdTimerRef.current !== undefined) window.clearTimeout(copiedIdTimerRef.current)
+      copiedIdTimerRef.current = window.setTimeout(() => { setCopiedId(false) }, COPY_ID_FLASH_MS)
+    })
+  }, [threadId])
+
   /** Archive the bound thread on the host (the same capability the session
    *  list's own archive action uses; `stopActivity` settles a running agent
    *  first). The tab then moves to another live thread: leaving it bound to an
@@ -1433,6 +1467,22 @@ export function SideChatView(props: {
                 aria-label={t('sideChatArchive')}
               >
                 <IconArchiveOutlineRegular size={16} />
+              </button>
+            </ComposerTip>
+            {/* Copy-id sits RIGHT of archive, before the dock/pop-out pair.
+                Plain click copies the bound thread's session id; Ctrl/⌘+click
+                copies the 需要看历史dsh侧边对话会话 <id> reference sentence instead, so
+                the current side-chat id can be fed to an AI session. Disabled
+                while the tab has no thread to copy from. */}
+            <ComposerTip label={copiedId ? t('copied') : t('sideChatCopyId')}>
+              <button
+                type="button"
+                className={css.sidechatIconBtn}
+                onClick={handleCopyId}
+                disabled={threadId === undefined}
+                aria-label={copiedId ? t('copied') : t('sideChatCopyId')}
+              >
+                <IconCopyOutlineRegular size={16} />
               </button>
             </ComposerTip>
             {floating ? (

@@ -470,6 +470,8 @@ export const id: Record<string, string> = {
   sideChatSaveTitle: 'Promosikan thread ini ke sesi tingkat atas dalam daftar sesi utama',
   sideChatArchive: 'Arsipkan percakapan samping ini (temukan lagi lewat “Tampilkan yang diarsipkan” di daftar sesi)',
   sideChatArchiveRunning: 'Utas ini sedang berjalan — hentikan sebelum mengarsipkan',
+  sideChatCopyId: 'Salin id sesi percakapan samping ini (klik sambil menahan Ctrl untuk menyalin teks referensi sebagai gantinya)',
+  sideChatCopyIdText: 'Ingin melihat sesi obrolan samping dsh sebelumnya {id}',
   sideChatSaved: 'Tersimpan sebagai sesi baru',
   sideChatNoTurn: 'Simpan tersedia setelah giliran pertama selesai',
   sideChatPendingDrop: 'Tindak lanjut yang belum terjawab terakhir tidak akan disertakan dalam sesi yang disimpan',

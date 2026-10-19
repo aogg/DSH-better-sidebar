@@ -474,6 +474,8 @@ export const pl: Record<string, string> = {
   sideChatSaveTitle: 'Promuj ten wątek do sesji najwyższego poziomu na głównej liście sesji',
   sideChatArchive: 'Zarchiwizuj tę rozmowę boczną (znajdziesz ją ponownie przez „Pokaż zarchiwizowane” na liście sesji)',
   sideChatArchiveRunning: 'Ten wątek działa — zatrzymaj go przed archiwizacją',
+  sideChatCopyId: 'Skopiuj identyfikator sesji tej rozmowy bocznej (Ctrl+klik kopiuje zamiast tego tekst referencyjny)',
+  sideChatCopyIdText: 'Chcę przejrzeć historyczną sesję rozmowy bocznej dsh {id}',
   sideChatSaved: 'Zapisano jako nową sesję',
   sideChatNoTurn: 'Zapis jest dostępny po pierwszej ukończonej turze',
   sideChatPendingDrop: 'Ostatnie niezakończone pytanie następcze nie zostanie uwzględnione w zapisanej sesji',

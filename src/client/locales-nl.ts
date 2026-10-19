@@ -470,6 +470,8 @@ export const nl: Record<string, string> = {
   sideChatSaveTitle: 'Promoveer deze thread naar een top-level sessie in de hoofd-sessielijst',
   sideChatArchive: 'Dit zijgesprek archiveren (terug te vinden via “Gearchiveerd tonen” in de sessielijst)',
   sideChatArchiveRunning: 'Deze thread draait — stop hem voordat je archiveert',
+  sideChatCopyId: 'De sessie-id van dit zijgesprek kopiëren (Ctrl+klik kopieert in plaats daarvan een referentietekst)',
+  sideChatCopyIdText: 'Historische DSH-zijgesprekssessie opzoeken: {id}',
   sideChatSaved: 'Opgeslagen als een nieuwe sessie',
   sideChatNoTurn: 'Opslaan is pas beschikbaar na de eerste voltooide beurt',
   sideChatPendingDrop: 'De laatste onbeantwoorde follow-up wordt niet meegenomen in de opgeslagen sessie',

@@ -487,6 +487,8 @@ export const zhHK: Record<string, string> = {
   sideChatSaveTitle: '把該執行緒提升為頂層工作階段，出現在主工作階段列表中',
   sideChatArchive: '歸檔這條側邊對話（在工作階段列表的「顯示已歸檔」裡可找回）',
   sideChatArchiveRunning: '該執行緒正在執行，停止後才能歸檔',
+  sideChatCopyId: '複製這條側邊對話的工作階段id（按住 Ctrl 點擊則改為複製引用文字）',
+  sideChatCopyIdText: '需要看歷史dsh側邊對話工作階段 {id}',
   sideChatSaved: '已儲存為新工作階段',
   sideChatNoTurn: '至少完成一輪對話後才能儲存',
   sideChatPendingDrop: '最後一則未完成的追問不會包含在新工作階段中',

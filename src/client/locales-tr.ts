@@ -472,6 +472,8 @@ export const tr: Record<string, string> = {
   sideChatSaveTitle: 'Bu iş parçacığını ana oturum listesinde üst düzey oturuma yükselt',
   sideChatArchive: 'Bu yan sohbeti arşivle (oturum listesindeki “Arşivlenenleri göster” ile tekrar bulabilirsiniz)',
   sideChatArchiveRunning: 'Bu iş parçacığı çalışıyor — arşivlemeden önce durdurun',
+  sideChatCopyId: 'Bu yan sohbetin oturum kimliğini kopyala (Ctrl+tıklama bunun yerine bir referans metni kopyalar)',
+  sideChatCopyIdText: 'Geçmiş dsh yan sohbet oturumuna bakmak istiyorum: {id}',
   sideChatSaved: 'Yeni oturum olarak kaydedildi',
   sideChatNoTurn: 'Kaydetme ilk tamamlanan turdan sonra kullanılabilir',
   sideChatPendingDrop: 'Son yanıtlanmamış devam sorusu kaydedilen oturuma dahil edilmez',

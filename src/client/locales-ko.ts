@@ -464,6 +464,8 @@ export const ko: Record<string, string> = {
   sideChatSaveTitle: '이 스레드를 최상위 세션으로 승격하여 주 세션 목록에 표시합니다',
   sideChatArchive: '이 사이드 대화 보관(세션 목록의 "보관됨 표시"에서 다시 찾을 수 있습니다)',
   sideChatArchiveRunning: '이 스레드가 실행 중입니다 — 중지한 후 보관하세요',
+  sideChatCopyId: '이 사이드 대화의 세션 id 복사(Ctrl+클릭으로 대신 참조 텍스트 복사)',
+  sideChatCopyIdText: '과거 dsh 사이드 대화 세션 {id} 보기',
   sideChatSaved: '새 세션으로 저장됨',
   sideChatNoTurn: '최소 한 턴의 대화를 완료해야 저장할 수 있습니다',
   sideChatPendingDrop: '마지막으로 완료되지 않은 후속 질문은 새 세션에 포함되지 않습니다',

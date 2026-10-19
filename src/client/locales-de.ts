@@ -458,6 +458,8 @@ export const de: Record<string, string> = {
   sideChatSaveTitle: 'Diesen Thread in der Hauptsitzungsliste zu einer Top-Level-Sitzung erheben',
   sideChatArchive: 'Diese Nebenunterhaltung archivieren (über „Archivierte anzeigen“ in der Sitzungsliste wiederzufinden)',
   sideChatArchiveRunning: 'Dieser Thread läuft — vor dem Archivieren stoppen',
+  sideChatCopyId: 'Die Sitzungs-id dieser Nebenunterhaltung kopieren (Strg+Klick kopiert stattdessen einen Referenztext)',
+  sideChatCopyIdText: 'Historische DSH-Nebenunterhaltungssitzung nachschlagen: {id}',
   sideChatSaved: 'Als neue Sitzung gespeichert',
   sideChatNoTurn: 'Das Speichern ist nach der ersten abgeschlossenen Runde verfügbar',
   sideChatPendingDrop: 'Die letzte unbeantwortete Nachfrage wird in der gespeicherten Sitzung nicht enthalten sein',

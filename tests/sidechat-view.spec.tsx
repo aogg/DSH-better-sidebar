@@ -23,6 +23,7 @@ import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { renderRoot, setupReactAct } from './test-utils.ts'
 import { SideChatView, consumeSidechatSeed } from '../src/client/SideChatView.tsx'
+import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { attachLocale } from '../src/client/locales.ts'
 import css from '../src/client/SideChatView.module.css'
 import type { Context, SidebarSessionList } from '../src/context-types.ts'
@@ -485,6 +486,100 @@ describe('SideChatView answer copy', () => {
   })
 })
 
+describe('SideChatView composer copy-id', () => {
+  /** The composer-bar copy-id button (its aria-label is the zh copy-id label
+   *  — the answer copy actions use the bare 复制, so this never collides). */
+  function copyIdButton(container: HTMLElement): HTMLButtonElement {
+    const button = container.querySelector<HTMLButtonElement>('button[aria-label="复制这条侧边对话的会话id（按住 Ctrl 点击改为复制引用文本）"]')
+    if (button === null) throw new Error('the composer-bar copy-id button is absent')
+    return button
+  }
+
+  it('a plain click writes the bound thread\'s session id to the clipboard', async () => {
+    const writeId = vi.spyOn(primitives, 'writeClipboard').mockResolvedValue(true)
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(threadStore()))))
+    await act(async () => {})  // flush the initial transcript pull
+
+    await act(async () => {
+      copyIdButton(container).click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // The tab's bound thread id — viewProps pins meta.threadId 't1' — is the
+    // whole payload of a plain click.
+    expect(writeId).toHaveBeenCalledTimes(1)
+    expect(writeId).toHaveBeenCalledWith('t1')
+    unmount()
+    vi.restoreAllMocks()
+  })
+
+  it('Ctrl+click writes the reference sentence around the id instead', async () => {
+    const writeId = vi.spyOn(primitives, 'writeClipboard').mockResolvedValue(true)
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(threadStore()))))
+    await act(async () => {})  // flush the initial transcript pull
+
+    // The click carries the ctrl modifier the way fireEvent.click would.
+    await act(async () => {
+      copyIdButton(container).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // The sideChatCopyIdText locale sentence with the id interpolated in.
+    expect(writeId).toHaveBeenCalledTimes(1)
+    expect(writeId).toHaveBeenCalledWith('需要看历史dsh侧边对话会话 t1')
+    unmount()
+    vi.restoreAllMocks()
+  })
+
+  it('a successful copy flashes 已复制 for the flash window and restores the full label', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(primitives, 'writeClipboard').mockResolvedValue(true)
+      const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(threadStore()))))
+      await act(async () => {})  // flush the initial transcript pull
+
+      const button = copyIdButton(container)
+      await act(async () => {
+        button.click()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(button.getAttribute('aria-label')).toBe('已复制')
+
+      // COPY_ID_FLASH_MS (1500) after the write the flash window closes and
+      // the full copy-id label returns on the SAME button node.
+      act(() => { vi.advanceTimersByTime(1600) })
+      expect(button.getAttribute('aria-label')).toBe('复制这条侧边对话的会话id（按住 Ctrl 点击改为复制引用文本）')
+      unmount()
+    } finally {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('a FAILED clipboard write keeps the full label (never claims a copy that did not happen)', async () => {
+    const writeId = vi.spyOn(primitives, 'writeClipboard').mockResolvedValue(false)
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(threadStore()))))
+    await act(async () => {})  // flush the initial transcript pull
+
+    await act(async () => {
+      copyIdButton(container).click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // The write was attempted with the id, the flash never lights up, and
+    // nothing on the page claims 已复制.
+    expect(writeId).toHaveBeenCalledWith('t1')
+    expect(copyIdButton(container).getAttribute('aria-label')).toBe('复制这条侧边对话的会话id（按住 Ctrl 点击改为复制引用文本）')
+    expect(container.textContent ?? '').not.toContain('已复制')
+    unmount()
+    vi.restoreAllMocks()
+  })
+})
+
 describe('SideChatView user rows render verbatim (no markdown)', () => {
   /** The user text the three cases share: an ASCII box drawing whose shape
    *  depends on the newlines between the lines and the runs of interior
@@ -602,26 +697,28 @@ describe('SideChatView queue, echo and model picker', () => {
     const threads = byLabel('切换线程 / 新建')
     const save = byLabel('保存为新会话')
     const archive = byLabel('归档这条侧边对话（在会话列表的「显示已归档」里可找回）')
+    const copyId = byLabel('复制这条侧边对话的会话id（按住 Ctrl 点击改为复制引用文本）')
     const model = byLabel('模型')
     const send = byLabel('发送')
 
     /** Whether `later` follows `earlier` in document order. */
     const follows = (later: HTMLElement, earlier: HTMLElement): boolean =>
       (earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
-    // Four icon actions on the left — NEW THREAD FIRST, then threads · save ·
-    // archive — and the model selector on the right, right before send (the
-    // main conversation's own bottom-bar arrangement).
+    // Five icon actions on the left — NEW THREAD FIRST, then threads · save ·
+    // archive · copy-id — and the model selector on the right, right before
+    // send (the main conversation's own bottom-bar arrangement).
     expect(follows(threads, newThread)).toBe(true)
     expect(follows(save, threads)).toBe(true)
     expect(follows(archive, save)).toBe(true)
-    expect(follows(model, archive)).toBe(true)
+    expect(follows(copyId, archive)).toBe(true)
+    expect(follows(model, copyId)).toBe(true)
     expect(follows(send, model)).toBe(true)
 
     // Every control anchors a hover bubble on an ENABLED span inside the bar
     // (a disabled button fires no pointer events, so save/archive could not
     // explain themselves otherwise), and the native `title` bubble is gone:
     // the styled popup replaced it.
-    for (const control of [newThread, threads, save, archive, model, send]) {
+    for (const control of [newThread, threads, save, archive, copyId, model, send]) {
       expect(control.getAttribute('title'), 'no native title bubble').toBeNull()
       const anchor = control.parentElement
       expect(anchor?.tagName, 'each control sits in a hover anchor').toBe('SPAN')

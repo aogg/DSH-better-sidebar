@@ -455,6 +455,8 @@ export const pt: Record<string, string> = {
   sideChatSaveTitle: 'Promover este tópico a uma sessão de nível superior na lista principal de sessões',
   sideChatArchive: 'Arquivar esta conversa lateral (encontre-a novamente em “Mostrar arquivadas” na lista de sessões)',
   sideChatArchiveRunning: 'Este tópico está em execução — pare-o antes de arquivar',
+  sideChatCopyId: 'Copiar o id de sessão desta conversa lateral (Ctrl+clique copia um texto de referência no lugar)',
+  sideChatCopyIdText: 'Quero ver a sessão histórica da conversa lateral do dsh {id}',
   sideChatSaved: 'Salvo como nova sessão',
   sideChatNoTurn: 'O salvamento está disponível após o primeiro turno concluído',
   sideChatPendingDrop: 'A última pergunta não respondida não será incluída na sessão salva',
