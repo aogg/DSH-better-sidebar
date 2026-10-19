@@ -427,8 +427,17 @@ function openExternal(payload: OpenExternalPayload): Promise<OpenExternalResult>
 
 /** The sidebar API surface (session scope threaded through every call). */
 export const api = {
-  sessionCwd: (scope: SessionScope, signal?: AbortSignal) =>
-    call<{ sessionId: string; cwd: string; root: string; parent: string | null }>('session.cwd', scopePayload(scope, {}), signal),
+  /**
+   * The session's live workspace root. `opts.fresh` rides `payload.fresh` to
+   * the host: a push notice already said the root moved, so the host must skip
+   * its 3s TTL cache instead of answering from it.
+   */
+  sessionCwd: (scope: SessionScope, opts?: { fresh?: boolean }, signal?: AbortSignal) =>
+    call<{ sessionId: string; cwd: string; root: string; parent: string | null }>(
+      'session.cwd',
+      scopePayload(scope, opts?.fresh === true ? { fresh: true } : {}),
+      signal,
+    ),
   fsTree: (scope: SessionScope, path: string, exclude?: readonly string[], signal?: AbortSignal) =>
     call<{ path: string; entries: FsEntry[]; truncated: boolean }>('fs.tree', scopePayload(scope, { path, exclude }), signal),
   /**

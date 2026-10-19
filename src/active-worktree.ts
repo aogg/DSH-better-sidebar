@@ -18,7 +18,10 @@
  * kept (lifted to the repository top level for subdirectory sessions).
  *
  * Resolutions are cached process-wide, so the client's periodic re-ask is
- * cheap after the first scan.
+ * cheap after the first scan. A caller that KNOWS the answer moved — the
+ * `/sidebar/ws/session` cwd notice — passes `fresh` to skip the cached read
+ * and recompute immediately (the push's own coalescing window bounds how
+ * often that happens); the fresh scan still refreshes the cache.
  */
 import { stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join, sep } from 'node:path'
@@ -240,9 +243,16 @@ async function sessionEventsOf(ctx: Context, sessionId: string): Promise<readonl
  * @param ctx - host plugin context.
  * @param sessionId - session whose tool calls are inspected.
  * @param base - the authoritative session cwd (already resolved by the caller).
+ * @param opts - `fresh: true` skips the cached read (the caller has an
+ *   explicit "it changed" signal) while still refreshing the cache.
  * @returns the active linked worktree, the repository top level, or `base`.
  */
-export async function activeWorktreeRootOf(ctx: Context, sessionId: string, base: string): Promise<string> {
+export async function activeWorktreeRootOf(
+  ctx: Context,
+  sessionId: string,
+  base: string,
+  opts?: { fresh?: boolean },
+): Promise<string> {
   if (base === '') return base
   const override = (process.env[ACTIVE_ROOT_OVERRIDE_ENV] ?? '').trim()
   if (override !== '' && isAbsolute(override)) return requireAbsolute(override)
@@ -250,8 +260,13 @@ export async function activeWorktreeRootOf(ctx: Context, sessionId: string, base
   // spawn on every ask, which is the whole cost the TTL is there to avoid. The
   // comparison is on the raw base, so a session whose caller switched base (the
   // `/sidebar/*` routes pass the client's own) never reuses the other one's root.
-  const cached = activeWorktreeRootCache.get(sessionId)
-  if (cached !== undefined && cached.expires > Date.now() && cached.base === base) return cached.root
+  // A fresh ask skips this read on purpose: the 3s TTL exists to make the
+  // PERIODIC re-asks free, while a push notice is the explicit "it changed"
+  // signal that must recompute now — and it still lands in the cache below.
+  if (opts?.fresh !== true) {
+    const cached = activeWorktreeRootCache.get(sessionId)
+    if (cached !== undefined && cached.expires > Date.now() && cached.base === base) return cached.root
+  }
   const top = await gitTopLevelOf(base)
   if (top === undefined) {
     // "Not inside a repository" is an answer too (the base itself), and caching

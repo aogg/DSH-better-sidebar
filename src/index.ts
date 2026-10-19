@@ -46,6 +46,7 @@ import { isTrustedApiRequest } from './trust-fence.ts'
 import { registerBundleRoute } from './bundle-route.ts'
 import { createDirectoryWatchers, type DirectoryWatchers } from './fs-watch.ts'
 import { createSidechatPushHub } from './sidechat-push.ts'
+import { createSessionPushHub } from './session-push.ts'
 import { launchExternal } from './open-external.ts'
 import { createArchiveTasks, respondArchiveDownload, type ArchiveTasks } from './archive-route.ts'
 import * as git from './git.ts'
@@ -688,11 +689,14 @@ function buildApi(
   assistantLive: AssistantLiveBuffer,
   archiveTasks: ArchiveTasks,
 ): Record<string, ApiMethod> {
-  const cwdOf = async (payload: unknown): Promise<{ sessionId: string; cwd: string }> => {
+  const cwdOf = async (payload: unknown, opts?: { fresh?: boolean }): Promise<{ sessionId: string; cwd: string }> => {
     const sessionId = requireString(payload, 'sessionId')
     const record = payload as { cwd?: unknown } | null
     const clientCwd = typeof record?.cwd === 'string' && record.cwd !== '' ? record.cwd : undefined
-    return { sessionId, cwd: await activeWorktreeRootOf(ctx, sessionId, await sessionCwdOf(ctx, sessionId, clientCwd)) }
+    return {
+      sessionId,
+      cwd: await activeWorktreeRootOf(ctx, sessionId, await sessionCwdOf(ctx, sessionId, clientCwd), opts),
+    }
   }
   /** Resolve the optional Git-panel checkout selector against the selected
    * session repository. Unlike `cwd`, `worktree` is never trusted directly. */
@@ -740,7 +744,11 @@ function buildApi(
       return { blank }
     },
     'session.cwd': async (payload) => {
-      const { sessionId, cwd } = await cwdOf(payload)
+      // `fresh: true` rides only the push-triggered re-ask (see session-push.ts):
+      // the notice is the explicit "the root moved" signal, so it skips the
+      // 3s TTL cache the periodic polls rely on instead of waiting it out.
+      const record = payload as { fresh?: unknown } | null
+      const { sessionId, cwd } = await cwdOf(payload, { fresh: record?.fresh === true })
       return { sessionId, cwd, root: rootLabel(cwd), parent: parentOf(cwd) ?? null }
     },
     'fs.tree': async (payload) => {
@@ -2098,12 +2106,36 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
     },
   }), 'dsh-better-sidebar: side-chat push WebSocket')
 
+  // ── Session push WebSocket ─────────────────────────────────────────────
+  // The client polls `session.phase` (1s while blank) and `session.cwd` (5s);
+  // this socket tells it WHEN to re-ask instead: a first user/assistant
+  // message flips the blank phase, a tool/call may move the active worktree.
+  // Frames carry only the session id (never route answers), so the two HTTP
+  // routes stay the single source of truth and a dropped socket self-heals
+  // through the same polls it fell back to before.
+  const sessionWss = new WebSocketServer({ noServer: true })
+  const sessionPush = createSessionPushHub(ctx)
+  ctx.effect(() => () => { sessionPush.dispose() }, 'dsh-better-sidebar: session push hub')
+  ctx.effect(() => ctx.webServer.registerUpgrade({
+    path: '/sidebar/ws/session',
+    handler: (req, socket, head) => {
+      if (!fence(req)) {
+        socket.destroy()
+        return
+      }
+      sessionWss.handleUpgrade(req as unknown as IncomingMessage, socket as unknown as Duplex, head as Buffer, (ws) => {
+        sessionPush.attach(ws)
+      })
+    },
+  }), 'dsh-better-sidebar: session push WebSocket')
+
   ctx.effect(() => () => {
     openToolsDisposers?.()
     agentOpenRegistry.dispose()
     agentOpenWss.close()
     fsWatchWss.close()
     sidechatWss.close()
+    sessionWss.close()
   }, 'dsh-better-sidebar: teardown')
 }
 
