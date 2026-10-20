@@ -332,8 +332,7 @@ export class PromptHistoryStore {
   constructor(options: PromptHistoryStoreOptions = {}) {
     this.rootSource = options.root ?? ''
     this.warn = (message, error) => {
-      options.logger?.warn?.(message)
-      if (error !== undefined) options.logger?.warn?.(error)
+      options.logger?.warn?.(message, error)
     }
   }
 

@@ -96,8 +96,7 @@ function cwdStringOf(value: unknown): string | undefined {
  */
 export function createPromptHistoryLive(ctx: Context, store: PromptHistoryStore, options?: PromptHistoryLiveOptions): PromptHistoryLive {
   const warn = (message: string, error?: unknown): void => {
-    options?.logger?.warn?.(message)
-    if (error !== undefined) options?.logger?.warn?.(error)
+    options?.logger?.warn?.(message, error)
   }
   const sinks = new Set<(sessionId: string, records: readonly HistorySendRecord[]) => void>()
   const scanning = new Set<string>()
@@ -147,7 +146,7 @@ export function createPromptHistoryLive(ctx: Context, store: PromptHistoryStore,
       if (events === undefined) return
       const extracted = extractSendRecords(sessionId, events as readonly HistorySourceEvent[]).records
       if (extracted.length === 0) return
-      const lastSeq = (events as { seq?: unknown }[]).at(-1)?.seq
+      const lastSeq = (events as readonly { seq?: unknown }[]).at(-1)?.seq
       await store.appendRecords(
         projectKey,
         extracted,
@@ -168,7 +167,7 @@ export function createPromptHistoryLive(ctx: Context, store: PromptHistoryStore,
           // inheritedEventCount 只在首窗有意义（窗口推进后种子前缀早已越过）。
           inheritedEventCount: offset === 0 ? inherited : 0,
         }).records
-        const lastSeq = (events as { seq?: unknown }[]).at(-1)?.seq
+        const lastSeq = (events as readonly { seq?: unknown }[]).at(-1)?.seq
         if (typeof lastSeq !== 'number' || !Number.isSafeInteger(lastSeq)) {
           // 窗口读满却拿不到最后 seq（异常信封）：无法推进水位，按截断收尾。
           await store.appendRecords(projectKey, windowRecords)

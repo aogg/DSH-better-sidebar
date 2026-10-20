@@ -1764,7 +1764,7 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
   }
   const historyStore = new PromptHistoryStore({ root: historyStorageRootPref, logger: ctx.logger })
   const historyLive = createPromptHistoryLive(ctx, historyStore, { logger: ctx.logger })
-  ctx.effect(() => historyLive.dispose(), 'dsh-better-sidebar: prompt-history live recorder')
+  ctx.effect(() => () => { historyLive.dispose() }, 'dsh-better-sidebar: prompt-history live recorder')
   const historyApi = buildPromptHistoryApi(ctx, { store: historyStore, live: historyLive })
   const api = buildApi(ctx, resolved, () => settingsFace, assistantLive, archiveTasks, historyApi)
   ctx.effect(() => ctx.webServer.register({
