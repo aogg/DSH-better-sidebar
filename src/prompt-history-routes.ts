@@ -3,85 +3,87 @@
  * history.annotationsGet / history.annotationsUpdate），由 src/index.ts 的
  * buildApi 合入 api 记录、经 /sidebar/api 分发器按方法名调用。
  *
- * 读路径：发送记录本身**不持久化**，每次从宿主 `sessionPersistence` 现读——
- * - 会话范围优先 `persistence.list()`（宿主 listStoredHeaders 能力，特征探测，
- *   见 context-types.ts 的说明）；能力缺席或列取失败时静默降级为当前会话
- *   （payload 的 sessionId），绝不抛错；
- * - 会话日志可能很大：持久读取走 `handle.read(offset, length)` 分页窗口
- *   （每窗 {@link HISTORY_READ_WINDOW} 条事件），逐窗抽取 user/message 后即
- *   释放，只保留最近 {@link HISTORY_SESSION_RECORDS} 条，绝不把整份日志一次
- *   性拉进内存；活会话优先进程内快照（那份数组本就驻留，只做 O(n) 扫描），
- *   与 changes.ops 的取舍一致；
- * - 种子切在 prompt-history-extract.ts（session/end-seed 标记 +
- *   inheritedEventCount 双保险），fork 子会话不会把父会话的消息重复记账。
+ * 读路径（history.list）：发送记录在服务端持久仓里（prompt-history-persist.ts，
+ * `<存储根>/prompt-history/records/<projectKey>.jsonl` + 内存索引），路由只做
+ * 三件事：
+ * - 解析当前会话的项目根（prompt-history-live.ts 的 resolveProjectRootOf，
+ *   活会话头 → 持久头 → 活跃 worktree）并算出 projectKey——项目过滤在服务端
+ *   做完，返回的只有当前项目的记录；
+ * - 懒触发种子扫描（prompt-history-live.ts 的 kick：内存无该项目时后台扫，
+ *   路由立即返回现有内容 + `seeding:true`，绝不让首屏等扫描）；
+ * - 从内存索引出「新→旧」分页（复合键游标 `${time}:${sessionId}:${seq}`，
+ *   见 prompt-history-persist.ts 的 historyPageOf；跨会话平铺，limit 默认
+ *   50、上限 200）。
  *
- * 写路径：评论/标签/关联组存插件服务端 JSON 文件 {@link historyStorePath}
- * （DSH_HOME 优先，同 search-debug.ts 的解析顺序；宿主没有插件数据目录
- * API，这是任务约定的落点），tmp 兄弟文件 + rename 原子写（同
- * fs-operations.ts 的上传落盘手法）。文件缺席/损坏时归一化为空库
- * （prompt-history-store.ts 的 normalizeAnnotations 逐字段防御），路由只记
- * 一条 warn。
+ * 项目根解析不出（无活会话头、无持久头）时降级为「只读当前会话」的瞬时抽取
+ * （活快照优先，持久日志分窗读，绝不落盘——没有可归属的 projectKey），
+ * `degraded:true`；持久层整个缺席时按旧契约抛 503 的 history-error（页签内联
+ * 展示）。
  *
- * 降级边界：宿主 persistence 服务整个缺席时 history.list 抛 503 的
- * history-error（页签内联展示）；读会话失败逐会话跳过（坏日志不拖垮整个
- * 列表）；注解写盘失败抛 history-error 由页签内联提示——除此之外没有向上
- * 传播的失败，绝不未捕获。
+ * 写路径：评论/标签/关联组存持久仓的 `<根>/prompt-history/annotations.json`
+ * （形状与旧版一致；旧版小写目录下的文件由持久仓一次性搬入），tmp + rename
+ * 原子写。文件缺席/损坏时归一化为空库（prompt-history-store.ts 的
+ * normalizeAnnotations 逐字段防御），磁盘读失败只降级；写失败抛 history-error
+ * 由页签内联提示。
+ *
+ * 降级边界：除此之外没有向上传播的失败——prefs 读失败/磁盘不可写/种子扫描
+ * 失败都由持久仓与扫描器记 warn 后继续，绝不未捕获。
  */
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
-import type { Context } from './context-types.ts'
-import { extractSendRecords, type HistorySendRecord } from './prompt-history-extract.ts'
+import type { Context, SidebarSessionEvent } from './context-types.ts'
+import { extractSendRecords, type HistorySendRecord, type HistorySourceEvent } from './prompt-history-extract.ts'
 import {
   applyAnnotationOp,
-  emptyAnnotations,
   HISTORY_ANNOTATION_OPS,
-  normalizeAnnotations,
   type HistoryAnnotationOp,
   type HistoryAnnotations,
 } from './prompt-history-store.ts'
+import {
+  defaultAnnotationsPath,
+  historyPageOf,
+  normalizeHistoryLimit,
+  projectKeyOf,
+  PromptHistoryStore,
+  type HistoryPage,
+} from './prompt-history-persist.ts'
+import {
+  createPromptHistoryLive,
+  HISTORY_READ_WINDOW,
+  HISTORY_READ_WINDOW_MAX,
+  type PromptHistoryLive,
+  resolveProjectRootOf,
+} from './prompt-history-live.ts'
 import { SidebarError } from './wire.ts'
 
-/** 「历史发送」路由的 wire 方法名 → 处理器签名（合入 api 记录的形状）。 */
+/** 「历史发送」路由的 wire 方法名 → 处理器签名（合入 api 记录的形状）。
+ *  wire 契约固定：客户端按这些字段名实现，勿改名。 */
 export interface HistoryRoutes {
-  /** 跨会话的用户发送记录（会话范围见模块注释；limit 为单会话条数上限）。 */
-  'history.list'(payload: unknown): Promise<{
-    available: true
-    sessions: { id: string; cwd?: string; records: HistorySendRecord[]; truncated: boolean }[]
-    /** 会话枚举降级成了当前会话（宿主没有 list 能力或列取失败）。 */
-    degraded: boolean
-  }>
+  /** 当前项目的用户发送记录（新→旧平铺；分页见 HistoryListResult）。 */
+  'history.list'(payload: unknown): Promise<HistoryListResult>
   /** 注解库全量（评论/标签/关联组，记录 key → 注解）。 */
   'history.annotationsGet'(payload: unknown): Promise<HistoryAnnotations>
   /** 归并一个注解写操作，返回写后的全量注解库。 */
   'history.annotationsUpdate'(payload: unknown): Promise<HistoryAnnotations>
 }
 
-/** 持久读取的事件窗口（每窗条数；整份日志从不整段驻留）。 */
-const HISTORY_READ_WINDOW = 1000
+/** history.list 的入参：当前会话（定位项目）+ 分页游标/条数。 */
+export interface HistoryListPayload {
+  sessionId?: string
+  /** 上页返回的 nextCursor；缺省从最新一页开始。 */
+  cursor?: string
+  /** 单页条数（默认 50，上限 200）。 */
+  limit?: number
+}
 
-/** 单会话最多读多少窗（1000×100 = 10 万事件的防御上限，超出置 truncated）。 */
-const HISTORY_READ_WINDOW_MAX = 100
-
-/** 默认单会话返回条数（payload.limit 可在 1..200 内调整）。 */
-export const HISTORY_SESSION_RECORDS = 50
-
-/** 单会话返回条数的硬上限。 */
-export const HISTORY_SESSION_RECORDS_MAX = 200
-
-/** 默认扫描多少个会话（list 顺序即宿主存储序；payload.sessionLimit 可调整）。 */
-export const HISTORY_SESSION_SCAN = 40
-
-/** 会话扫描数的硬上限。 */
-export const HISTORY_SESSION_SCAN_MAX = 200
-
-/** 事件信封的最小结构面（宿主 SessionEvent 与宽松夹具都能进来）。 */
-interface HistoryWireEvent {
-  type: string
-  seq: number
-  time: number
-  data: Record<string, unknown>
+/** history.list 的出参（wire 契约，客户端按此实现）。 */
+export interface HistoryListResult extends HistoryPage {
+  available: true
+  /** 种子扫描进行中（首屏立即返回现有内容，扫描完成后客户端再拉即可）。 */
+  seeding: boolean
+  /** 命中的项目根（解析不出时本字段缺席，记录来自当前会话的瞬时抽取）。 */
+  project?: { cwd: string }
+  /** 会话枚举降级成了当前会话（宿主没有 list 能力或列取失败）。 */
+  degraded?: boolean
 }
 
 /** 本路由消费的 sessionPersistence 结构面（open 必备，list 特征探测）。 */
@@ -96,141 +98,14 @@ interface HistoryPersistenceFace {
 }
 
 /**
- * 注解库的磁盘落点：`$DSH_HOME/plugins/dsh-better-sidebar/prompt-history.json`，
- * DSH_HOME 未设时 `~/.dsh`（与 search-debug.ts 的解析顺序一致）。
+ * 注解库的默认磁盘落点：`<DSH_HOME||~/.dsh>/plugins/DSH-better-sidebar/
+ * prompt-history/annotations.json`（与 search-debug.ts 的解析顺序一致）。
+ * 注意：用户配置了 `historyStoragePath` 时实际落点在其自定义根下——本函数只
+ * 回答默认根（测试与诊断用；旧版语义是 `plugins/dsh-better-sidebar/
+ * prompt-history.json` 小写目录，由持久仓一次性迁移）。
  */
 export function historyStorePath(env: { DSH_HOME?: string | undefined } = process.env): string {
-  const home = env.DSH_HOME !== undefined && env.DSH_HOME.trim() !== '' ? env.DSH_HOME.trim() : join(homedir(), '.dsh')
-  return join(home, 'plugins', 'dsh-better-sidebar', 'prompt-history.json')
-}
-
-/** 从磁盘读注解库：缺席→空库；损坏→空库 + warn（半损坏不丢另一半已由
- *  normalizeAnnotations 逐字段防御，这里挡的是整体不可解析）。 */
-async function readAnnotations(path: string, warn?: (message: string, error?: unknown) => void): Promise<HistoryAnnotations> {
-  let text: string
-  try {
-    text = await readFile(path, 'utf8')
-  } catch {
-    // 首次使用文件还不存在：空库就是正确答案，不是错误。
-    return emptyAnnotations()
-  }
-  try {
-    return normalizeAnnotations(JSON.parse(text))
-  } catch (error) {
-    warn?.('dsh-better-sidebar: prompt-history.json is not valid JSON; starting from an empty annotation store', error)
-    return emptyAnnotations()
-  }
-}
-
-/** 原子落盘：同目录 tmp 兄弟文件（随机名防撞）写好后 rename 到位。 */
-async function writeAnnotations(path: string, store: HistoryAnnotations): Promise<void> {
-  const dir = dirname(path)
-  await mkdir(dir, { recursive: true })
-  const tmp = join(dir, `.prompt-history-${randomUUID()}.tmp`)
-  await writeFile(tmp, `${JSON.stringify(store, null, 2)}\n`, 'utf8')
-  try {
-    await rename(tmp, path)
-  } catch (error) {
-    // rename 失败时 tmp 已成孤儿，先清掉再上抛（错误由调用方内联展示）。
-    await rm(tmp).catch(() => {})
-    throw error
-  }
-}
-
-/** 收尾：升序收集的记录取最近 limit 条、倒序交付（UI 组内最近在上）。 */
-function trimToLimit(
-  collected: HistorySendRecord[],
-  limit: number,
-  truncatedSoFar: boolean,
-): { records: HistorySendRecord[]; truncated: boolean } {
-  const ordered = [...collected].sort((a, b) => a.time - b.time || a.seq - b.seq)
-  const truncated = truncatedSoFar || ordered.length > limit
-  return { records: ordered.slice(Math.max(0, ordered.length - limit)).reverse(), truncated }
-}
-
-/**
- * 从一个会话抽取发送记录：活快照优先（快照本就驻留进程内，只做 O(n) 扫描），
- * 持久分页读兜底。会话读不出来时上抛，由调用方逐会话跳过。
- */
-async function recordsOfSession(
-  ctx: Context,
-  persistence: HistoryPersistenceFace,
-  sessionId: string,
-  limit: number,
-): Promise<{ records: HistorySendRecord[]; truncated: boolean }> {
-  const live = ctx.sessions.get(sessionId)
-  if (live !== undefined) {
-    // 与持久路径同一收尾：最近在前（wire 顺序即组内展示顺序）。
-    const extracted = extractSendRecords(sessionId, live.snapshotEvents(), { limit })
-    return trimToLimit(extracted.records, limit, extracted.truncated)
-  }
-  const handle = await persistence.open(sessionId, 'read')
-  try {
-    const inherited = typeof handle.inheritedEventCount === 'number' ? handle.inheritedEventCount : 0
-    const collected: HistorySendRecord[] = []
-    let truncated = false
-    // 分页窗口逐段抽取：seq 连续，下一窗从 last+1 起；读不满一窗即到底。
-    // 每窗带一次种子切（inheritedEventCount 只在首窗有意义），窗口内先不限量
-    // （≤1000 条），归并后随时裁到最近 limit 条，内存有界。
-    let offset = 0
-    for (let page = 0; page < HISTORY_READ_WINDOW_MAX; page++) {
-      const { events } = await handle.read(offset, HISTORY_READ_WINDOW)
-      const windowEvents = events as readonly HistoryWireEvent[]
-      const windowRecords = extractSendRecords(sessionId, windowEvents, {
-        inheritedEventCount: offset === 0 ? inherited : 0,
-      }).records
-      collected.push(...windowRecords)
-      if (collected.length > limit) {
-        collected.sort((a, b) => a.time - b.time || a.seq - b.seq)
-        collected.splice(0, collected.length - limit)
-        truncated = true
-      }
-      if (events.length < HISTORY_READ_WINDOW) return trimToLimit(collected, limit, truncated)
-      const lastSeq = (events as { seq?: number }[]).at(-1)?.seq
-      if (typeof lastSeq !== 'number') {
-        // 窗口读满却拿不到最后 seq（异常信封）：无法继续分页，按截断收尾。
-        return trimToLimit(collected, limit, true)
-      }
-      offset = lastSeq + 1
-    }
-    return trimToLimit(collected, limit, true)
-  } finally {
-    await handle.close()
-  }
-}
-
-/** 读会话范围：list 能力优先，缺席/失败/空列表降级到 payload 的当前会话。 */
-async function sessionScopeOf(
-  ctx: Context,
-  persistence: HistoryPersistenceFace | undefined,
-  fallbackSessionId: string | undefined,
-  sessionLimit: number,
-): Promise<{ ids: string[]; cwds: Map<string, string | undefined>; degraded: boolean }> {
-  if (persistence?.list !== undefined) {
-    try {
-      const listed = await persistence.list()
-      const ids: string[] = []
-      const cwds = new Map<string, string | undefined>()
-      for (const row of listed) {
-        const header = row?.header
-        const id = header?.id
-        if (typeof id !== 'string' || id === '' || ids.includes(id)) continue
-        const cwd = header.cwd
-        ids.push(id)
-        cwds.set(id, typeof cwd === 'string' && cwd !== '' ? cwd : undefined)
-        if (ids.length >= sessionLimit) break
-      }
-      if (ids.length > 0) return { ids, cwds, degraded: false }
-    } catch (error) {
-      ctx.logger?.warn?.('dsh-better-sidebar: stored session header list failed; prompt history degrades to the current session')
-      ctx.logger?.warn?.(error)
-    }
-  }
-  // 降级：只读当前会话（宿主没有 list 能力 / 列取失败 / 列表为空）。
-  if (fallbackSessionId === undefined || fallbackSessionId === '') {
-    return { ids: [], cwds: new Map(), degraded: true }
-  }
-  return { ids: [fallbackSessionId], cwds: new Map(), degraded: true }
+  return defaultAnnotationsPath(env)
 }
 
 /** op 的 wire 校验：op 名可识别 + 必填字段是非空字符串；其余字段交给
@@ -271,58 +146,111 @@ function parseAnnotationOp(payload: unknown): HistoryAnnotationOp {
   }
 }
 
+/** 项目根解析不出时的瞬时读：只读当前会话（活快照优先，持久日志分窗读），
+ *  绝不落盘。返回已分好页的一页。 */
+async function transientPageOf(
+  ctx: Context,
+  persistence: HistoryPersistenceFace,
+  sessionId: string | undefined,
+  cursor: string | undefined,
+  limit: number,
+): Promise<HistoryPage> {
+  const collected: HistorySendRecord[] = []
+  if (sessionId !== undefined) {
+    const live = ctx.sessions.get(sessionId) as { snapshotEvents?: () => readonly SidebarSessionEvent[] } | undefined
+    const snapshot = typeof live?.snapshotEvents === 'function' ? live.snapshotEvents() : undefined
+    if (snapshot !== undefined) {
+      collected.push(...extractSendRecords(sessionId, snapshot as readonly HistorySourceEvent[]).records)
+    } else {
+      // 分窗读持久日志：窗口 1000×100 的防御上限，逐窗抽取后即释放。
+      try {
+        const handle = await persistence.open(sessionId, 'read')
+        try {
+          const inherited = typeof handle.inheritedEventCount === 'number' ? handle.inheritedEventCount : 0
+          let offset = 0
+          for (let page = 0; page < HISTORY_READ_WINDOW_MAX; page++) {
+            const { events } = await handle.read(offset, HISTORY_READ_WINDOW)
+            collected.push(...extractSendRecords(sessionId, events as readonly HistorySourceEvent[], {
+              inheritedEventCount: offset === 0 ? inherited : 0,
+            }).records)
+            if (events.length < HISTORY_READ_WINDOW) break
+            const lastSeq = (events as { seq?: unknown }[]).at(-1)?.seq
+            if (typeof lastSeq !== 'number' || !Number.isSafeInteger(lastSeq)) break
+            offset = lastSeq + 1
+          }
+        } finally {
+          await handle.close()
+        }
+      } catch {
+        // 读不出的日志按空列表处理（瞬时读没有可升级的失败面）。
+      }
+    }
+  }
+  return historyPageOf(collected, cursor, limit)
+}
+
+/** buildPromptHistoryApi 的依赖注入口（测试注入内存实现；缺省自建）。 */
+export interface PromptHistoryApiDeps {
+  /** 发送记录 + 注解库持久仓。 */
+  store?: PromptHistoryStore
+  /** 种子扫描 + 实时记录器（缺省自建并订阅 ctx.on）。 */
+  live?: PromptHistoryLive
+}
+
 /**
  * 组装「历史发送」路由（key 即 /sidebar/api 的完整方法名）。宿主 persistence
- * 缺席时 history.list 抛 503 的 history-error（页签内联展示），注解路由只在
- * 磁盘读写失败时抛 history-error。
+ * 缺席且项目根解析不出时 history.list 抛 503 的 history-error（页签内联展示），
+ * 注解路由只在磁盘写失败时抛 history-error。
  */
-export function buildPromptHistoryApi(ctx: Context): HistoryRoutes {
-  const path = historyStorePath()
+export function buildPromptHistoryApi(ctx: Context, deps: PromptHistoryApiDeps = {}): HistoryRoutes {
   const warn = (message: string, error?: unknown): void => {
     ctx.logger?.warn?.(message)
     if (error !== undefined) ctx.logger?.warn?.(error)
   }
+  const store = deps.store ?? new PromptHistoryStore({ logger: { warn } })
+  const live = deps.live ?? createPromptHistoryLive(ctx, store, { logger: { warn } })
   return {
     'history.list': async (payload: unknown) => {
-      const record = (payload ?? {}) as { sessionId?: unknown; limit?: unknown; sessionLimit?: unknown }
-      const persistence = ctx.get('sessionPersistence') as HistoryPersistenceFace | undefined
-      if (persistence === undefined) {
-        throw new SidebarError('history-error', 'the session persistence service is unavailable', 503)
-      }
-      const fallbackSessionId = typeof record.sessionId === 'string' && record.sessionId !== ''
-        ? record.sessionId
-        : undefined
-      const limit = typeof record.limit === 'number' && Number.isSafeInteger(record.limit) && record.limit > 0
-        ? Math.min(record.limit, HISTORY_SESSION_RECORDS_MAX)
-        : HISTORY_SESSION_RECORDS
-      const sessionLimit = typeof record.sessionLimit === 'number' && Number.isSafeInteger(record.sessionLimit) && record.sessionLimit > 0
-        ? Math.min(record.sessionLimit, HISTORY_SESSION_SCAN_MAX)
-        : HISTORY_SESSION_SCAN
-      const scope = await sessionScopeOf(ctx, persistence, fallbackSessionId, sessionLimit)
-      const sessions: { id: string; cwd?: string; records: HistorySendRecord[]; truncated: boolean }[] = []
-      for (const id of scope.ids) {
-        try {
-          const { records, truncated } = await recordsOfSession(ctx, persistence, id, limit)
-          // 没有任何用户发送的会话不出组（空组没有可展示的东西）。
-          if (records.length === 0) continue
-          const cwd = scope.cwds.get(id)
-          sessions.push({ id, ...(cwd !== undefined ? { cwd } : {}), records, truncated })
-        } catch (error) {
-          // 逐会话跳过：一份坏日志/一个读不出的句柄不能拖垮整个列表。
-          warn(`dsh-better-sidebar: session "${id}" could not be read for prompt history; skipped`, error)
+      const record = (payload ?? {}) as HistoryListPayload
+      const sessionId = typeof record.sessionId === 'string' && record.sessionId !== '' ? record.sessionId : undefined
+      const cursor = typeof record.cursor === 'string' && record.cursor !== '' ? record.cursor : undefined
+      const limit = normalizeHistoryLimit(record.limit)
+      const root = await resolveProjectRootOf(ctx, sessionId)
+      if (root === undefined) {
+        // 项目根解析不出：无从归属项目，退化为只读当前会话的瞬时抽取。
+        const persistence = ctx.get('sessionPersistence') as HistoryPersistenceFace | undefined
+        if (persistence === undefined) {
+          throw new SidebarError('history-error', 'the session persistence service is unavailable', 503)
         }
+        const page = await transientPageOf(ctx, persistence, sessionId, cursor, limit)
+        return { available: true, ...page, seeding: false, degraded: true }
       }
-      return { available: true, sessions, degraded: scope.degraded }
+      const projectKey = projectKeyOf(root)
+      // 懒触发种子扫描（后台跑，绝不等待）；随后只做本地读：磁盘 JSONL 的
+      // 载入是快路径，扫描本身永远不等。
+      live.kick(projectKey, root, sessionId)
+      const entry = await store.loadProject(projectKey)
+      const page = historyPageOf(entry.records, cursor, limit)
+      const degraded = live.degradedOf(projectKey)
+      return {
+        available: true,
+        records: page.records,
+        ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+        hasMore: page.hasMore,
+        seeding: live.isSeeding(projectKey),
+        project: { cwd: root },
+        ...(degraded !== undefined ? { degraded } : {}),
+      }
     },
 
-    'history.annotationsGet': async () => readAnnotations(path, warn),
+    'history.annotationsGet': async () => store.annotations(),
 
     'history.annotationsUpdate': async (payload: unknown) => {
       const op = parseAnnotationOp(payload)
-      const store = await readAnnotations(path, warn)
-      const next = applyAnnotationOp(store, op)
+      const current = await store.annotations()
+      const next = applyAnnotationOp(current, op)
       try {
-        await writeAnnotations(path, next)
+        await store.writeAnnotations(next)
       } catch (error) {
         throw new SidebarError(
           'history-error',

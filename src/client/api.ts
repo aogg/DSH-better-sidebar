@@ -29,13 +29,30 @@ import type { WorkflowRunView } from '../workflow-runs.ts'
 import type { HistorySendRecord } from '../prompt-history-extract.ts'
 import type { HistoryAnnotationOpInput, HistoryAnnotations } from '../prompt-history-store.ts'
 
-/** The `history.list` response: the cross-session user-prompt records. */
+/**
+ * The `history.list` response: ONE FLAT PAGE of the current project's
+ * user-prompt records. The page is a composite new→old sequence across
+ * sessions (the chat-style tab re-groups it client-side); `nextCursor` is
+ * opaque — pass it straight back as `historyList({ cursor })` for the next
+ * page. While the host is still indexing (`seeding: true`) the first page
+ * grows under repeated cursor-less calls — the client polls until it flips.
+ */
 export interface HistoryListResult {
   available: true
-  sessions: { id: string; cwd?: string; records: HistorySendRecord[]; truncated: boolean }[]
-  /** The session enumeration degraded to the current session (the host has
-   *  no stored-header list capability, or listing failed host-side). */
-  degraded: boolean
+  /** This page's records, new→old across sessions (composite order). */
+  records: HistorySendRecord[]
+  /** Opaque cursor for the next page; absent/undefined when exhausted. */
+  nextCursor?: string
+  /** Whether another page exists behind `nextCursor`. */
+  hasMore: boolean
+  /** The host's index is still being seeded: cursor-less calls keep
+   *  returning new records, so the client polls the first page until false. */
+  seeding: boolean
+  /** The project scope the listing is bound to (its workspace root). */
+  project?: { cwd: string }
+  /** The listing degraded to the current session only (the host could not
+   *  enumerate the project's other sessions). */
+  degraded?: boolean
 }
 
 /** One wire failure. */
@@ -740,11 +757,12 @@ export const api = {
       ...(expectedRevision !== undefined ? { expectedRevision } : {}),
     }),
   /**
-   * 「历史发送」：跨会话的用户发送记录（发送记录本身不持久化，宿主每次从
-   * 会话日志现读；单会话默认只回最近 50 条，`truncated` 标记超出）。宿主
-   * 没有 persistence 服务时抛 503 `history-error`（页签内联降级提示）。
+   * 「历史发送」：当前项目的跨会话用户发送记录，新→旧平铺分页（`cursor`
+   * 翻页透传 {@link HistoryListResult.nextCursor}；`seeding` 期间不带
+   * cursor 重拉首页会合并出新记录）。宿主没有 persistence 服务时抛 503
+   * `history-error`（页签内联降级提示）。
    */
-  historyList: (payload: { sessionId?: string; limit?: number } = {}) =>
+  historyList: (payload: { sessionId?: string; cursor?: string; limit?: number } = {}) =>
     call<HistoryListResult>('history.list', payload),
   /** 「历史发送」注解库全量（评论/标签/关联组，记录 key → 注解）。 */
   historyAnnotationsGet: () =>

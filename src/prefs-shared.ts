@@ -116,6 +116,13 @@ export interface SidebarPrefs {
    */
   customCss: string
   /**
+   * Storage root for the prompt-history records and this plugin's own data
+   * (empty = the stock default, `~/.dsh/plugins/DSH-better-sidebar/`); the
+   * host migrates the old data when it changes. Kept here so the client
+   * settings row and the host schema share one typed name.
+   */
+  historyStoragePath: string
+  /**
    * Whether the HTML previewer drops its sandboxed iframe. Sandbox ON (the
    * default) renders previewed HTML in an opaque-origin iframe that cannot
    * touch the GUI; turning it OFF runs the previewed page with the GUI's
@@ -212,6 +219,7 @@ export const SIDEBAR_PREFS_DEFAULTS: SidebarPrefs = {
   explorerGitBadges: true,
   explorerExclude: [...EXPLORER_EXCLUDE_DEFAULTS],
   customCss: '',
+  historyStoragePath: '',
   htmlViewerNoSandbox: false,
   htmlViewerDefaultUnsafe: false,
   rightbarOpenOnNewSession: true,

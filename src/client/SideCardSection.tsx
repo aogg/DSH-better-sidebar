@@ -521,6 +521,44 @@ function CssDraft(props: {
 }
 
 /**
+ * The prompt-history storage-path input (the 常规 group's one text row):
+ * a controlled input whose draft is local state, committed on blur/Enter
+ * through the parent's applyPref (empty = the stock default path). Keyed by
+ * the stored value so an external commit remounts it with the canonical
+ * text (same pattern as TypedRow / CssDraft).
+ */
+function HistoryStoragePathDraft(props: {
+  value: string
+  onCommit: (raw: string) => void
+  label: string
+  placeholder?: string
+}) {
+  const { value, onCommit, label, placeholder } = props
+  const [draft, setDraft] = useState(value)
+  const commit = (): void => {
+    const trimmed = draft.trim()
+    if (trimmed === value) return
+    onCommit(trimmed)
+  }
+  return (
+    <Input
+      type="text"
+      className={css.typedInput}
+      value={draft}
+      placeholder={placeholder}
+      aria-label={label}
+      spellCheck={false}
+      data-dsh-history-storage-path=""
+      onChange={event => { setDraft(event.currentTarget.value) }}
+      onBlur={commit}
+      onKeyDown={event => {
+        if (event.key === 'Enter') event.currentTarget.blur()
+      }}
+    />
+  )
+}
+
+/**
  * The reusable dropdown — the primitives Menu, NOT a native <select>: a
  * closed anchor button (picked option text + chevron) opening one Menu item
  * per option (big-icon cards when any option carries an icon). Single-pick
@@ -994,6 +1032,11 @@ export function SideCardSection({ store, service }: SideCardSectionProps) {
     applyPref({ customCss: raw })
   }
 
+  /** Commit the prompt-history storage path (empty = the stock default). */
+  const commitHistoryStoragePath = (raw: string): void => {
+    applyPref({ historyStoragePath: raw })
+  }
+
   /** Persist one plugin-owned setting of one descriptor (merged into the pluginSettings blob). */
   const applyPluginSetting = (descriptorId: string, key: string, value: unknown): void => {
     applyPref({ pluginSettings: mergePluginSetting(optimisticRef.current.pluginSettings, descriptorId, key, value) })
@@ -1191,6 +1234,25 @@ export function SideCardSection({ store, service }: SideCardSectionProps) {
             checked={prefs.agentOpenTools}
             onChange={(next) => { applyPref({ agentOpenTools: next }) }}
           />
+        </div>
+        {/* 历史发送存储路径: one text row (empty = the stock default under
+            ~/.dsh/plugins/DSH-better-sidebar/). The host migrates the old
+            data when the path changes; committed through the same optimistic
+            applyPref pipeline as every other row. */}
+        <div className={css.row}>
+          <span className={css.rowText}>
+            <span className={css.title}>{t('historyStoragePathLabel')}</span>
+            <span className={css.desc}>{t('historyStoragePathDesc')}</span>
+          </span>
+          <span className={css.control}>
+            <HistoryStoragePathDraft
+              key={prefs.historyStoragePath}
+              value={prefs.historyStoragePath}
+              label={t('historyStoragePathLabel')}
+              placeholder={t('historyStoragePathPlaceholder')}
+              onCommit={commitHistoryStoragePath}
+            />
+          </span>
         </div>
       </div>
 

@@ -6,10 +6,12 @@
  * frames never reach `onFrame`, whose answer-carrying cwd frames reach
  * `onFrame` with their answer fields intact, whose phase frames pass through
  * with their blank answer intact (`blank:true` = watch-time "still waiting",
- * `blank:false` = the flip), whose open/close transitions reach the optional
- * `onState` signal (observability only — the session hooks stay connected
- * either way), and whose reconnects back off 1s → 15s until disposed (then
- * nothing re-opens).
+ * `blank:false` = the flip), whose `history` frames (freshly indexed
+ * user-prompt records, the prompt-history tab's live feed) pass through with
+ * their records payload intact, whose open/close transitions reach the
+ * optional `onState` signal (observability only — the session hooks stay
+ * connected either way), and whose reconnects back off 1s → 15s until
+ * disposed (then nothing re-opens).
  */
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -205,6 +207,26 @@ describe('connectSessionPush', () => {
       expect(onFrame).toHaveBeenCalledTimes(2)
       expect(onFrame).toHaveBeenNthCalledWith(1, { kind: 'phase', sessionId: 't1', blank: true })
       expect(onFrame).toHaveBeenNthCalledWith(2, { kind: 'phase', sessionId: 't1', blank: false })
+    } finally {
+      dispose()
+    }
+  })
+
+  it('passes history frames through with their records payload intact', () => {
+    const onFrame = vi.fn()
+    const dispose = connectSessionPush(['t1'], onFrame)
+    try {
+      const socket = socketAt(0)
+      socket.open()
+      // The records array rides the frame verbatim (same shape `history.list`
+      // answers): which session is "mine" and how to merge the records stay
+      // the prompt-history tab's business.
+      const records = [{ key: 't1:9', sessionId: 't1', seq: 9, time: 1_700_000_000_000, text: 'hello', textTruncated: false }]
+      socket.frame({ kind: 'history', sessionId: 't1', records })
+      socket.frame({ kind: 'history', sessionId: 't9', records: [] })
+      expect(onFrame).toHaveBeenCalledTimes(2)
+      expect(onFrame).toHaveBeenNthCalledWith(1, { kind: 'history', sessionId: 't1', records })
+      expect(onFrame).toHaveBeenNthCalledWith(2, { kind: 'history', sessionId: 't9', records: [] })
     } finally {
       dispose()
     }

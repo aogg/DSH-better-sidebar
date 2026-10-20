@@ -61,7 +61,9 @@ import { buildSubagentLiveApi, type SidebarSubagentLiveRoutes } from './subagent
 import { buildTeamsApi, type SidebarTeamsRoutes } from './team-routes.ts'
 import { buildWorkflowsApi, type SidebarWorkflowRoutes } from './workflow-routes.ts'
 import { buildSidechatApi } from './sidechat-routes.ts'
-import { buildPromptHistoryApi } from './prompt-history-routes.ts'
+import { buildPromptHistoryApi, type HistoryRoutes } from './prompt-history-routes.ts'
+import { PromptHistoryStore } from './prompt-history-persist.ts'
+import { createPromptHistoryLive } from './prompt-history-live.ts'
 import { createAssistantLiveBuffer, type AssistantLiveBuffer } from './assistant-live.ts'
 import { readJsonBody, readTextBody, requireString, SidebarError, writeError, writeJson, writeOk } from './wire.ts'
 import { streamFileToResponse } from './file-stream.ts'
@@ -688,6 +690,7 @@ function buildApi(
   getSettings: () => SidebarSettingsFace | undefined,
   assistantLive: AssistantLiveBuffer,
   archiveTasks: ArchiveTasks,
+  historyApi: HistoryRoutes,
 ): Record<string, ApiMethod> {
   const cwdOf = async (payload: unknown, opts?: { fresh?: boolean }): Promise<{ sessionId: string; cwd: string }> => {
     const sessionId = requireString(payload, 'sessionId')
@@ -1373,12 +1376,15 @@ function buildApi(
     // there is no `teams.view` route (see src/team-routes.ts).
     'teams.taskCreate': (payload) => teamsApi.taskCreate(payload),
     'teams.taskUpdate': (payload) => teamsApi.taskUpdate(payload),
-    // Prompt history (the start page's 「历史发送」 tab): records are read
-    // fresh from the session logs on every list (never persisted by this
-    // plugin), while comments/tags/related-groups persist in the plugin's own
-    // JSON file (see src/prompt-history-routes.ts). Route keys ARE the wire
-    // method names, so the record spreads in like the side chat's.
-    ...buildPromptHistoryApi(ctx),
+    // Prompt history (the start page's 「历史发送」 tab): records live in the
+    // plugin's own persist store (per-project JSONL + watermarks, see
+    // src/prompt-history-persist.ts) — the route serves the CURRENT PROJECT
+    // from the in-memory index, kicks the first-hit seed scan in the
+    // background (`seeding:true`) and pages newest-first by composite cursor;
+    // comments/tags/related-groups persist beside the records in the same
+    // storage root. The store/recorder are built in apply() (the recorder's
+    // sink feeds the session-push hub) and injected here as `historyApi`.
+    ...historyApi,
     // The side card preferences. The settings service is optional in the
     // composition; while absent the routes report undefined and the client
     // keeps the schema defaults. Writes are revision-guarded: a stale editor
@@ -1740,7 +1746,27 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
   // an unmounted plugin must not leave orphan archives in the OS temp dir.
   const archiveTasks = createArchiveTasks()
   ctx.effect(() => () => { archiveTasks.dispose() }, 'dsh-better-sidebar: archive task table')
-  const api = buildApi(ctx, resolved, () => settingsFace, assistantLive, archiveTasks)
+  // ── 「历史发送」持久仓 + 种子扫描/实时记录 ─────────────────────────────
+  // 存储根每次操作前重查：Side 卡偏好 historyStoragePath（settings 服务在场
+  // 时读 live 配置，支持 ~ 展开），空/读取失败回落默认根。路径变更（含首次
+  // 配置）由持久仓负责旧数据 best-effort 搬迁与内存索引作废。settings 服务
+  // 缺席时读不到 prefs —— 回落默认根，与 settings 路由的降级同一口径。
+  const historyStorageRootPref = (): string => {
+    try {
+      const value = settingsFace?.get().value
+      const path = value !== null && typeof value === 'object'
+        ? (value as SidebarPrefs).historyStoragePath
+        : undefined
+      return typeof path === 'string' ? path : ''
+    } catch {
+      return ''
+    }
+  }
+  const historyStore = new PromptHistoryStore({ root: historyStorageRootPref, logger: ctx.logger })
+  const historyLive = createPromptHistoryLive(ctx, historyStore, { logger: ctx.logger })
+  ctx.effect(() => historyLive.dispose(), 'dsh-better-sidebar: prompt-history live recorder')
+  const historyApi = buildPromptHistoryApi(ctx, { store: historyStore, live: historyLive })
+  const api = buildApi(ctx, resolved, () => settingsFace, assistantLive, archiveTasks, historyApi)
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: '/sidebar/api',
@@ -2144,6 +2170,15 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
     },
   })
   ctx.effect(() => () => { sessionPush.dispose() }, 'dsh-better-sidebar: session push hub')
+  // The prompt-history recorder was built BEFORE this hub (the api table needs
+  // it), so the "new records" callback is attached here via a sink
+  // registration instead of a constructor argument — the same order problem
+  // the settings face solves with getSettings. The disposer unbinds the sink
+  // so a disposed hub never receives late pushes.
+  ctx.effect(
+    () => historyLive.onRecords((sessionId, records) => { sessionPush.notifyHistory(sessionId, records) }),
+    'dsh-better-sidebar: prompt-history push sink',
+  )
   ctx.effect(() => ctx.webServer.registerUpgrade({
     path: '/sidebar/ws/session',
     handler: (req, socket, head) => {

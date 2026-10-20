@@ -1,7 +1,8 @@
 /**
  * 「历史发送」纯逻辑之三：分组归并与过滤（src/prompt-history-groups.ts）。
- * 钉住：按会话归并（组内最近在上、组间按最近记录倒序）、文本搜索（大小写
- * 不敏感子串）与标签过滤（精确匹配、取数口注入）的交集语义、全库标签聚合。
+ * 钉住：按会话归并（组内旧→新的聊天顺序、组间按最近记录倒序）、文本搜索
+ * （大小写不敏感子串）与标签过滤（精确匹配、取数口注入）的交集语义、全库
+ * 标签聚合。
  */
 import { describe, expect, it } from 'vitest'
 import { collectHistoryTags, filterHistoryRecords, groupRecordsBySession } from '../src/prompt-history-groups.ts'
@@ -14,7 +15,7 @@ function record(sessionId: string, seq: number, text: string, time = 1_700_000_0
 }
 
 describe('prompt-history groups（分组归并）', () => {
-  it('平面记录按会话归并：组内最近在上，组间按最近记录倒序', () => {
+  it('平面记录按会话归并：组内旧→新（聊天顺序），组间按最近记录倒序', () => {
     const groups = groupRecordsBySession([
       record('b', 1, 'b1', 500),
       record('a', 1, 'a1', 900),
@@ -22,7 +23,7 @@ describe('prompt-history groups（分组归并）', () => {
       record('a', 2, 'a2', 800),
     ])
     expect(groups.map(group => group.sessionId)).toEqual(['b', 'a'])
-    expect(groups[0]!.records.map(item => item.seq)).toEqual([2, 1])
+    expect(groups[0]!.records.map(item => item.seq)).toEqual([1, 2])
     expect(groups[0]!.count).toBe(2)
     expect(groups[0]!.lastTime).toBe(1000)
     expect(groups[1]!.lastTime).toBe(900)
@@ -34,7 +35,7 @@ describe('prompt-history groups（分组归并）', () => {
       record('s', 5, '新', 0),
       record('s', 3, '中', 0),
     ])
-    expect(groups[0]!.records.map(item => item.seq)).toEqual([5, 3, 1])
+    expect(groups[0]!.records.map(item => item.seq)).toEqual([1, 3, 5])
     expect(groups[0]!.lastTime).toBe(5)
   })
 

@@ -127,6 +127,11 @@ export const PrefsSchema: z<SidebarPrefs> = z.object({
   // whereas the whole `pluginSettings` subtree is volatile-open and
   // accepted by old and new hosts alike (client-hmr deploys stay complete).
   pluginSettings: z.dict(z.dict(z.any())).default({}),
+  // 「历史发送」持久数据的存储根（host half 只读；空串 = 默认根
+  // `<DSH_HOME||~/.dsh>/plugins/DSH-better-sidebar/`）。放进 PrefsSchema.dict
+  // 即自动进入 volatilePrefs 的既有机制（该机制遍历 dict 逐字段 .volatile()），
+  // 无需额外处理。
+  historyStoragePath: z.string().default(''),
 })
 
 // ── The Loader row schema ───────────────────────────────────────────────────

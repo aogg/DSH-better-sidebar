@@ -10,7 +10,10 @@
  * route) whenever it could resolve one; the bare `{kind:'cwd', sessionId}`
  * variant — an older host, or a failed host-side resolution — carries no
  * answer, and the session hooks simply ignore it: the next tool/call burst
- * re-resolves and re-pushes over the same socket.
+ * re-resolves and re-pushes over the same socket. A third frame,
+ * `{kind:'history', sessionId, records}` (v0.28.0+), rides the same channel:
+ * it tells the prompt-history tab that fresh user-prompt records of a watched
+ * session were just indexed.
  *
  * This socket is the session hooks' ONLY data channel — there is no HTTP
  * polling beside it. A dropped socket is answered with reconnects that back
@@ -26,7 +29,7 @@ import { hostWebSocketUrl } from './host-route-url.ts'
 
 /** One host frame: which watched session changed, which fact — and maybe the answer. */
 export interface SessionPushFrame {
-  kind: 'phase' | 'cwd'
+  kind: 'phase' | 'cwd' | 'history'
   sessionId: string
   /**
    * phase frames carry the answer: `blank: false` is the one-shot flip, and a
@@ -43,6 +46,14 @@ export interface SessionPushFrame {
   cwd?: unknown
   root?: unknown
   parent?: unknown
+  /**
+   * history frames carry freshly indexed user-prompt records of THAT session
+   * (the same {@linkcode HistorySendRecord} shape the `history.list` route
+   * answers with): the prompt-history tab merges them into its list. The
+   * connector validates SHAPE only — whether the session is one the tab
+   * watches stays the caller's filter.
+   */
+  records?: unknown
 }
 
 /** How long to wait before re-opening a dropped socket; failures back off to the cap. */
@@ -93,7 +104,10 @@ export function connectSessionPush(
       }
       if (frame === null || typeof frame !== 'object') return
       // A malformed or foreign frame is a late/dirty notice, not an invalidation.
-      if ((frame.kind !== 'phase' && frame.kind !== 'cwd') || typeof frame.sessionId !== 'string') return
+      if (
+        (frame.kind !== 'phase' && frame.kind !== 'cwd' && frame.kind !== 'history')
+        || typeof frame.sessionId !== 'string'
+      ) return
       onFrame(frame)
     }
     socket.onclose = () => {

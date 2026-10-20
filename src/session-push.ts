@@ -33,6 +33,12 @@
  *   next tool/call burst re-resolves and re-pushes); the variant only exists
  *   so older answer-unaware clients keep their re-ask behavior working.
  *
+ * - `history`: `{kind:'history', sessionId, records}` pushed by
+ *   `notifyHistory` whenever the prompt-history recorder appends real-time
+ *   records for a session (index.ts wires the recorder's sink to it). Event
+ *   level, no one-shot/coalescing: each new record batch goes out to every
+ *   socket watching that session as-is.
+ *
  * Two frame kinds, two schedules: the blank flip is one-shot, so each socket
  * pushes at most one `blank:false` phase frame per session, ever (a burst of
  * message events must not spam the client's entry flip). A `tool/call` only
@@ -43,6 +49,7 @@
  */
 import type { WebSocket } from 'ws'
 import type { Context } from './context-types.ts'
+import type { HistorySendRecord } from './prompt-history-extract.ts'
 
 /** Coalescing window for `tool/call` (cwd) notices. */
 const CWD_DEBOUNCE_MS = 250
@@ -57,6 +64,8 @@ export type SessionPushFrame =
   | { kind: 'cwd'; sessionId: string }
   /** The answer itself, exactly what the `session.cwd` route would have returned. */
   | { kind: 'cwd'; sessionId: string; cwd: string; root: string; parent: string | null }
+  /** Freshly recorded prompt-history send records (event level, no coalescing). */
+  | { kind: 'history'; sessionId: string; records: HistorySendRecord[] }
 
 /** One resolved cwd answer, shaped like the `session.cwd` route's return value. */
 export interface SessionCwdAnswer {
@@ -99,6 +108,11 @@ interface WatchFrame {
 export interface SessionPushHub {
   /** Attach one accepted socket (reads its watch frames, pushes notices). */
   attach(ws: WebSocket): void
+  /**
+   * Push one batch of freshly recorded prompt-history records to every socket
+   * watching `sessionId` (event level: no one-shot set, no coalescing window).
+   */
+  notifyHistory(sessionId: string, records: readonly HistorySendRecord[]): void
   /** Release the event feed (socket teardown stays with the server). */
   dispose(): void
 }
@@ -116,7 +130,7 @@ export function createSessionPushHub(ctx: Context, options?: SessionPushHubOptio
   if (typeof ctx.on !== 'function') {
     // Test doubles without the event API still accept sockets, which then
     // simply never hear anything.
-    return { attach: () => {}, dispose: () => {} }
+    return { attach: () => {}, notifyHistory: () => {}, dispose: () => {} }
   }
   const offEvent = ctx.on('session/event', (session, event) => {
     const sessionId = (session as { id?: unknown } | null)?.id
@@ -143,6 +157,12 @@ export function createSessionPushHub(ctx: Context, options?: SessionPushHubOptio
         options?.resolvePhase,
       )
       sockets.add(socket)
+    },
+    notifyHistory: (sessionId, records) => {
+      // Event level, no one-shot/debounce: each record batch goes out as-is to
+      // every socket watching the session (unwatched sockets stay silent).
+      if (records.length === 0) return
+      for (const socket of sockets) socket.notifyHistory(sessionId, records)
     },
     dispose: () => {
       offEvent()
@@ -234,6 +254,19 @@ class SessionSocket {
     if (this.closed || !this.watched.has(sessionId) || this.phased.has(sessionId)) return
     this.phased.add(sessionId)
     this.send({ kind: 'phase', sessionId, blank: false })
+  }
+
+  /**
+   * Push one batch of freshly recorded prompt-history records. Event level:
+   * no one-shot set and no coalescing window — the prompt-history recorder's
+   * sink calls this on every append, and each batch goes out as-is to the
+   * sockets watching that session.
+   * @param sessionId - the session the records belong to.
+   * @param records - the newest-first send records just appended.
+   */
+  notifyHistory(sessionId: string, records: readonly HistorySendRecord[]): void {
+    if (this.closed || !this.watched.has(sessionId)) return
+    this.send({ kind: 'history', sessionId, records: [...records] })
   }
 
   /**

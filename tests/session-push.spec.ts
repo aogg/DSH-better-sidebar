@@ -563,3 +563,49 @@ describe('session push hub with a phase resolver', () => {
     hub.dispose()
   })
 })
+
+describe('session push hub: history frames', () => {
+  /** One prompt-history send record double. */
+  const historyRecord = {
+    key: 't1:7',
+    sessionId: 't1',
+    seq: 7,
+    time: 1_700_000_000_007,
+    text: '实时一问',
+    textTruncated: false,
+  }
+
+  it('pushes record batches to watched sockets only, event level (no coalescing)', () => {
+    const { ctx } = fakeCtx()
+    const hub = createSessionPushHub(ctx)
+    const watched = new FakeSocket()
+    const other = new FakeSocket()
+    watch(hub, watched, ['t1'])
+    watch(hub, other, ['t2'])
+
+    hub.notifyHistory('t1', [historyRecord])
+    expect(watched.frames()).toEqual([{ kind: 'history', sessionId: 't1', records: [historyRecord] }])
+    expect(other.frames()).toEqual([])
+
+    // Event level: every batch goes out as-is (empty batches are dropped at
+    // the hub, real batches are never merged or deduped).
+    hub.notifyHistory('t1', [])
+    hub.notifyHistory('t1', [historyRecord])
+    expect(watched.frames()).toHaveLength(2)
+    hub.dispose()
+  })
+
+  it('stops pushing after dispose and stays a no-op without the event API', () => {
+    const { ctx } = fakeCtx()
+    const hub = createSessionPushHub(ctx)
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+    hub.dispose()
+    expect(() => { hub.notifyHistory('t1', [historyRecord]) }).not.toThrow()
+    expect(socket.frames()).toEqual([])
+
+    const bare = createSessionPushHub({} as unknown as Context)
+    expect(() => { bare.notifyHistory('t1', [historyRecord]) }).not.toThrow()
+    bare.dispose()
+  })
+})

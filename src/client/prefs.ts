@@ -72,6 +72,9 @@ export function parsePrefs(value: unknown): SidebarPrefs {
     customCss: typeof record.customCss === 'string'
       ? record.customCss
       : SIDEBAR_PREFS_DEFAULTS.customCss,
+    historyStoragePath: typeof record.historyStoragePath === 'string'
+      ? record.historyStoragePath
+      : SIDEBAR_PREFS_DEFAULTS.historyStoragePath,
     htmlViewerNoSandbox: typeof record.htmlViewerNoSandbox === 'boolean'
       ? record.htmlViewerNoSandbox
       : SIDEBAR_PREFS_DEFAULTS.htmlViewerNoSandbox,

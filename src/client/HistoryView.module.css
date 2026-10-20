@@ -1,9 +1,12 @@
 /* History tab (历史发送): a bounded list panel that reads well in a narrow
  * right sidebar — a flat toolbar (search / tag filter / refresh /
  * multi-select), a related-groups block, then one section per session with
- * clamped prompt rows that expand in place. Every surface consumes DSW
- * tokens (fallbacks point at older alias tokens for rc-era hosts); no color
- * literals (tests/theme.spec.ts enforces both halves). */
+ * chat-ordered prompt rows (old→new) that expand in place. Records stream in
+ * one by one (the 2px load strip is the only first-open indicator), a thin
+ * pill announces seeding/live arrivals, and the load-more row pages on.
+ * Every surface consumes DSW tokens (fallbacks point at older alias tokens
+ * for rc-era hosts); no color literals (tests/theme.spec.ts enforces both
+ * halves). */
 
 .view {
   flex: 1;
@@ -79,6 +82,55 @@
 .note {
   color: var(--dsw-alias-label-tertiary);
   font-size: 12px;
+}
+
+/* 首开的轻量加载指示：一条 2px 的细进度条（不确定态来回滑动），
+ * 不占一屏、不阻塞列表——空列表照常渲染，记录随后逐条填充。 */
+.loadStrip {
+  position: relative;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--dsw-alias-hairline);
+  overflow: hidden;
+  flex: none;
+}
+
+.loadStrip::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 40%;
+  border-radius: 1px;
+  background: var(--dsw-alias-accent, var(--dsw-alias-brand-primary, var(--dsw-alias-label-tertiary)));
+  animation: historyLoadSlide 1.1s ease-in-out infinite;
+}
+
+@keyframes historyLoadSlide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(350%);
+  }
+}
+
+/* 实时状态条：seeding 索引中 / 新记录实时并入的轻提示（细边、次级文字）。 */
+.liveStrip {
+  padding: 3px 10px;
+  border: 1px solid var(--dsw-alias-hairline);
+  border-radius: 999px;
+  align-self: flex-start;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+/* 分页「加载更多」一行：居中的 ghost 按钮（加载中禁用 + 文案切换）。 */
+.loadMoreRow {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 2px;
 }
 
 .actionError {

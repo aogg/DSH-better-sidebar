@@ -4,7 +4,8 @@
  * 发送记录本身不持久化——服务端每次从会话日志现读，客户端拿到的是一张
  * 跨会话的平面记录表。本模块负责把平面表收敛成 UI 的两种视图形状：
  * - {@link groupRecordsBySession}：按所属会话归并成组（组头要的会话标识、
- *   最近时间、条数都在组上），组按最近一条记录的时间倒序；
+ *   最近时间、条数都在组上），组内按时间正序（旧→新的聊天顺序），组间按
+ *   最近一条记录的时间倒序；
  * - {@link filterHistoryRecords}：顶部文本搜索（大小写不敏感的子串）与
  *   标签过滤（任一命中即保留）都作用在平面上，先过滤再分组，空组不出现；
  * - {@link collectHistoryTags}：全库标签聚合（过滤条的 chips 来源，按名字
@@ -17,14 +18,14 @@
 import type { HistorySendRecord } from './prompt-history-extract.ts'
 import type { HistoryAnnotations } from './prompt-history-store.ts'
 
-/** 一个会话分组：组头字段 + 该组记录（时间倒序，最近在上）。 */
+/** 一个会话分组：组头字段 + 该组记录（时间正序，旧→新的聊天顺序）。 */
 export interface HistorySessionGroup {
   sessionId: string
   /** 该组最近一条记录的时间（epoch ms；空组不存在）。 */
   lastTime: number
   /** 记录条数（= records.length，组头展示用，展开语义上无歧义）。 */
   count: number
-  /** 组内记录（时间倒序）。 */
+  /** 组内记录（时间正序：一场对话按聊天顺序旧→新读）。 */
   records: HistorySendRecord[]
 }
 
@@ -34,7 +35,8 @@ function timeKeyOf(record: HistorySendRecord): number {
 }
 
 /**
- * 平面记录 → 会话分组（组内时间倒序，组间按最近记录倒序）。输入顺序无关，
+ * 平面记录 → 会话分组。组内是聊天顺序：时间正序（旧→新，一场对话从上往下
+ * 读）；组间按最近一条记录的时间倒序（最新的一场对话在最上）。输入顺序无关，
  * 输出只由记录内容决定。
  */
 export function groupRecordsBySession(records: readonly HistorySendRecord[]): HistorySessionGroup[] {
@@ -46,10 +48,10 @@ export function groupRecordsBySession(records: readonly HistorySendRecord[]): Hi
   }
   const groups: HistorySessionGroup[] = []
   for (const [sessionId, bucket] of bySession) {
-    const ordered = [...bucket].sort((a, b) => timeKeyOf(b) - timeKeyOf(a))
+    const ordered = [...bucket].sort((a, b) => timeKeyOf(a) - timeKeyOf(b))
     groups.push({
       sessionId,
-      lastTime: ordered.length > 0 ? timeKeyOf(ordered[0]!) : 0,
+      lastTime: ordered.length > 0 ? timeKeyOf(ordered[ordered.length - 1]!) : 0,
       count: ordered.length,
       records: ordered,
     })

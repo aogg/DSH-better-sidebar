@@ -43,6 +43,7 @@ describe('side card preferences', () => {
         explorerGitBadges: true,
         explorerExclude: ['.DS_Store', 'Thumbs.db'],
         customCss: '',
+        historyStoragePath: '',
         htmlViewerNoSandbox: false,
         htmlViewerDefaultUnsafe: false,
         rightbarOpenOnNewSession: true,
@@ -67,6 +68,7 @@ describe('side card preferences', () => {
         explorerGitBadges: true,
         explorerExclude: ['.DS_Store', 'Thumbs.db'],
         customCss: '',
+        historyStoragePath: '',
         htmlViewerNoSandbox: false,
         htmlViewerDefaultUnsafe: false,
         rightbarOpenOnNewSession: true,
@@ -91,6 +93,7 @@ describe('side card preferences', () => {
         explorerGitBadges: true,
         explorerExclude: ['.DS_Store', 'Thumbs.db'],
         customCss: '',
+        historyStoragePath: '',
         htmlViewerNoSandbox: false,
         htmlViewerDefaultUnsafe: false,
         rightbarOpenOnNewSession: true,
@@ -164,6 +167,13 @@ describe('side card preferences', () => {
     expect((await loadPrefs(wire({}))).customCss).toBe('')
     expect((await loadPrefs(wire({ customCss: 7 }))).customCss).toBe('')
     expect((await loadPrefs(wire({ customCss: 'html { }' }))).customCss).toBe('html { }')
+  })
+
+  it('defaults historyStoragePath to the empty string; only a stored string survives', async () => {
+    // Empty = the stock plugin-data directory; a malformed value falls back.
+    expect((await loadPrefs(wire({}))).historyStoragePath).toBe('')
+    expect((await loadPrefs(wire({ historyStoragePath: 7 }))).historyStoragePath).toBe('')
+    expect((await loadPrefs(wire({ historyStoragePath: '/data/dsh-history' }))).historyStoragePath).toBe('/data/dsh-history')
   })
 
   it('clamps the rightbar open ratio into the declared range; non-numbers fall to the default', async () => {
