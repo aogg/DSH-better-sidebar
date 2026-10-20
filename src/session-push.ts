@@ -1,19 +1,20 @@
 /**
  * Session-level push behind `/sidebar/ws/session`.
  *
- * The sidebar client learns two session-level facts by HTTP polling today:
- * whether the session is still blank (`session.phase`, 1s while blank) and
- * which workspace root the session is working in (`session.cwd`, 5s). The
- * host already knows the moment either changes: the session append feed
- * (`session/event`) carries every durable row, and a `user/message` /
- * `assistant/message` row is exactly the blank flip, while a `tool/call` row
- * is exactly the "the agent ran somewhere" signal the active-worktree scan
- * derives its answer from.
+ * The sidebar client learns two session-level facts through THIS socket only:
+ * whether the session is still blank and which workspace root the session is
+ * working in. The client never polls them over HTTP — a dropped socket is
+ * answered with reconnects (the client connector's 1s → 15s backoff), never
+ * with asks. The host already knows the moment either fact changes: the
+ * session append feed (`session/event`) carries every durable row, and a
+ * `user/message` / `assistant/message` row is exactly the blank flip, while a
+ * `tool/call` row is exactly the "the agent ran somewhere" signal the
+ * active-worktree scan derives its answer from.
  *
- * This hub turns those events into per-session frames. Both frame kinds now
+ * This hub turns those events into per-session frames. Both frame kinds
  * carry the ANSWER, each resolved through its injected resolver — the very
- * implementation the HTTP route serves, so pushed and polled answers can
- * never disagree:
+ * implementation the HTTP route serves, so the pushed answer and the route's
+ * can never disagree:
  *
  * - `phase`: a watch (re)subscription resolves the CURRENT phase and pushes
  *   `{kind:'phase', sessionId, blank}` — `blank:true` tells a freshly
@@ -23,23 +24,21 @@
  *   landing after the flip re-checks the one-shot set and is dropped, so a
  *   connected client never hears "non-blank, then blank again". A failed
  *   resolution pushes NOTHING — the phase has no bare invalidation form (the
- *   blank answer IS the "keep waiting" state); the 1s poll remains the
- *   dropped-socket fallback.
+ *   blank answer IS the "keep waiting" state).
  * - `cwd`: pushed on a watch (re)subscription and at the end of the 250ms
  *   tool/call coalescing window as `{kind:'cwd', sessionId, cwd, root,
  *   parent}`. A failed resolution, or a hub mounted without a resolver,
- *   degrades to the legacy bare `{kind:'cwd', sessionId}` invalidation,
- *   which the client answers with its own fresh re-ask — so the HTTP route
- *   stays the same source of truth and a dropped socket still self-heals
- *   through the same polls, now demoted to the offline fallback.
+ *   degrades to the legacy bare `{kind:'cwd', sessionId}` invalidation —
+ *   current clients IGNORE that bare frame and wait for the next push (the
+ *   next tool/call burst re-resolves and re-pushes); the variant only exists
+ *   so older answer-unaware clients keep their re-ask behavior working.
  *
  * Two frame kinds, two schedules: the blank flip is one-shot, so each socket
  * pushes at most one `blank:false` phase frame per session, ever (a burst of
  * message events must not spam the client's entry flip). A `tool/call` only
  * means the worktree scan MIGHT reach a different root, so it rides a 250ms
  * coalescing window (first trigger's window wins) and the frame's answer is
- * resolved with `fresh: true`, skipping the TTL cache the ordinary polls
- * rely on.
+ * resolved with `fresh: true`, skipping the 3s TTL cache.
  * @module dsh-better-sidebar/session-push
  */
 import type { WebSocket } from 'ws'
@@ -54,7 +53,7 @@ const MAX_WATCHED = 64
 export type SessionPushFrame =
   /** The phase answer: `blank:false` is the one-shot flip, `blank:true` the watch-time "still waiting". */
   | { kind: 'phase'; sessionId: string; blank: boolean }
-  /** Bare invalidation: no resolver, or the resolution failed — the client re-asks `session.cwd`. */
+  /** Bare invalidation: no resolver, or the resolution failed — current clients ignore it and wait for the next push. */
   | { kind: 'cwd'; sessionId: string }
   /** The answer itself, exactly what the `session.cwd` route would have returned. */
   | { kind: 'cwd'; sessionId: string; cwd: string; root: string; parent: string | null }
@@ -247,7 +246,7 @@ class SessionSocket {
    * watch answer vs. message event) must not produce a late frame, least of
    * all a `blank:true` that would regress a settled flip. A failed resolution
    * pushes NOTHING: the phase has no bare invalidation form (the blank answer
-   * is itself the "keep waiting" state), and the 1s poll stays the fallback.
+   * is itself the "keep waiting" state).
    */
   private pushPhaseAnswer(sessionId: string): void {
     const resolve = this.resolvePhase
@@ -278,8 +277,8 @@ class SessionSocket {
     if (this.closed || !this.watched.has(sessionId) || this.timers.has(sessionId)) return
     this.timers.set(sessionId, setTimeout(() => {
       this.timers.delete(sessionId)
-      // Without a resolver the frame stays the bare invalidation the client
-      // answers with its own fresh re-ask (the pre-answer-wire format).
+      // Without a resolver the frame stays the bare invalidation (the
+      // pre-answer-wire format, kept for older clients).
       if (this.resolveCwd === undefined) {
         this.send({ kind: 'cwd', sessionId })
         return
@@ -294,9 +293,10 @@ class SessionSocket {
    * sending: a socket that died, or a session the client watched away while
    * the answer was in flight, must not hear a late frame. A rejected
    * resolution (or a malformed one) degrades to the bare invalidation frame —
-   * the client answers THAT with a fresh `session.cwd` re-ask, i.e. the very
-   * route the resolver wraps, so the failure still self-heals end to end.
-   * This is the designed fallback path, not a silently swallowed error.
+   * current clients ignore THAT and simply wait for the next tool/call burst
+   * to re-resolve and re-push; the variant exists so older answer-unaware
+   * clients keep their re-ask behavior working. This is the designed
+   * degradation path, not a silently swallowed error.
    */
   private pushCwdAnswer(sessionId: string): void {
     const resolve = this.resolveCwd

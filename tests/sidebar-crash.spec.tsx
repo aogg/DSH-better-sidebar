@@ -58,15 +58,16 @@ interface MountedSidebar {
 }
 
 /** Roots still mounted when a test ends. `afterEach` unmounts them: wiping the
- *  DOM without unmounting leaves every effect cleanup un-run, and the 1s
- *  `session.phase` poller in `session-phase.ts` then outlives the test — it
- *  fires after jsdom is gone, React reads a missing `window` and the whole run
- *  is red on `Errors 1` even though every test passed. */
+ *  DOM without unmounting leaves every effect cleanup un-run, and an interval
+ *  armed by a mounted effect (the dock fallback's realign loop, for one) then
+ *  outlives the test — it fires after jsdom is gone, React reads a missing
+ *  `window` and the whole run is red on `Errors 1` even though every test
+ *  passed. */
 const mountedRoots: Array<() => void> = []
 
-/** Intervals created while a test runs. `session-phase.ts` polls through
- *  `setInterval`; a live id here after the roots are unmounted means some
- *  effect leaked a timer (see `mountedRoots`). */
+/** Intervals created while a test runs. The mounted shell arms several
+ *  `setInterval` loops; a live id here after the roots are unmounted means
+ *  some effect leaked a timer (see `mountedRoots`). */
 const liveIntervals = new Set<ReturnType<typeof setInterval>>()
 
 /** Mount the real Sidebar shell against a minimal context (real store + service). */
@@ -154,18 +155,17 @@ afterEach(() => {
 
 describe('test harness', () => {
   // The leak guard itself lives in `afterEach` (no interval may outlive a
-  // test). A poll that never settles keeps the 1s `session.phase` interval
-  // armed from mount to the end of the test — which is exactly the state the
-  // old harness (wipe the DOM, never unmount) leaked past teardown: the timer
-  // fired after jsdom was gone, React read a missing `window`, and an
+  // test). The mounted shell arms real intervals from mount (the dock
+  // fallback's 500ms realign loop among them) — which is exactly the state
+  // the old harness (wipe the DOM, never unmount) leaked past teardown: the
+  // timer fired after jsdom was gone, React read a missing `window`, and an
   // all-green run went red on `Errors 1`. The assertion below proves the
   // armed state was really reached, so this test cannot pass vacuously.
-  it('arms the session-phase poller, so afterEach has something to clear', () => {
-    vi.stubGlobal('fetch', () => new Promise(() => {}))
+  it('arms shell intervals at mount, so afterEach has something to clear', () => {
     mountSidebar()
     expect(
       liveIntervals.size,
-      'the hanging route must leave the poller armed',
+      'the mounted shell must leave an interval armed',
     ).toBeGreaterThan(0)
   })
 })

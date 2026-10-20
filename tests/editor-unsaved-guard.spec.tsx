@@ -31,8 +31,8 @@ setupReactAct()
 
 const fsRead = vi.fn()
 // Partial mock: only the reads this spec drives are stubbed. The sidebar shell
-// also touches `sessionPhase` / `api.sessionCwd` / the tree panel on mount, and
-// a wholesale replacement breaks them (`No "sessionPhase" export …`).
+// and the tree panel touch the api surface on mount (fsTree and friends), and
+// a wholesale replacement breaks them (missing-export errors at import time).
 vi.mock('../src/client/api.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/client/api.ts')>()
   return {

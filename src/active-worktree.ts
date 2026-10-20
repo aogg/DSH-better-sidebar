@@ -19,11 +19,12 @@
  *
  * Resolutions are cached process-wide, so re-asks are cheap after the first
  * scan. A caller that KNOWS the answer moved — the `/sidebar/ws/session` push
- * hub resolving a cwd frame's answer, or the client's fresh re-ask for a bare
- * legacy frame — passes `fresh` to skip the cached read and recompute
- * immediately (the push's own coalescing window bounds how often that
- * happens); the fresh scan still refreshes the cache, which the client's 5s
- * DROPPED-SOCKET fallback poll then reads for free.
+ * hub resolving a cwd frame's answer — passes `fresh` to skip the cached read
+ * and recompute immediately (the push's own coalescing window bounds how
+ * often that happens); the fresh scan still refreshes the cache. The HTTP
+ * route built on this scan remains for ONE-SHOT consumers (e.g. the settings
+ * page); the live sidebar reads the root only through the push socket — a
+ * dropped socket just reconnects, it never polls HTTP.
  */
 import { stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join, sep } from 'node:path'

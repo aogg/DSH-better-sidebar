@@ -1,13 +1,10 @@
 /**
- * useSessionPhase (src/client/session-phase.ts) once the phase ANSWER rides
- * the session push channel: mounting opens the socket and fires NO HTTP read
- * — the host resolves the CURRENT phase on the watch (re)subscription, so a
- * `blank: true` frame keeps the hook waiting, a `blank: false` frame (or a
- * legacy frame with no blank field — old hosts only ever pushed the flip)
- * settles it non-blank and ends both the poll and the push. The 1s HTTP poll
- * is the dropped-socket fallback ONLY (suspended while the socket is open);
- * an HTTP failure still degrades to non-blank; an undefined session id reads
- * nothing and opens no socket.
+ * useSessionPhase (src/client/session-phase.ts) — 纯 ws 驱动：挂载打开
+ * /sidebar/ws/session 并发出**零** HTTP 读取；相位答案完全由推送帧送达 ——
+ * `blank: true` 继续等待，`blank: false`（或旧宿主缺省 blank 字段的帧）落定为
+ * 非 blank 并收尾（关推送）。断线/连不上时绝不发 HTTP 轮询：只有重连退避
+ * （1s→15s）在开新 socket，任意等待时长后 `session.phase` 调用数仍为 0，相位
+ * 恒为 undefined（调用方按非 blank 对待）。undefined 会话 id 不读、不开 socket。
  */
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -19,8 +16,9 @@ import { sessionPhase } from '../src/client/api.ts'
 import { renderRoot, setupReactAct } from './test-utils.ts'
 setupReactAct()
 
-// The hook's fallback asks the host route for the phase; without this mock
-// the call would leave for a transport no jsdom spec has. Reset per test.
+// The hook must never touch the HTTP route. The mock keeps the module
+// importable and its call log readable, so "zero HTTP" is a positive
+// assertion across ANY wait length.
 vi.mock('../src/client/api.ts', () => ({
   sessionPhase: vi.fn(async () => ({ blank: true })),
 }))
@@ -53,7 +51,7 @@ class FakeSocket {
 
 const sessionPhaseMock = vi.mocked(sessionPhase)
 
-/** How many HTTP phase reads have gone out. */
+/** How many HTTP phase reads have gone out (must stay 0 forever). */
 function reads(): number {
   return sessionPhaseMock.mock.calls.length
 }
@@ -86,18 +84,11 @@ function mountPhase(sessionId: string | undefined): Harness {
   }
 }
 
-/** Flush the in-flight fetch (and its setState) inside act(). */
-async function settle(): Promise<void> {
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(0)
-  })
-}
-
 beforeEach(() => {
   FakeSocket.instances = []
   vi.stubGlobal('WebSocket', FakeSocket)
   vi.useFakeTimers()
-  sessionPhaseMock.mockReset()
+  sessionPhaseMock.mockClear()
 })
 
 afterEach(() => {
@@ -108,10 +99,9 @@ afterEach(() => {
 
 describe('useSessionPhase', () => {
   it('mounts with ZERO HTTP reads and opens the push socket', async () => {
-    sessionPhaseMock.mockResolvedValue({ blank: true })
     const harness = mountPhase('t1')
     try {
-      await settle()
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
       expect(harness.state()).toBe('undefined')
       expect(reads()).toBe(0)
       expect(harness.socket().url).toContain('/sidebar/ws/session')
@@ -120,8 +110,34 @@ describe('useSessionPhase', () => {
     }
   })
 
-  it('keeps waiting on a blank:true watch frame, with the socket open no poll runs', async () => {
-    sessionPhaseMock.mockResolvedValue({ blank: true })
+  it('keeps waiting on a blank:true frame — and no wait length produces an HTTP read', async () => {
+    const harness = mountPhase('t1')
+    try {
+      const socket = harness.socket()
+      socket.open()
+      // Another session's flip, a cwd notice, a malformed frame: not ours.
+      act(() => {
+        socket.frame({ kind: 'phase', sessionId: 't9', blank: true })
+        socket.frame({ kind: 'cwd', sessionId: 't1', cwd: '/wt' })
+        socket.frame({ nope: 1 })
+      })
+      expect(harness.state()).toBe('undefined')
+
+      act(() => { socket.frame({ kind: 'phase', sessionId: 't1', blank: true }) })
+      expect(harness.state()).toBe('blank')
+
+      // The old fallback poll ticked every 1s; now NOTHING fires over any
+      // span — the answer can only arrive as a frame.
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+      expect(reads()).toBe(0)
+      expect(harness.state()).toBe('blank')
+      expect(socket.closed).toBe(false)
+    } finally {
+      harness.unmount()
+    }
+  })
+
+  it('settles non-blank on a blank:false frame and closes the push', async () => {
     const harness = mountPhase('t1')
     try {
       const socket = harness.socket()
@@ -129,33 +145,9 @@ describe('useSessionPhase', () => {
       act(() => { socket.frame({ kind: 'phase', sessionId: 't1', blank: true }) })
       expect(harness.state()).toBe('blank')
 
-      // Socket open: the interval runs but every tick defers to the push.
-      await act(async () => { await vi.advanceTimersByTimeAsync(3_500) })
-      expect(reads()).toBe(0)
-      expect(harness.state()).toBe('blank')
-    } finally {
-      harness.unmount()
-    }
-  })
-
-  it('settles non-blank on a blank:false frame and stops polling and pushing', async () => {
-    sessionPhaseMock.mockResolvedValue({ blank: true })
-    const harness = mountPhase('t1')
-    try {
-      const socket = harness.socket()
-      socket.open()
-      // Another session's flip, a cwd notice, a malformed frame: not ours.
-      act(() => {
-        socket.frame({ kind: 'phase', sessionId: 't9', blank: false })
-        socket.frame({ kind: 'cwd', sessionId: 't1' })
-        socket.frame({ nope: 1 })
-      })
-      expect(harness.state()).toBe('undefined')
-      expect(socket.closed).toBe(false)
-
       act(() => { socket.frame({ kind: 'phase', sessionId: 't1', blank: false }) })
       expect(harness.state()).toBe('ready')
-      // Done: no more reads, the push socket is closed.
+      // Done: no more reads (there never were any), the push socket is closed.
       expect(socket.closed).toBe(true)
       await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
       expect(reads()).toBe(0)
@@ -165,7 +157,6 @@ describe('useSessionPhase', () => {
   })
 
   it('treats a legacy frame with no blank field as the flip (old hosts push it only)', async () => {
-    sessionPhaseMock.mockResolvedValue({ blank: true })
     const harness = mountPhase('t1')
     try {
       const socket = harness.socket()
@@ -173,31 +164,30 @@ describe('useSessionPhase', () => {
       act(() => { socket.frame({ kind: 'phase', sessionId: 't1' }) })
       expect(harness.state()).toBe('ready')
       expect(socket.closed).toBe(true)
+      expect(reads()).toBe(0)
     } finally {
       harness.unmount()
     }
   })
 
-  it('falls back to the 1s poll while the socket is closed, resumes on a drop', async () => {
-    sessionPhaseMock.mockResolvedValue({ blank: true })
+  it('answers a dead socket with reconnects only — the phase stays undefined, zero HTTP', async () => {
     const harness = mountPhase('t1')
     try {
-      // The interval is armed at mount; with the socket still CONNECTING the
-      // fallback ticks fire real reads.
-      await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
-      expect(reads()).toBe(1)
-
-      // Socket open: the fallback suspends for the socket's whole lifetime.
-      harness.socket().open()
-      await act(async () => { await vi.advanceTimersByTimeAsync(3_500) })
-      expect(reads()).toBe(1)
-
-      // Socket lost: the poll picks up where it was.
+      // Persistent connect failures: every retried socket dies too, and the
+      // connector answers each drop with another backoff timer (1s → 2s →
+      // 4s → 8s …) — never an HTTP read. The phase stays undefined; the
+      // caller treats that as non-blank.
       harness.socket().drop()
-      await act(async () => { await vi.advanceTimersByTimeAsync(500) })
-      expect(reads()).toBe(2)
       await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
-      expect(reads()).toBe(3)
+      FakeSocket.instances[1]?.drop()
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+      FakeSocket.instances[2]?.drop()
+      await act(async () => { await vi.advanceTimersByTimeAsync(4_000) })
+      FakeSocket.instances[3]?.drop()
+      await act(async () => { await vi.advanceTimersByTimeAsync(8_000) })
+      expect(FakeSocket.instances).toHaveLength(5)
+      expect(reads()).toBe(0)
+      expect(harness.state()).toBe('undefined')
     } finally {
       harness.unmount()
     }
@@ -206,7 +196,7 @@ describe('useSessionPhase', () => {
   it('reads nothing and opens no socket without a session id', async () => {
     const harness = mountPhase(undefined)
     try {
-      await settle()
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
       expect(harness.state()).toBe('undefined')
       expect(FakeSocket.instances).toHaveLength(0)
       await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
@@ -216,20 +206,13 @@ describe('useSessionPhase', () => {
     }
   })
 
-  it('degrades to non-blank when the HTTP route fails', async () => {
-    sessionPhaseMock.mockRejectedValue(new Error('route gone'))
+  it('stops the reconnect loop once unmounted', async () => {
     const harness = mountPhase('t1')
-    try {
-      // The socket never opens, so the first fallback tick reads — and the
-      // route failure degrades to non-blank (entry stays at the header).
-      await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
-      expect(harness.state()).toBe('ready')
-      // Degraded is terminal too: no more reads, the push socket is closed.
-      expect(harness.socket().closed).toBe(true)
-      await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
-      expect(reads()).toBe(1)
-    } finally {
-      harness.unmount()
-    }
+    harness.socket().drop()
+    harness.unmount()
+    const count = FakeSocket.instances.length
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+    expect(FakeSocket.instances).toHaveLength(count)
+    expect(reads()).toBe(0)
   })
 })

@@ -17,10 +17,10 @@
  *   3. the projection follows the ADDRESS's session, not the seat session —
  *      a tab can show another session's file (the native surface's
  *      `sessionIdOf` rule), so a session-scoped address of session B opened
- *      on a seat in session A must resolve B's cwd: `useSessionRoot` gets
- *      B's id (pinned through the `api.sessionCwd` request) and the relative
- *      row clips to B's root, while the seat root would leave the path
- *      untouched;
+ *      on a seat in session A must resolve B's cwd: `useSessionRoot` watches
+ *      B's id (pinned through the push socket's `watch` frame) and the
+ *      relative row clips to B's root, while the seat root would leave the
+ *      path untouched;
  *   4. the legacy `absolute` scope (no session at all) still renders both
  *      rows and copies its decoded path.
  *
@@ -29,8 +29,8 @@
  * prefers) and the locale at `navigator.language` = 'zh-CN' (the TabBar
  * menu spec's stubZh/stubClipboard dance), plus the minimal client ctx —
  * a stable `ctx.sessions.list` snapshot for `useSessionRoot`'s
- * `useSyncExternalStore` and a module-mocked `api.sessionCwd` so the
- * host-confirmed root lands deterministically (the side-card spec's mock).
+ * `useSyncExternalStore` and a module-mocked `api.sessionCwd` kept ONLY to
+ * assert the hook never polls HTTP (the answer rides a ws frame).
  * Addresses are built with the real grammar builders
  * (`sessionFileAddress` / `absoluteFileAddress`), so the encoded round trip
  * (the `%20` space) is exercised, not hand-spelled.
@@ -44,10 +44,8 @@ import { act } from 'react-dom/test-utils'
 import { renderRoot, setupReactAct } from './test-utils.ts'
 setupReactAct()
 
-// useSessionRoot asks the host for the live root on mount; without this mock
-// the call would leave for a transport no jsdom spec has. The roots mirror
-// the fake list summary below, so the fetched value and the summary agree
-// whichever one the hook is holding when the click lands.
+// useSessionRoot must never ask the host route over HTTP; the mock keeps the
+// module importable and its call log readable for the zero-HTTP assertion.
 vi.mock('../src/client/api.ts', () => ({
   api: {
     sessionCwd: vi.fn(async (scope: { sessionId: string }) => {
@@ -62,9 +60,41 @@ import { NativeTabMenuItems } from '../src/client/native/tab-menu.tsx'
 import { absoluteFileAddress, sessionFileAddress } from '../src/client/resource-address.ts'
 import { createSidebarStore } from '../src/client/state.ts'
 
+/** The smallest WebSocket the connector opens: driven, never networking. */
+class FakeSocket {
+  static instances: FakeSocket[] = []
+  static readonly CONNECTING = 0
+  static readonly OPEN = 1
+  readonly url: string
+  readyState = FakeSocket.CONNECTING
+  sent: string[] = []
+  onopen: (() => void) | null = null
+  onmessage: ((event: { data: unknown }) => void) | null = null
+  onclose: (() => void) | null = null
+  closed = false
+
+  constructor(url: string) {
+    this.url = url
+    FakeSocket.instances.push(this)
+  }
+
+  send(frame: string): void { this.sent.push(frame) }
+  close(): void { this.closed = true; this.readyState = 3 }
+  open(): void { this.readyState = FakeSocket.OPEN; this.onopen?.() }
+  drop(): void { this.readyState = 3; this.onclose?.() }
+  /** One host frame. */
+  frame(payload: unknown): void { this.onmessage?.({ data: JSON.stringify(payload) }) }
+  /** The frames the connector sent, as parsed objects. */
+  frames(): { op: string; sessionIds: string[] }[] {
+    return this.sent.map(frame => JSON.parse(frame) as { op: string; sessionIds: string[] })
+  }
+}
+
 beforeEach(() => {
-  // The module mock is file-scoped: without this, one test's root fetches
-  // would leak into the next test's `mock.calls` assertion.
+  FakeSocket.instances = []
+  vi.stubGlobal('WebSocket', FakeSocket)
+  // The module mock is file-scoped: cleared so a test's zero-HTTP assertion
+  // never sees an earlier test's calls.
   vi.mocked(api.sessionCwd).mockClear()
 })
 
@@ -127,7 +157,7 @@ function mountMenu(contentId: string, seatSessionId = 's1'): {
   }
 }
 
-/** Flush the session-root fetch (api.sessionCwd → setState) inside act(). */
+/** Flush pending microtasks (a frame's setState) inside act(). */
 async function settle(): Promise<void> {
   await act(async () => {
     await new Promise(resolve => { setTimeout(resolve, 0) })
@@ -204,14 +234,18 @@ describe('NativeTabMenuItems (the host tab-menu copy rows)', () => {
     // unchanged, failing the clipboard assertion below.
     const { rows, unmount } = mountMenu(sessionFileAddress('s2', '/worktree-b/src/main.ts'), 's1')
     try {
-      await settle()
-      // The mechanism half: the root fetch named the address's session and
-      // never the seat's.
-      const asked = vi.mocked(api.sessionCwd).mock.calls
-        .map(call => (call[0] as { sessionId: string }).sessionId)
-      expect(asked).toContain('s2')
-      expect(asked).not.toContain('s1')
+      // The mechanism half: the push socket watches the ADDRESS's session —
+      // and never the seat's — and the answer rides a frame (zero HTTP).
+      const socket = FakeSocket.instances[0]
+      if (socket === undefined) throw new Error('no socket opened')
+      socket.open()
+      expect(socket.frames()).toEqual([{ op: 'watch', sessionIds: ['s2'] }])
+      act(() => {
+        socket.frame({ kind: 'cwd', sessionId: 's2', cwd: '/worktree-b', root: 'worktree-b', parent: null })
+      })
+      expect(vi.mocked(api.sessionCwd)).not.toHaveBeenCalled()
       // The outcome half: clipped to /worktree-b.
+      await settle()
       click(rows()[0]!)
       expect(writeText).toHaveBeenCalledTimes(1)
       expect(writeText).toHaveBeenCalledWith('src/main.ts')

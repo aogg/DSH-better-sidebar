@@ -4,7 +4,7 @@
  * (src/client/native/tab-adapter.tsx) and the service's routing into it
  * (src/client/service.ts `setSurface`).
  */
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
@@ -13,6 +13,18 @@ import { createNativeSurface } from '../src/client/native/surface.ts'
 import { fileParamsOf, registerNativeSurface } from '../src/client/native/index.ts'
 import { createBetterSidebarService, type SidebarSurface, type TabComponentProps } from '../src/client/service.ts'
 import { createSidebarStore, toggleExpanded, type SidebarTab } from '../src/client/state.ts'
+
+/** jsdom must not network: the tab body's session-root hook opens one push
+ *  socket per mount (it stays CONNECTING here, which the connector accepts). */
+class InertWebSocket {
+  onopen: (() => void) | null = null
+  onmessage: ((event: { data: unknown }) => void) | null = null
+  onclose: (() => void) | null = null
+  close = (): void => {}
+}
+
+beforeEach(() => { vi.stubGlobal('WebSocket', InertWebSocket) })
+afterEach(() => { vi.unstubAllGlobals() })
 
 const scope = { sessionId: 's1', cwd: '/work' }
 

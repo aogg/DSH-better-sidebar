@@ -8,16 +8,19 @@
  * tool/call produces a cwd frame. A cwd frame carries the answer
  * (`cwd`/`root`/`parent`, resolved by the host through the very `session.cwd`
  * route) whenever it could resolve one; the bare `{kind:'cwd', sessionId}`
- * variant — an older host, or a failed host-side resolution — is a pure
- * invalidation the hook answers with its own fresh HTTP re-ask, so a dropped
- * socket still self-heals through the routes.
+ * variant — an older host, or a failed host-side resolution — carries no
+ * answer, and the session hooks simply ignore it: the next tool/call burst
+ * re-resolves and re-pushes over the same socket.
+ *
+ * This socket is the session hooks' ONLY data channel — there is no HTTP
+ * polling beside it. A dropped socket is answered with reconnects that back
+ * off 1s → 15s (reset on the first success), never with HTTP asks.
  *
  * One small connector shared by the session hooks (`session-phase.ts`,
  * `use-session-root.ts`), shaped after use-sidechat-push minus the
  * reconcile-on-change logic: each hook watches a single session that is fixed
  * for the connection's lifetime, so the full `watch` frame is simply
- * (re-)sent on every open — including after a reconnect — and failures back
- * off 1s → 15s.
+ * (re-)sent on every open — including after a reconnect.
  */
 import { hostWebSocketUrl } from './host-route-url.ts'
 
@@ -35,7 +38,7 @@ export interface SessionPushFrame {
   /**
    * cwd frames carry the answer when the host resolved one: the live root,
    * same value the `session.cwd` route returns. Absent (older host / failed
-   * resolution) the frame is a pure invalidation — re-ask over HTTP.
+   * resolution) the frame is a bare invalidation — no answer to land.
    */
   cwd?: unknown
   root?: unknown
@@ -50,8 +53,9 @@ const RETRY_MAX_MS = 15_000
  * Open the session push socket for one fixed watch set.
  * @param sessionIds - sessions to watch; announced on every (re)open.
  * @param onFrame - one validated host frame.
- * @param onState - optional open/close signal (each hook suspends its poll
- *   while the socket is open and falls back to it when the socket drops).
+ * @param onState - optional open/close signal (observability; the session
+ *   hooks stay connected either way — a drop just means frames pause until
+ *   the next successful reconnect).
  * @returns the disposer (idempotent per connection).
  */
 export function connectSessionPush(

@@ -2109,21 +2109,23 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
   }), 'dsh-better-sidebar: side-chat push WebSocket')
 
   // ── Session push WebSocket ─────────────────────────────────────────────
-  // The client polls `session.phase` (1s) and `session.cwd` (5s) only as a
-  // DROPPED-SOCKET fallback now: while this socket is open the client
-  // suspends both polls and the frames carry the answers. A first
-  // user/assistant message flips the blank phase; a watch (re)subscription
-  // resolves and pushes the CURRENT phase (`{kind:'phase', sessionId,
-  // blank}` — `blank:true` means still waiting) through `resolvePhase`, and
-  // a watch or a coalesced tool/call burst resolves the live cwd through
-  // `resolveCwd` and pushes `{kind:'cwd', sessionId, cwd, root, parent}`.
-  // Both resolvers ARE the very HTTP routes (`resolvePhase` calls
-  // `session.phase`, `resolveCwd` calls `session.cwd` with `fresh: true`,
-  // skipping the 3s TTL cache), so the pushed answers can never disagree
-  // with the polled ones; a failed phase resolution pushes nothing (the 1s
-  // poll stays the fallback) and a failed cwd resolution degrades to the
-  // bare `{kind:'cwd', sessionId}` frame the client answers with its own
-  // fresh re-ask of the same route.
+  // The client reads `session.phase` and `session.cwd` ONLY through this
+  // socket — no HTTP poll, not even a mount-time fetch. A dropped socket is
+  // answered with reconnects (the client backs off 1s → 15s, reset on
+  // success), never with HTTP asks. A first user/assistant message flips
+  // the blank phase; a watch (re)subscription resolves and pushes the
+  // CURRENT phase (`{kind:'phase', sessionId, blank}` — `blank:true` means
+  // still waiting) through `resolvePhase`, and a watch or a coalesced
+  // tool/call burst resolves the live cwd through `resolveCwd` and pushes
+  // `{kind:'cwd', sessionId, cwd, root, parent}`. Both resolvers ARE the
+  // very HTTP routes (`resolvePhase` calls `session.phase`, `resolveCwd`
+  // calls `session.cwd` with `fresh: true`, skipping the 3s TTL cache), so
+  // the pushed answers can never disagree with what the routes (kept for
+  // one-shot consumers such as the settings page) would return; a failed
+  // phase resolution pushes nothing (the client keeps waiting over the
+  // reconnect) and a failed cwd resolution degrades to the bare
+  // `{kind:'cwd', sessionId}` frame current clients ignore — the next
+  // tool/call burst re-resolves and re-pushes over the same socket.
   const sessionWss = new WebSocketServer({ noServer: true })
   const sessionPush = createSessionPushHub(ctx, {
     resolvePhase: async (sessionId) => {

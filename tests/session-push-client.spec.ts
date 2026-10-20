@@ -7,8 +7,9 @@
  * `onFrame` with their answer fields intact, whose phase frames pass through
  * with their blank answer intact (`blank:true` = watch-time "still waiting",
  * `blank:false` = the flip), whose open/close transitions reach the optional
- * `onState` signal (each hook suspends its poll on it), and whose reconnects
- * back off 1s → 15s until disposed (then nothing re-opens).
+ * `onState` signal (observability only — the session hooks stay connected
+ * either way), and whose reconnects back off 1s → 15s until disposed (then
+ * nothing re-opens).
  */
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'

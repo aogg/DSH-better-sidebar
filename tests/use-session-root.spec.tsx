@@ -1,13 +1,15 @@
 /**
- * useSessionRoot (src/client/use-session-root.ts) with the session push
- * channel carrying ANSWERS: a cwd frame for THIS session with `cwd` lands
- * directly (no HTTP ask, same-value frames fold); a BARE cwd frame — older
- * host, failed host-side resolution — re-asks immediately WITH `fresh` (the
- * host must skip its 3s TTL cache); the 5s timer runs only while the socket
- * is closed (suspended on open, resumed on a drop) and stays non-fresh, as
- * do the initial read, window focus and the refresh-files event; a hidden
- * document skips the ask entirely; and a fresh answer that repeats the old
- * cwd still folds (no re-render).
+ * useSessionRoot (src/client/use-session-root.ts) on a pure-WebSocket diet:
+ * the session push channel is the ONLY data channel. A cwd frame that CARRIES
+ * the answer lands directly (identical answers fold — no re-render); a BARE
+ * cwd frame (older host / failed host-side resolution) is IGNORED — the next
+ * tool/call burst re-pushes over the same socket; foreign-session and phase
+ * frames are never ours. The hook therefore fires ZERO HTTP requests for its
+ * whole life: no mount-time fetch, no focus/refresh-files listeners, no
+ * timer — any amount of elapsed time produces no `api.sessionCwd` call.
+ * Before the first answer frame arrives, the list's summary cwd renders; a
+ * dropped socket only re-connects (the connector's 1s → 15s backoff) and
+ * never degrades to HTTP.
  */
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -20,15 +22,15 @@ import type { Context } from '../src/context-types.ts'
 import { renderRoot, setupReactAct } from './test-utils.ts'
 setupReactAct()
 
-// The host's answer: always the CURRENT cwd (tests mutate `currentCwd`), so
-// the same-value fold and a real change are both drivable.
-let currentCwd = '/work-a'
+// The hook must never touch the HTTP route. The mock keeps the module
+// importable and its call log readable, so "zero HTTP" is a positive
+// assertion, not just the absence of a transport.
 vi.mock('../src/client/api.ts', () => ({
   api: {
     sessionCwd: vi.fn(async (scope: { sessionId: string }) => ({
       sessionId: scope.sessionId,
-      cwd: currentCwd,
-      root: currentCwd,
+      cwd: '/work-a',
+      root: '/work-a',
       parent: null,
     })),
   },
@@ -58,6 +60,10 @@ class FakeSocket {
   drop(): void { this.readyState = 3; this.onclose?.() }
   /** One host frame (a phase/cwd notice, or something malformed). */
   frame(payload: unknown): void { this.onmessage?.({ data: JSON.stringify(payload) }) }
+  /** The frames the connector sent, as parsed objects. */
+  frames(): { op: string; sessionIds: string[] }[] {
+    return this.sent.map(frame => JSON.parse(frame) as { op: string; sessionIds: string[] })
+  }
 }
 
 const sessionCwdMock = vi.mocked(api.sessionCwd)
@@ -76,9 +82,9 @@ function createCtx(): Context {
 }
 
 interface Harness {
-  /** The rendered root (the fetched one, or the list summary fallback). */
+  /** The rendered root (the pushed answer, or the list summary fallback). */
   root: () => string | undefined
-  /** How many times the probe COMMITTED (a folded same-value ask commits none). */
+  /** How many times the probe COMMITTED (a folded same-value frame commits none). */
   commits: () => number
   /** The first socket the hook's connector opened. */
   socket: () => FakeSocket
@@ -106,28 +112,10 @@ function mountRoot(sessionId: string, ctx: Context = createCtx()): Harness {
   }
 }
 
-/** Flush the in-flight fetch (and its setState) inside act(). */
-async function settle(): Promise<void> {
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(0)
-  })
-}
-
-/** Override the document's visibility (the hook skips asks while hidden). */
-async function withVisibility(hidden: boolean, body: () => Promise<void>): Promise<void> {
-  Object.defineProperty(document, 'visibilityState', { value: hidden ? 'hidden' : 'visible', configurable: true })
-  try {
-    await body()
-  } finally {
-    delete (document as { visibilityState?: string }).visibilityState
-  }
-}
-
 beforeEach(() => {
   FakeSocket.instances = []
   vi.stubGlobal('WebSocket', FakeSocket)
   vi.useFakeTimers()
-  currentCwd = '/work-a'
   sessionCwdMock.mockClear()
 })
 
@@ -138,45 +126,32 @@ afterEach(() => {
 })
 
 describe('useSessionRoot', () => {
-  it('re-asks with fresh on a BARE cwd frame (older host / failed resolution), not on other frames', async () => {
+  it('renders the list summary cwd until a frame arrives, with ZERO HTTP', async () => {
     const harness = mountRoot('s1')
     try {
-      await settle()
-      expect(harness.root()).toBe('/work-a')
-      expect(sessionCwdMock).toHaveBeenCalledTimes(1)
-
-      const socket = harness.socket()
-      socket.open()
-      act(() => {
-        // Another session's move and a phase notice: neither is ours to ask.
-        socket.frame({ kind: 'cwd', sessionId: 's2' })
-        socket.frame({ kind: 'phase', sessionId: 's1', blank: false })
-      })
-      expect(sessionCwdMock).toHaveBeenCalledTimes(1)
-
-      // A bare frame carries no answer: the immediate re-ask carries
-      // { fresh: true } so the host skips its TTL cache.
-      act(() => { socket.frame({ kind: 'cwd', sessionId: 's1' }) })
-      expect(sessionCwdMock).toHaveBeenCalledTimes(2)
-      expect(sessionCwdMock).toHaveBeenLastCalledWith({ sessionId: 's1' }, { fresh: true })
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      // First paint uses the session list header cwd — no mount-time fetch.
+      expect(harness.root()).toBe('/summary-a')
+      expect(sessionCwdMock).not.toHaveBeenCalled()
+      // And the watch set is announced on the session socket.
+      expect(harness.socket().url).toContain('/sidebar/ws/session')
+      harness.socket().open()
+      expect(harness.socket().frames()).toEqual([{ op: 'watch', sessionIds: ['s1'] }])
     } finally {
       harness.unmount()
     }
   })
 
-  it('lands a cwd frame that CARRIES the answer without any HTTP ask', async () => {
+  it('lands a cwd frame that CARRIES the answer, folding identical answers', async () => {
     const harness = mountRoot('s1')
     try {
-      await settle()
-      expect(sessionCwdMock).toHaveBeenCalledTimes(1)
-
       harness.socket().open()
       act(() => {
         harness.socket().frame({ kind: 'cwd', sessionId: 's1', cwd: '/wt-pushed', root: 'pushed', parent: null })
       })
-      // The answer is in the frame: it lands directly, no re-ask.
+      // The answer is in the frame: it lands directly, no HTTP round trip.
       expect(harness.root()).toBe('/wt-pushed')
-      expect(sessionCwdMock).toHaveBeenCalledTimes(1)
+      expect(sessionCwdMock).not.toHaveBeenCalled()
 
       // A repeated identical answer folds: no re-render.
       const commitsBefore = harness.commits()
@@ -185,112 +160,79 @@ describe('useSessionRoot', () => {
       })
       expect(harness.commits()).toBe(commitsBefore)
 
-      // And while the socket stays open, the 5s poll stays suspended.
-      await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
-      expect(sessionCwdMock).toHaveBeenCalledTimes(1)
+      // A real move lands with one commit.
+      act(() => {
+        harness.socket().frame({ kind: 'cwd', sessionId: 's1', cwd: '/wt-moved', root: 'moved', parent: 'pushed' })
+      })
+      expect(harness.root()).toBe('/wt-moved')
+      expect(harness.commits()).toBe(commitsBefore + 1)
     } finally {
       harness.unmount()
     }
   })
 
-  it('suspends the 5s poll while the socket is open and resumes it on a drop', async () => {
+  it('ignores a BARE cwd frame and every frame that is not ours', async () => {
     const harness = mountRoot('s1')
     try {
-      await settle()
-      expect(sessionCwdMock).toHaveBeenCalledTimes(1)
-
-      // Open socket: the answers arrive as frames, so no timer ticks.
       harness.socket().open()
-      await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
-      expect(sessionCwdMock).toHaveBeenCalledTimes(1)
+      act(() => {
+        // The bare invalidation (older host / failed host resolution), the
+        // empty-string answer, another session's answer and move, a phase
+        // notice, and a malformed frame: none may touch the rendered root.
+        harness.socket().frame({ kind: 'cwd', sessionId: 's1' })
+        harness.socket().frame({ kind: 'cwd', sessionId: 's1', cwd: '' })
+        harness.socket().frame({ kind: 'cwd', sessionId: 's2', cwd: '/elsewhere' })
+        harness.socket().frame({ kind: 'cwd', sessionId: 's2' })
+        harness.socket().frame({ kind: 'phase', sessionId: 's1', blank: false })
+        harness.socket().frame({ nope: 1 })
+      })
+      expect(harness.root()).toBe('/summary-a')
+      // Zero HTTP either way: the host re-pushes on the next tool/call burst.
+      expect(sessionCwdMock).not.toHaveBeenCalled()
 
-      // A drop resumes the fallback timer: the next tick re-asks (never fresh).
+      // And a later answer frame for our session still lands after the noise.
+      act(() => {
+        harness.socket().frame({ kind: 'cwd', sessionId: 's1', cwd: '/wt-late' })
+      })
+      expect(harness.root()).toBe('/wt-late')
+    } finally {
+      harness.unmount()
+    }
+  })
+
+  it('answers a dropped socket with reconnects only — no HTTP ask ever fires', async () => {
+    const harness = mountRoot('s1')
+    try {
+      harness.socket().open()
       harness.socket().drop()
-      await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
-      expect(sessionCwdMock).toHaveBeenCalledTimes(2)
-      expect(sessionCwdMock.mock.calls[1]?.[1]).toBeUndefined()
+      // Persistent connect failures: every retried socket dies too, and the
+      // connector answers each drop with another backoff timer (1s → 2s →
+      // 4s → 8s …) — not one HTTP ask goes out.
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+      FakeSocket.instances[1]?.drop()
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+      FakeSocket.instances[2]?.drop()
+      await act(async () => { await vi.advanceTimersByTimeAsync(4_000) })
+      FakeSocket.instances[3]?.drop()
+      await act(async () => { await vi.advanceTimersByTimeAsync(8_000) })
+      expect(FakeSocket.instances).toHaveLength(5)
+      expect(sessionCwdMock).not.toHaveBeenCalled()
+      // A socket that finally opens re-announces the watch set.
+      const latest = FakeSocket.instances[4]
+      if (latest === undefined) throw new Error('no fifth socket')
+      latest.open()
+      expect(latest.frames()).toEqual([{ op: 'watch', sessionIds: ['s1'] }])
     } finally {
       harness.unmount()
     }
   })
 
-  it('keeps focus, refresh-files and the 5s timer non-fresh', async () => {
+  it('stops reconnecting once unmounted', async () => {
     const harness = mountRoot('s1')
-    try {
-      await settle()
-      expect(sessionCwdMock).toHaveBeenCalledTimes(1)
-
-      act(() => { window.dispatchEvent(new Event('focus')) })
-      await settle()
-      expect(sessionCwdMock).toHaveBeenCalledTimes(2)
-
-      act(() => { window.dispatchEvent(new Event('dsh-sidebar:refresh-files')) })
-      await settle()
-      expect(sessionCwdMock).toHaveBeenCalledTimes(3)
-
-      await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
-      expect(sessionCwdMock).toHaveBeenCalledTimes(4)
-
-      // Every poll-family call went out WITHOUT the fresh flag: those ask on
-      // schedule, they do not claim the root moved.
-      for (const call of sessionCwdMock.mock.calls) expect(call[1]).toBeUndefined()
-    } finally {
-      harness.unmount()
-    }
-  })
-
-  it('asks nothing while the document is hidden, and resumes on focus', async () => {
-    await withVisibility(true, async () => {
-      const harness = mountRoot('s1')
-      try {
-        await settle()
-        expect(harness.root()).toBe('/summary-a')
-        expect(sessionCwdMock).not.toHaveBeenCalled()
-
-        act(() => { window.dispatchEvent(new Event('focus')) })
-        await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
-        expect(sessionCwdMock).not.toHaveBeenCalled()
-      } finally {
-        harness.unmount()
-      }
-    })
-
-    await withVisibility(false, async () => {
-      const harness = mountRoot('s1')
-      try {
-        await settle()
-        expect(sessionCwdMock).toHaveBeenCalledTimes(1)
-        act(() => { window.dispatchEvent(new Event('focus')) })
-        await settle()
-        expect(sessionCwdMock).toHaveBeenCalledTimes(2)
-      } finally {
-        harness.unmount()
-      }
-    })
-  })
-
-  it('folds a fresh answer that repeats the cwd, and updates on a real change', async () => {
-    const harness = mountRoot('s1')
-    try {
-      await settle()
-      expect(harness.commits()).toBe(2)
-
-      // The push says "it moved" but the fresh ask returns the SAME root:
-      // the fold keeps the previous object, so nothing re-renders.
-      harness.socket().open()
-      act(() => { harness.socket().frame({ kind: 'cwd', sessionId: 's1' }) })
-      await settle()
-      expect(harness.commits()).toBe(2)
-      expect(harness.root()).toBe('/work-a')
-
-      // A real move (the next poll picks it up) lands with one commit.
-      currentCwd = '/worktree-b'
-      act(() => { window.dispatchEvent(new Event('focus')) })
-      await settle()
-      expect(harness.commits()).toBe(3)
-      expect(harness.root()).toBe('/worktree-b')
-    } finally {
-      harness.unmount()
-    }
+    harness.socket().drop()
+    harness.unmount()
+    const count = FakeSocket.instances.length
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+    expect(FakeSocket.instances).toHaveLength(count)
   })
 })
