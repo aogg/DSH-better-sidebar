@@ -21,6 +21,7 @@ import { RenderBoundary } from './RenderBoundary.tsx'
 import { createNativeTabRecords } from './native/tab-adapter.tsx'
 import { registerNativeSurface } from './native/index.ts'
 import { registerStripCompression } from './native/strip-compression.ts'
+import { registerStripAddButton } from './native/strip-add-button.ts'
 import { registerBottomToggle } from './sidebar/bottom-toggle.tsx'
 import { registerStartLinks } from './sidebar/start-links.tsx'
 import { createNativeSurface } from './native/surface.ts'
@@ -202,6 +203,16 @@ export function apply(ctx: Context): void {
   ctx.effect(
     () => registerStripCompression(ctx),
     'dsh-better-sidebar: native strip compression',
+  )
+  // The HOST strip's「+」stand-in: while the hero start page (the host's guide
+  // kind) occupies a pane, the host's canAddTab keeps the + OUT of the DOM —
+  // CSS cannot restore an unrendered element, so a MutationObserver injects a
+  // look-alike stand-in whenever the pane holds ≥1 tab and no host +, and
+  // clicks through the same host face the native button uses (see
+  // strip-add-button.ts).
+  ctx.effect(
+    () => registerStripAddButton(ctx),
+    'dsh-better-sidebar: native strip add button stand-in',
   )
   // The bottom workbench's expand/collapse button in DSH's session header
   // (the header's corner seat belongs to the native sidebar's own control).
