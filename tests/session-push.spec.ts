@@ -7,10 +7,13 @@
  * per socket per session (a burst of messages must not spam the client), a
  * tool/call folds into one cwd frame per 250ms window (the FIRST trigger's
  * window wins, and a window can fire again once it has), and a ctx without
- * the event API degrades to a no-op instead of throwing. With a resolver
- * injected, cwd frames carry the ANSWER — pushed right on a new watch entry
- * and at each window's end, degraded to the bare frame when the resolution
- * fails or lands after the session left the watch set.
+ * the event API degrades to a no-op instead of throwing. With resolvers
+ * injected, cwd AND phase frames carry the ANSWER — pushed right on a new
+ * watch entry (cwd at each window's end too, the phase's flip one-shot),
+ * degraded to the bare cwd frame when that resolution fails or lands after
+ * the session left the watch set, while a failing phase resolution stays
+ * silent (no bare form) and a late phase answer never regresses a settled
+ * flip.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSessionPushHub, type SessionCwdAnswer } from '../src/session-push.ts'
@@ -385,6 +388,178 @@ describe('session push hub with a cwd resolver', () => {
     release?.({ sessionId: 't1', cwd: '/late', root: '/late', parent: null })
     await vi.advanceTimersByTimeAsync(0)
     expect(socket.frames()).toEqual([])
+    hub.dispose()
+  })
+})
+
+describe('session push hub with a phase resolver', () => {
+  /** One phase resolver double: always `blank`. */
+  const phaseOf = (blank: boolean): ((sessionId: string) => Promise<{ blank: boolean }>) =>
+    async () => ({ blank })
+  /** A cwd resolver double so the options object type-checks; its frame is part of every watch. */
+  const cwdAnswer = async (sessionId: string) => ({ sessionId, cwd: '/wt', root: 'wt', parent: null })
+
+  it('answers a newly watched BLANK session with blank:true', async () => {
+    const { ctx } = fakeCtx()
+    const hub = createSessionPushHub(ctx, { resolveCwd: cwdAnswer, resolvePhase: phaseOf(true) })
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(socket.frames()).toEqual([
+      { kind: 'cwd', sessionId: 't1', cwd: '/wt', root: 'wt', parent: null },
+      { kind: 'phase', sessionId: 't1', blank: true },
+    ])
+    hub.dispose()
+  })
+
+  it('answers a newly watched non-blank session with the flip, one-shot ever after', async () => {
+    const { ctx, emit } = fakeCtx()
+    const resolvePhase = vi.fn(phaseOf(false))
+    const hub = createSessionPushHub(ctx, { resolveCwd: cwdAnswer, resolvePhase })
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(socket.frames()).toEqual([
+      { kind: 'cwd', sessionId: 't1', cwd: '/wt', root: 'wt', parent: null },
+      { kind: 'phase', sessionId: 't1', blank: false },
+    ])
+
+    // The watch answer joined the one-shot set: the message rows that follow
+    // must not push the flip a second time.
+    emit('session/event', { id: 't1' }, { type: 'user/message' })
+    emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+    vi.advanceTimersByTime(1_000)
+    expect(socket.frames()).toEqual([
+      { kind: 'cwd', sessionId: 't1', cwd: '/wt', root: 'wt', parent: null },
+      { kind: 'phase', sessionId: 't1', blank: false },
+    ])
+    expect(resolvePhase).toHaveBeenCalledTimes(1)
+    hub.dispose()
+  })
+
+  it('repeated identical watch frames re-push nothing', async () => {
+    const { ctx } = fakeCtx()
+    const hub = createSessionPushHub(ctx, { resolveCwd: cwdAnswer, resolvePhase: phaseOf(true) })
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(socket.frames()).toHaveLength(2)
+
+    socket.receive({ op: 'watch', sessionIds: ['t1'] })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(socket.frames()).toHaveLength(2)
+    hub.dispose()
+  })
+
+  it('stays phase-silent on watch without a resolver, message flips still push', async () => {
+    const { ctx, emit } = fakeCtx()
+    const hub = createSessionPushHub(ctx)
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(socket.frames()).toEqual([])
+
+    // The one-shot flip path is independent of the resolver.
+    emit('session/event', { id: 't1' }, { type: 'user/message' })
+    expect(socket.frames()).toEqual([{ kind: 'phase', sessionId: 't1', blank: false }])
+    hub.dispose()
+  })
+
+  it('pushes no phase when the watch-time resolution fails, flips still work', async () => {
+    const { ctx, emit } = fakeCtx()
+    const hub = createSessionPushHub(ctx, {
+      resolveCwd: cwdAnswer,
+      resolvePhase: async () => { throw new Error('phase route down') },
+    })
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+    await vi.advanceTimersByTimeAsync(0)
+    // No bare invalidation form exists for phase — silence there (only the
+    // cwd answer went out), and the message flip keeps working for when the
+    // route recovers.
+    expect(socket.frames()).toEqual([{ kind: 'cwd', sessionId: 't1', cwd: '/wt', root: 'wt', parent: null }])
+    emit('session/event', { id: 't1' }, { type: 'user/message' })
+    expect(socket.frames().at(-1)).toEqual({ kind: 'phase', sessionId: 't1', blank: false })
+    hub.dispose()
+  })
+
+  it('drops an in-flight blank:true watch answer that lands after the flip', async () => {
+    let release: ((answer: { blank: boolean }) => void) | undefined
+    const resolvePhase = vi.fn((): Promise<{ blank: boolean }> => new Promise(resolve => { release = resolve }))
+    const { ctx, emit } = fakeCtx()
+    const hub = createSessionPushHub(ctx, { resolveCwd: cwdAnswer, resolvePhase })
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(socket.frames()).toEqual([{ kind: 'cwd', sessionId: 't1', cwd: '/wt', root: 'wt', parent: null }])
+
+    // The message flip wins the race while the watch answer is still in
+    // flight; the late blank:true must NOT follow it (never "flip, then
+    // blank again").
+    emit('session/event', { id: 't1' }, { type: 'user/message' })
+    expect(socket.frames().at(-1)).toEqual({ kind: 'phase', sessionId: 't1', blank: false })
+    release?.({ blank: true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(socket.frames().at(-1)).toEqual({ kind: 'phase', sessionId: 't1', blank: false })
+    hub.dispose()
+  })
+
+  it('drops an in-flight blank:false watch answer that lands after the flip', async () => {
+    let release: ((answer: { blank: boolean }) => void) | undefined
+    const resolvePhase = vi.fn((): Promise<{ blank: boolean }> => new Promise(resolve => { release = resolve }))
+    const { ctx, emit } = fakeCtx()
+    const hub = createSessionPushHub(ctx, { resolveCwd: cwdAnswer, resolvePhase })
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+    await vi.advanceTimersByTimeAsync(0)
+
+    emit('session/event', { id: 't1' }, { type: 'user/message' })
+    release?.({ blank: false })
+    await vi.advanceTimersByTimeAsync(0)
+    // The flip frame went out once; the watch answer joins the one-shot set's
+    // verdict and must not duplicate it.
+    expect(socket.frames().at(-1)).toEqual({ kind: 'phase', sessionId: 't1', blank: false })
+    expect(socket.frames().filter(frame => frame.kind === 'phase')).toHaveLength(1)
+    hub.dispose()
+  })
+
+  it('drops an in-flight phase answer that lands after the session left the watch set', async () => {
+    let release: ((answer: { blank: boolean }) => void) | undefined
+    const resolvePhase = vi.fn((): Promise<{ blank: boolean }> => new Promise(resolve => { release = resolve }))
+    const { ctx } = fakeCtx()
+    const hub = createSessionPushHub(ctx, { resolveCwd: cwdAnswer, resolvePhase })
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+
+    socket.receive({ op: 'watch', sessionIds: [] })
+    release?.({ blank: true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(socket.frames().filter(frame => frame.kind === 'phase')).toEqual([])
+    hub.dispose()
+  })
+
+  it('re-pushes the current phase on un-watch then re-watch (the reconnect case)', async () => {
+    let current = true
+    const resolvePhase = vi.fn(async () => ({ blank: current }))
+    const { ctx } = fakeCtx()
+    const hub = createSessionPushHub(ctx, { resolveCwd: cwdAnswer, resolvePhase })
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(socket.frames().filter(frame => frame.kind === 'phase')).toEqual([
+      { kind: 'phase', sessionId: 't1', blank: true },
+    ])
+
+    // Un-watch, the session flips elsewhere, then re-watch: the fresh
+    // subscription hears the CURRENT answer, not the stale one.
+    socket.receive({ op: 'watch', sessionIds: [] })
+    current = false
+    socket.receive({ op: 'watch', sessionIds: ['t1'] })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(socket.frames().filter(frame => frame.kind === 'phase')).toEqual([
+      { kind: 'phase', sessionId: 't1', blank: true },
+      { kind: 'phase', sessionId: 't1', blank: false },
+    ])
     hub.dispose()
   })
 })

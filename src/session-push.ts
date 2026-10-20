@@ -10,27 +10,36 @@
  * is exactly the "the agent ran somewhere" signal the active-worktree scan
  * derives its answer from.
  *
- * This hub turns those events into per-session frames. The `phase` frame
- * stays a one-shot invalidation (`{kind:'phase', sessionId, blank:false}`):
- * "non-blank" is the answer, so the frame itself is all the client needs.
- * The cwd frame now carries the ANSWER: the hub resolves it through the
- * injected `resolveCwd` — wired to the very implementation the `session.cwd`
- * route serves, invoked with `fresh: true` so the 3s TTL cache is skipped —
- * and pushes `{kind:'cwd', sessionId, cwd, root, parent}`, both on a watch
- * (re)subscription (a reconnecting client re-subscribes on a fresh socket and
- * hears the current answer immediately) and at the end of the 250ms
- * tool/call coalescing window. A failed resolution, or a hub mounted without
- * a resolver, degrades to the legacy bare `{kind:'cwd', sessionId}`
- * invalidation, which the client answers with its own fresh re-ask — so the
- * HTTP route stays the same source of truth and a dropped socket still
- * self-heals through the same polls, now demoted to the offline fallback.
+ * This hub turns those events into per-session frames. Both frame kinds now
+ * carry the ANSWER, each resolved through its injected resolver — the very
+ * implementation the HTTP route serves, so pushed and polled answers can
+ * never disagree:
+ *
+ * - `phase`: a watch (re)subscription resolves the CURRENT phase and pushes
+ *   `{kind:'phase', sessionId, blank}` — `blank:true` tells a freshly
+ *   connected client "still waiting", `blank:false` IS the flip. The
+ *   message-event flip stays one-shot per socket per session (a burst of
+ *   message rows must not spam the client's entry flip). A late watch answer
+ *   landing after the flip re-checks the one-shot set and is dropped, so a
+ *   connected client never hears "non-blank, then blank again". A failed
+ *   resolution pushes NOTHING — the phase has no bare invalidation form (the
+ *   blank answer IS the "keep waiting" state); the 1s poll remains the
+ *   dropped-socket fallback.
+ * - `cwd`: pushed on a watch (re)subscription and at the end of the 250ms
+ *   tool/call coalescing window as `{kind:'cwd', sessionId, cwd, root,
+ *   parent}`. A failed resolution, or a hub mounted without a resolver,
+ *   degrades to the legacy bare `{kind:'cwd', sessionId}` invalidation,
+ *   which the client answers with its own fresh re-ask — so the HTTP route
+ *   stays the same source of truth and a dropped socket still self-heals
+ *   through the same polls, now demoted to the offline fallback.
  *
  * Two frame kinds, two schedules: the blank flip is one-shot, so each socket
- * pushes at most one `phase` frame per session, ever (a burst of message
- * events must not spam the client's entry flip). A `tool/call` only means the
- * worktree scan MIGHT reach a different root, so it rides a 250ms coalescing
- * window (first trigger's window wins) and the frame's answer is resolved
- * with `fresh: true`, skipping the TTL cache the ordinary polls rely on.
+ * pushes at most one `blank:false` phase frame per session, ever (a burst of
+ * message events must not spam the client's entry flip). A `tool/call` only
+ * means the worktree scan MIGHT reach a different root, so it rides a 250ms
+ * coalescing window (first trigger's window wins) and the frame's answer is
+ * resolved with `fresh: true`, skipping the TTL cache the ordinary polls
+ * rely on.
  * @module dsh-better-sidebar/session-push
  */
 import type { WebSocket } from 'ws'
@@ -41,9 +50,10 @@ const CWD_DEBOUNCE_MS = 250
 /** Session ids one socket may watch (a resource guard, not a policy). */
 const MAX_WATCHED = 64
 
-/** The frames the host pushes: which watched session, which fact — and, for cwd, the answer. */
+/** The frames the host pushes: which watched session, which fact — and the answer. */
 export type SessionPushFrame =
-  | { kind: 'phase'; sessionId: string; blank: false }
+  /** The phase answer: `blank:false` is the one-shot flip, `blank:true` the watch-time "still waiting". */
+  | { kind: 'phase'; sessionId: string; blank: boolean }
   /** Bare invalidation: no resolver, or the resolution failed — the client re-asks `session.cwd`. */
   | { kind: 'cwd'; sessionId: string }
   /** The answer itself, exactly what the `session.cwd` route would have returned. */
@@ -57,7 +67,12 @@ export interface SessionCwdAnswer {
   parent: string | null
 }
 
-/** Hub options: where a cwd frame's answer comes from. */
+/** One resolved phase answer, shaped like the `session.phase` route's return value. */
+export interface SessionPhaseAnswer {
+  blank: boolean
+}
+
+/** Hub options: where a frame's answer comes from. */
 export interface SessionPushHubOptions {
   /**
    * Resolve one session's live answer. Implementations should be the SAME
@@ -66,6 +81,13 @@ export interface SessionPushHubOptions {
    * the bare invalidation variant.
    */
   resolveCwd(sessionId: string): Promise<SessionCwdAnswer>
+  /**
+   * Resolve one session's CURRENT blank phase — the same source as the
+   * `session.phase` route. Omitted (or rejecting), a watch pushes no phase
+   * frame at all: the phase has no bare invalidation form, and the message
+   * flip keeps pushing `{blank:false}` regardless.
+   */
+  resolvePhase?(sessionId: string): Promise<SessionPhaseAnswer>
 }
 
 /** The frame the client sends to replace its watch set. */
@@ -85,8 +107,9 @@ export interface SessionPushHub {
 /**
  * Register the session push feed.
  * @param ctx - host plugin context (its `on` subscribes the append feed).
- * @param options - cwd answer source; omitted, the cwd frames stay bare
- *   invalidations (the pre-answer-wire format).
+ * @param options - answer sources; an omitted `resolvePhase` (or a failing
+ *   one) keeps watch-time phase silent, an omitted `resolveCwd` keeps cwd
+ *   frames bare invalidations (the pre-answer-wire format).
  * @returns the hub plus a disposer unbinding the listener.
  */
 export function createSessionPushHub(ctx: Context, options?: SessionPushHubOptions): SessionPushHub {
@@ -114,7 +137,12 @@ export function createSessionPushHub(ctx: Context, options?: SessionPushHubOptio
   })
   return {
     attach: (ws) => {
-      const socket = new SessionSocket(ws, () => { sockets.delete(socket) }, options?.resolveCwd)
+      const socket = new SessionSocket(
+        ws,
+        () => { sockets.delete(socket) },
+        options?.resolveCwd,
+        options?.resolvePhase,
+      )
       sockets.add(socket)
     },
     dispose: () => {
@@ -130,6 +158,7 @@ class SessionSocket {
   private readonly socket: WebSocket
   private readonly onClosed: () => void
   private readonly resolveCwd: ((sessionId: string) => Promise<SessionCwdAnswer>) | undefined
+  private readonly resolvePhase: ((sessionId: string) => Promise<SessionPhaseAnswer>) | undefined
   private readonly watched = new Set<string>()
   /** Sessions this socket already heard the blank flip for (one frame, ever). */
   private readonly phased = new Set<string>()
@@ -140,15 +169,18 @@ class SessionSocket {
    * @param socket - the accepted WebSocket.
    * @param onClosed - hub-side cleanup (idempotent).
    * @param resolveCwd - cwd answer source; omitted, cwd frames stay bare.
+   * @param resolvePhase - phase answer source; omitted, watch stays phase-silent.
    */
   constructor(
     socket: WebSocket,
     onClosed: () => void,
     resolveCwd?: (sessionId: string) => Promise<SessionCwdAnswer>,
+    resolvePhase?: (sessionId: string) => Promise<SessionPhaseAnswer>,
   ) {
     this.socket = socket
     this.onClosed = onClosed
     this.resolveCwd = resolveCwd
+    this.resolvePhase = resolvePhase
     socket.on('message', (data: unknown) => { this.onMessage(data) })
     socket.on('close', () => { this.close() })
     socket.on('error', () => { this.close() })
@@ -180,25 +212,61 @@ class SessionSocket {
       clearTimeout(timer)
       this.timers.delete(id)
     }
-    // A NEWLY watched session hears its CURRENT answer right away: a client
+    // A NEWLY watched session hears its CURRENT answers right away: a client
     // re-subscribing (every reconnect re-sends the whole watch set on a fresh
-    // socket) is exactly the case that must not wait for the next tool call.
-    // A repeated identical watch frame adds nothing, so it pushes nothing.
+    // socket) is exactly the case that must not wait for the next event —
+    // cwd's live root AND the phase's current blank state. A repeated
+    // identical watch frame adds nothing, so it pushes nothing.
     for (const id of this.watched) {
-      if (!previous.has(id)) this.pushCwdAnswer(id)
+      if (!previous.has(id)) {
+        this.pushCwdAnswer(id)
+        this.pushPhaseAnswer(id)
+      }
     }
   }
 
   /**
-   * The session just left blank (first user/assistant message). ONE frame per
-   * session per socket, ever: the flip is one-shot, and the client stops
-   * watching the phase the moment it hears it.
+   * The session just left blank (first user/assistant message). ONE `blank:
+   * false` frame per session per socket, ever: the flip is one-shot, and the
+   * client stops caring about the phase the moment it hears it.
    * @param sessionId - the session that flipped.
    */
   notifyPhase(sessionId: string): void {
     if (this.closed || !this.watched.has(sessionId) || this.phased.has(sessionId)) return
     this.phased.add(sessionId)
     this.send({ kind: 'phase', sessionId, blank: false })
+  }
+
+  /**
+   * Resolve the session's CURRENT phase and push it INSIDE the phase frame on
+   * a watch (re)subscription: `blank:true` ("still waiting") and `blank:false`
+   * (the flip itself, which joins the one-shot set exactly like a message
+   * flip would). The resolution is async, so the answer re-checks `closed` /
+   * `watched` / `phased` before sending — a socket that died, a session the
+   * client watched away, or a flip frame that already went out (in-flight
+   * watch answer vs. message event) must not produce a late frame, least of
+   * all a `blank:true` that would regress a settled flip. A failed resolution
+   * pushes NOTHING: the phase has no bare invalidation form (the blank answer
+   * is itself the "keep waiting" state), and the 1s poll stays the fallback.
+   */
+  private pushPhaseAnswer(sessionId: string): void {
+    const resolve = this.resolvePhase
+    if (resolve === undefined || this.closed || !this.watched.has(sessionId)) return
+    void resolve(sessionId)
+      .then(answer => {
+        if (this.closed || !this.watched.has(sessionId) || this.phased.has(sessionId)) return
+        if ((answer as { blank?: unknown } | null | undefined)?.blank !== true) {
+          // Non-blank — this IS the flip: join the one-shot set before the
+          // frame leaves, so a racing message event can never push it twice.
+          this.phased.add(sessionId)
+          this.send({ kind: 'phase', sessionId, blank: false })
+          return
+        }
+        this.send({ kind: 'phase', sessionId, blank: true })
+      })
+      .catch(() => {
+        // Designed silence: watch-time phase has no degraded frame form.
+      })
   }
 
   /**

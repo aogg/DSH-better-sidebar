@@ -2,14 +2,15 @@
  * Client end of the session push channel `/sidebar/ws/session`.
  *
  * The host turns session events into frames: a first user/assistant message
- * flips the blank phase (`kind: 'phase'` — the frame IS the answer, always
- * `blank: false`), and a tool/call or a watch (re)subscription produces a cwd
- * frame. A cwd frame carries the answer (`cwd`/`root`/`parent`, resolved by
- * the host through the very `session.cwd` route) whenever it could resolve
- * one; the bare `{kind:'cwd', sessionId}` variant — an older host, or a
- * failed host-side resolution — is a pure invalidation the hook answers with
- * its own fresh HTTP re-ask, so a dropped socket still self-heals through the
- * routes.
+ * flips the blank phase (`kind: 'phase'`, `blank: false` — the frame IS the
+ * answer), a watch (re)subscription resolves the CURRENT phase and cwd and
+ * pushes them (`blank: true` = still waiting; the cwd answer itself), and a
+ * tool/call produces a cwd frame. A cwd frame carries the answer
+ * (`cwd`/`root`/`parent`, resolved by the host through the very `session.cwd`
+ * route) whenever it could resolve one; the bare `{kind:'cwd', sessionId}`
+ * variant — an older host, or a failed host-side resolution — is a pure
+ * invalidation the hook answers with its own fresh HTTP re-ask, so a dropped
+ * socket still self-heals through the routes.
  *
  * One small connector shared by the session hooks (`session-phase.ts`,
  * `use-session-root.ts`), shaped after use-sidechat-push minus the
@@ -24,7 +25,12 @@ import { hostWebSocketUrl } from './host-route-url.ts'
 export interface SessionPushFrame {
   kind: 'phase' | 'cwd'
   sessionId: string
-  /** phase frames always carry `blank: false` — the only push-worthy flip. */
+  /**
+   * phase frames carry the answer: `blank: false` is the one-shot flip, and a
+   * watch (re)subscription resolves the CURRENT phase first — `blank: true`
+   * ("still waiting") or `blank: false` (settled, end of story). Absent on
+   * legacy hosts, whose phase frames were always the flip.
+   */
   blank?: unknown
   /**
    * cwd frames carry the answer when the host resolved one: the live root,

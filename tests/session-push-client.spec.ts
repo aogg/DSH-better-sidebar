@@ -4,10 +4,11 @@
  * full `watch` frame is (re-)sent on EVERY open — the first one and the one
  * after a reconnect alike — whose malformed / unknown-kind / foreign-session
  * frames never reach `onFrame`, whose answer-carrying cwd frames reach
- * `onFrame` with their answer fields intact, whose open/close transitions
- * reach the optional `onState` signal (each hook suspends its poll on it),
- * and whose reconnects back off 1s → 15s until disposed (then nothing
- * re-opens).
+ * `onFrame` with their answer fields intact, whose phase frames pass through
+ * with their blank answer intact (`blank:true` = watch-time "still waiting",
+ * `blank:false` = the flip), whose open/close transitions reach the optional
+ * `onState` signal (each hook suspends its poll on it), and whose reconnects
+ * back off 1s → 15s until disposed (then nothing re-opens).
  */
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -185,6 +186,24 @@ describe('connectSessionPush', () => {
       socket.frame(answered)
       expect(onFrame).toHaveBeenCalledTimes(1)
       expect(onFrame).toHaveBeenCalledWith(answered)
+    } finally {
+      dispose()
+    }
+  })
+
+  it('passes phase frames through with their blank answer intact (true and false)', () => {
+    const onFrame = vi.fn()
+    const dispose = connectSessionPush(['t1'], onFrame)
+    try {
+      const socket = socketAt(0)
+      socket.open()
+      // A watch-time "still waiting" answer and the one-shot flip both ride
+      // the same validation: shape only, semantics stay the hook's business.
+      socket.frame({ kind: 'phase', sessionId: 't1', blank: true })
+      socket.frame({ kind: 'phase', sessionId: 't1', blank: false })
+      expect(onFrame).toHaveBeenCalledTimes(2)
+      expect(onFrame).toHaveBeenNthCalledWith(1, { kind: 'phase', sessionId: 't1', blank: true })
+      expect(onFrame).toHaveBeenNthCalledWith(2, { kind: 'phase', sessionId: 't1', blank: false })
     } finally {
       dispose()
     }

@@ -2109,22 +2109,35 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
   }), 'dsh-better-sidebar: side-chat push WebSocket')
 
   // ── Session push WebSocket ─────────────────────────────────────────────
-  // The client polls `session.phase` (1s while blank) and `session.cwd` (5s)
-  // only as a DROPPED-SOCKET fallback now: while this socket is open the
-  // client suspends its polls and the frames carry the answers. A first
-  // user/assistant message flips the blank phase; a watch (re)subscription or
-  // a coalesced tool/call burst resolves the live cwd through `resolveCwd`
-  // and pushes `{kind:'cwd', sessionId, cwd, root, parent}`. The resolver is
-  // the very `session.cwd` route (invoked with `fresh: true`, skipping the 3s
-  // TTL cache), so the pushed answer and the HTTP answer can never disagree;
-  // a failed resolution degrades to the bare `{kind:'cwd', sessionId}` frame
-  // the client answers with its own fresh re-ask of the same route.
+  // The client polls `session.phase` (1s) and `session.cwd` (5s) only as a
+  // DROPPED-SOCKET fallback now: while this socket is open the client
+  // suspends both polls and the frames carry the answers. A first
+  // user/assistant message flips the blank phase; a watch (re)subscription
+  // resolves and pushes the CURRENT phase (`{kind:'phase', sessionId,
+  // blank}` — `blank:true` means still waiting) through `resolvePhase`, and
+  // a watch or a coalesced tool/call burst resolves the live cwd through
+  // `resolveCwd` and pushes `{kind:'cwd', sessionId, cwd, root, parent}`.
+  // Both resolvers ARE the very HTTP routes (`resolvePhase` calls
+  // `session.phase`, `resolveCwd` calls `session.cwd` with `fresh: true`,
+  // skipping the 3s TTL cache), so the pushed answers can never disagree
+  // with the polled ones; a failed phase resolution pushes nothing (the 1s
+  // poll stays the fallback) and a failed cwd resolution degrades to the
+  // bare `{kind:'cwd', sessionId}` frame the client answers with its own
+  // fresh re-ask of the same route.
   const sessionWss = new WebSocketServer({ noServer: true })
   const sessionPush = createSessionPushHub(ctx, {
+    resolvePhase: async (sessionId) => {
+      // 同源：直接调用 `session.phase` 路由实现本身（HTTP 派发同样是 handler(payload)），
+      // 与下方 resolveCwd 同一模式 —— 推送答案即路由答案，不存在第二份实现。
+      // （类型层收窄掉 noUncheckedIndexedAccess 给 Record 查找附加的 undefined，
+      // buildApi 的字面量返回保证这两个方法存在；纯类型断言，无运行时行为。）
+      const answer = await (api['session.phase'] as ApiMethod)({ sessionId })
+      return answer as { blank: boolean }
+    },
     resolveCwd: async (sessionId) => {
       // 同源：直接调用 `session.cwd` 路由实现本身（HTTP 派发同样是 handler(payload)），
       // `fresh: true` 跳过 3s TTL 缓存 —— 推送答案即路由答案，不存在第二份实现。
-      const answer = await api['session.cwd']({ sessionId, fresh: true })
+      const answer = await (api['session.cwd'] as ApiMethod)({ sessionId, fresh: true })
       return answer as { sessionId: string; cwd: string; root: string; parent: string | null }
     },
   })
