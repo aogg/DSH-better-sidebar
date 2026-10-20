@@ -1,11 +1,15 @@
 /**
  * Client end of the session push channel `/sidebar/ws/session`.
  *
- * The host turns session events into invalidation notices: a first
- * user/assistant message flips the blank phase (`kind: 'phase'`) and a
- * tool/call may move the active workspace root (`kind: 'cwd'`). Frames carry
- * only the session id — the answer still comes from the same HTTP routes as
- * before, so a dropped socket self-heals through them.
+ * The host turns session events into frames: a first user/assistant message
+ * flips the blank phase (`kind: 'phase'` — the frame IS the answer, always
+ * `blank: false`), and a tool/call or a watch (re)subscription produces a cwd
+ * frame. A cwd frame carries the answer (`cwd`/`root`/`parent`, resolved by
+ * the host through the very `session.cwd` route) whenever it could resolve
+ * one; the bare `{kind:'cwd', sessionId}` variant — an older host, or a
+ * failed host-side resolution — is a pure invalidation the hook answers with
+ * its own fresh HTTP re-ask, so a dropped socket still self-heals through the
+ * routes.
  *
  * One small connector shared by the session hooks (`session-phase.ts`,
  * `use-session-root.ts`), shaped after use-sidechat-push minus the
@@ -16,12 +20,20 @@
  */
 import { hostWebSocketUrl } from './host-route-url.ts'
 
-/** One host frame: which watched session changed, and which fact went stale. */
+/** One host frame: which watched session changed, which fact — and maybe the answer. */
 export interface SessionPushFrame {
   kind: 'phase' | 'cwd'
   sessionId: string
   /** phase frames always carry `blank: false` — the only push-worthy flip. */
   blank?: unknown
+  /**
+   * cwd frames carry the answer when the host resolved one: the live root,
+   * same value the `session.cwd` route returns. Absent (older host / failed
+   * resolution) the frame is a pure invalidation — re-ask over HTTP.
+   */
+  cwd?: unknown
+  root?: unknown
+  parent?: unknown
 }
 
 /** How long to wait before re-opening a dropped socket; failures back off to the cap. */
@@ -32,7 +44,7 @@ const RETRY_MAX_MS = 15_000
  * Open the session push socket for one fixed watch set.
  * @param sessionIds - sessions to watch; announced on every (re)open.
  * @param onFrame - one validated host frame.
- * @param onState - optional open/close signal (the phase hook pauses its poll
+ * @param onState - optional open/close signal (each hook suspends its poll
  *   while the socket is open and falls back to it when the socket drops).
  * @returns the disposer (idempotent per connection).
  */

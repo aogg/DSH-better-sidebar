@@ -744,9 +744,11 @@ function buildApi(
       return { blank }
     },
     'session.cwd': async (payload) => {
-      // `fresh: true` rides only the push-triggered re-ask (see session-push.ts):
-      // the notice is the explicit "the root moved" signal, so it skips the
-      // 3s TTL cache the periodic polls rely on instead of waiting it out.
+      // `fresh: true` rides the push path: the session push hub resolves a cwd
+      // frame's answer through THIS route (see the resolver below), and a
+      // client answering a bare legacy frame re-asks with fresh — both are the
+      // explicit "the root moved" signal, so they skip the 3s TTL cache the
+      // dropped-socket fallback poll relies on.
       const record = payload as { fresh?: unknown } | null
       const { sessionId, cwd } = await cwdOf(payload, { fresh: record?.fresh === true })
       return { sessionId, cwd, root: rootLabel(cwd), parent: parentOf(cwd) ?? null }
@@ -2107,14 +2109,25 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
   }), 'dsh-better-sidebar: side-chat push WebSocket')
 
   // ── Session push WebSocket ─────────────────────────────────────────────
-  // The client polls `session.phase` (1s while blank) and `session.cwd` (5s);
-  // this socket tells it WHEN to re-ask instead: a first user/assistant
-  // message flips the blank phase, a tool/call may move the active worktree.
-  // Frames carry only the session id (never route answers), so the two HTTP
-  // routes stay the single source of truth and a dropped socket self-heals
-  // through the same polls it fell back to before.
+  // The client polls `session.phase` (1s while blank) and `session.cwd` (5s)
+  // only as a DROPPED-SOCKET fallback now: while this socket is open the
+  // client suspends its polls and the frames carry the answers. A first
+  // user/assistant message flips the blank phase; a watch (re)subscription or
+  // a coalesced tool/call burst resolves the live cwd through `resolveCwd`
+  // and pushes `{kind:'cwd', sessionId, cwd, root, parent}`. The resolver is
+  // the very `session.cwd` route (invoked with `fresh: true`, skipping the 3s
+  // TTL cache), so the pushed answer and the HTTP answer can never disagree;
+  // a failed resolution degrades to the bare `{kind:'cwd', sessionId}` frame
+  // the client answers with its own fresh re-ask of the same route.
   const sessionWss = new WebSocketServer({ noServer: true })
-  const sessionPush = createSessionPushHub(ctx)
+  const sessionPush = createSessionPushHub(ctx, {
+    resolveCwd: async (sessionId) => {
+      // 同源：直接调用 `session.cwd` 路由实现本身（HTTP 派发同样是 handler(payload)），
+      // `fresh: true` 跳过 3s TTL 缓存 —— 推送答案即路由答案，不存在第二份实现。
+      const answer = await api['session.cwd']({ sessionId, fresh: true })
+      return answer as { sessionId: string; cwd: string; root: string; parent: string | null }
+    },
+  })
   ctx.effect(() => () => { sessionPush.dispose() }, 'dsh-better-sidebar: session push hub')
   ctx.effect(() => ctx.webServer.registerUpgrade({
     path: '/sidebar/ws/session',

@@ -1,16 +1,19 @@
 /**
  * Session push hub spec (`/sidebar/ws/session`, src/session-push.ts): the hub
- * turns session events into per-session INVALIDATION notices. What matters
- * here is exactly that shape — the watch frame REPLACES the watch set (and
- * drops a forgotten session's pending notice), malformed or foreign frames
- * are silently ignored, the watch set caps at 64, the blank flip pushes ONE
- * phase frame per socket per session (a burst of messages must not spam the
- * client), a tool/call folds into one cwd frame per 250ms window (the FIRST
- * trigger's window wins, and a window can fire again once it has), and a ctx
- * without the event API degrades to a no-op instead of throwing.
+ * turns session events into per-session frames. What matters here is exactly
+ * that shape — the watch frame REPLACES the watch set (and drops a forgotten
+ * session's pending notice), malformed or foreign frames are silently
+ * ignored, the watch set caps at 64, the blank flip pushes ONE phase frame
+ * per socket per session (a burst of messages must not spam the client), a
+ * tool/call folds into one cwd frame per 250ms window (the FIRST trigger's
+ * window wins, and a window can fire again once it has), and a ctx without
+ * the event API degrades to a no-op instead of throwing. With a resolver
+ * injected, cwd frames carry the ANSWER — pushed right on a new watch entry
+ * and at each window's end, degraded to the bare frame when the resolution
+ * fails or lands after the session left the watch set.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createSessionPushHub } from '../src/session-push.ts'
+import { createSessionPushHub, type SessionCwdAnswer } from '../src/session-push.ts'
 import type { Context } from '../src/context-types.ts'
 import type { WebSocket } from 'ws'
 
@@ -22,6 +25,9 @@ interface HubFrame {
   kind: string
   sessionId: string
   blank?: unknown
+  cwd?: unknown
+  root?: unknown
+  parent?: unknown
 }
 
 /** A context exposing just the `on` table the hub subscribes through. */
@@ -282,5 +288,103 @@ describe('session push hub', () => {
     expect(() => { socket.receive({ op: 'watch', sessionIds: ['t1'] }) }).not.toThrow()
     expect(() => { hub.dispose() }).not.toThrow()
     expect(socket.sent).toEqual([])
+  })
+})
+
+describe('session push hub with a cwd resolver', () => {
+  /** One resolver double: always the same answer for any session. */
+  const answerOf = (cwd: string): ((sessionId: string) => Promise<SessionCwdAnswer>) =>
+    async (sessionId) => ({ sessionId, cwd, root: cwd, parent: null })
+
+  it('answers a newly watched session with its current answer right away', async () => {
+    const { ctx } = fakeCtx()
+    const resolveCwd = vi.fn(answerOf('/wt-a'))
+    const hub = createSessionPushHub(ctx, { resolveCwd })
+    const socket = new FakeSocket()
+    hub.attach(socket.asWebSocket())
+    socket.receive({ op: 'watch', sessionIds: ['t1', 't2'] })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(socket.frames()).toEqual([
+      { kind: 'cwd', sessionId: 't1', cwd: '/wt-a', root: '/wt-a', parent: null },
+      { kind: 'cwd', sessionId: 't2', cwd: '/wt-a', root: '/wt-a', parent: null },
+    ])
+
+    // A repeated identical watch frame adds nothing, so it pushes nothing.
+    socket.receive({ op: 'watch', sessionIds: ['t1', 't2'] })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(socket.frames()).toHaveLength(2)
+
+    // A re-watched session (dropped, then back) is new again: it hears its
+    // answer once more — a reconnecting client re-subscribes exactly so.
+    socket.receive({ op: 'watch', sessionIds: ['t2'] })
+    socket.receive({ op: 'watch', sessionIds: ['t2', 't1'] })
+    await vi.advanceTimersByTimeAsync(0)
+    const frames = socket.frames()
+    expect(frames).toHaveLength(3)
+    expect(frames.at(-1)).toEqual({ kind: 'cwd', sessionId: 't1', cwd: '/wt-a', root: '/wt-a', parent: null })
+    hub.dispose()
+  })
+
+  it('carries the answer on the coalesced tool/call frame, resolved at window-end', async () => {
+    const { ctx, emit } = fakeCtx()
+    // The answer MOVES mid-test: the watch must carry the pre-move answer and
+    // the window's frame the post-move one — proof the window resolves at its
+    // END, not from the state when the first tool call arrived.
+    let current = '/wt-before'
+    const resolveCwd = vi.fn(async (sessionId: string) => ({ sessionId, cwd: current, root: current, parent: null }))
+    const hub = createSessionPushHub(ctx, { resolveCwd })
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(socket.frames()).toEqual([{ kind: 'cwd', sessionId: 't1', cwd: '/wt-before', root: '/wt-before', parent: null }])
+
+    current = '/wt-after'
+    emit('session/event', { id: 't1' }, { type: 'tool/call' })
+    emit('session/event', { id: 't1' }, { type: 'tool/call' })
+    await vi.advanceTimersByTimeAsync(250)
+    expect(socket.frames()).toEqual([
+      { kind: 'cwd', sessionId: 't1', cwd: '/wt-before', root: '/wt-before', parent: null },
+      { kind: 'cwd', sessionId: 't1', cwd: '/wt-after', root: '/wt-after', parent: null },
+    ])
+    // One resolution per pushed frame (watch + window): no client re-asks.
+    expect(resolveCwd).toHaveBeenCalledTimes(2)
+    hub.dispose()
+  })
+
+  it('degrades to the bare cwd frame when the resolution fails', async () => {
+    const { ctx, emit } = fakeCtx()
+    const resolveCwd = vi.fn(async (sessionId: string) => {
+      throw new Error(`no answer for ${sessionId}`)
+    })
+    const hub = createSessionPushHub(ctx, { resolveCwd })
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+
+    // The watch-time answer fails: the bare invalidation still goes out.
+    await vi.advanceTimersByTimeAsync(0)
+    expect(socket.frames()).toEqual([{ kind: 'cwd', sessionId: 't1' }])
+
+    // Same for a window whose answer fails.
+    emit('session/event', { id: 't1' }, { type: 'tool/call' })
+    await vi.advanceTimersByTimeAsync(250)
+    expect(socket.frames()).toEqual([{ kind: 'cwd', sessionId: 't1' }, { kind: 'cwd', sessionId: 't1' }])
+    hub.dispose()
+  })
+
+  it('drops an answer that resolves after the session left the watch set', async () => {
+    let release: ((answer: SessionCwdAnswer) => void) | undefined
+    const resolveCwd = vi.fn((): Promise<SessionCwdAnswer> => new Promise(resolve => { release = resolve }))
+    const { ctx } = fakeCtx()
+    const hub = createSessionPushHub(ctx, { resolveCwd })
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+
+    // Un-watch while the answer is in flight, then let it land: a late answer
+    // for a session the client watched away must not arrive.
+    socket.receive({ op: 'watch', sessionIds: [] })
+    release?.({ sessionId: 't1', cwd: '/late', root: '/late', parent: null })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(socket.frames()).toEqual([])
+    hub.dispose()
   })
 })

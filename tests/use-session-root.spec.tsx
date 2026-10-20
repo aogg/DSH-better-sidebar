@@ -1,10 +1,13 @@
 /**
  * useSessionRoot (src/client/use-session-root.ts) with the session push
- * channel in place: a cwd frame for THIS session re-asks immediately WITH
- * `fresh` (the host must skip its 3s TTL cache), while every pre-existing
- * path — the initial read, window focus, the refresh-files event and the 5s
- * timer — stays non-fresh; a hidden document skips the ask entirely; and a
- * fresh answer that repeats the old cwd still folds (no re-render).
+ * channel carrying ANSWERS: a cwd frame for THIS session with `cwd` lands
+ * directly (no HTTP ask, same-value frames fold); a BARE cwd frame — older
+ * host, failed host-side resolution — re-asks immediately WITH `fresh` (the
+ * host must skip its 3s TTL cache); the 5s timer runs only while the socket
+ * is closed (suspended on open, resumed on a drop) and stays non-fresh, as
+ * do the initial read, window focus and the refresh-files event; a hidden
+ * document skips the ask entirely; and a fresh answer that repeats the old
+ * cwd still folds (no re-render).
  */
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -135,7 +138,7 @@ afterEach(() => {
 })
 
 describe('useSessionRoot', () => {
-  it('re-asks with fresh on this session\'s cwd frame, not on other frames', async () => {
+  it('re-asks with fresh on a BARE cwd frame (older host / failed resolution), not on other frames', async () => {
     const harness = mountRoot('s1')
     try {
       await settle()
@@ -151,11 +154,61 @@ describe('useSessionRoot', () => {
       })
       expect(sessionCwdMock).toHaveBeenCalledTimes(1)
 
+      // A bare frame carries no answer: the immediate re-ask carries
+      // { fresh: true } so the host skips its TTL cache.
       act(() => { socket.frame({ kind: 'cwd', sessionId: 's1' }) })
       expect(sessionCwdMock).toHaveBeenCalledTimes(2)
-      // The push is the explicit "it moved" signal: the host must skip its
-      // TTL cache, so the re-ask carries { fresh: true }.
       expect(sessionCwdMock).toHaveBeenLastCalledWith({ sessionId: 's1' }, { fresh: true })
+    } finally {
+      harness.unmount()
+    }
+  })
+
+  it('lands a cwd frame that CARRIES the answer without any HTTP ask', async () => {
+    const harness = mountRoot('s1')
+    try {
+      await settle()
+      expect(sessionCwdMock).toHaveBeenCalledTimes(1)
+
+      harness.socket().open()
+      act(() => {
+        harness.socket().frame({ kind: 'cwd', sessionId: 's1', cwd: '/wt-pushed', root: 'pushed', parent: null })
+      })
+      // The answer is in the frame: it lands directly, no re-ask.
+      expect(harness.root()).toBe('/wt-pushed')
+      expect(sessionCwdMock).toHaveBeenCalledTimes(1)
+
+      // A repeated identical answer folds: no re-render.
+      const commitsBefore = harness.commits()
+      act(() => {
+        harness.socket().frame({ kind: 'cwd', sessionId: 's1', cwd: '/wt-pushed', root: 'pushed', parent: null })
+      })
+      expect(harness.commits()).toBe(commitsBefore)
+
+      // And while the socket stays open, the 5s poll stays suspended.
+      await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
+      expect(sessionCwdMock).toHaveBeenCalledTimes(1)
+    } finally {
+      harness.unmount()
+    }
+  })
+
+  it('suspends the 5s poll while the socket is open and resumes it on a drop', async () => {
+    const harness = mountRoot('s1')
+    try {
+      await settle()
+      expect(sessionCwdMock).toHaveBeenCalledTimes(1)
+
+      // Open socket: the answers arrive as frames, so no timer ticks.
+      harness.socket().open()
+      await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
+      expect(sessionCwdMock).toHaveBeenCalledTimes(1)
+
+      // A drop resumes the fallback timer: the next tick re-asks (never fresh).
+      harness.socket().drop()
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+      expect(sessionCwdMock).toHaveBeenCalledTimes(2)
+      expect(sessionCwdMock.mock.calls[1]?.[1]).toBeUndefined()
     } finally {
       harness.unmount()
     }

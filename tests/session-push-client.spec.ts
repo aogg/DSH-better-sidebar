@@ -3,9 +3,11 @@
  * src/client/session-push.ts): one socket under `/sidebar/ws/session` whose
  * full `watch` frame is (re-)sent on EVERY open — the first one and the one
  * after a reconnect alike — whose malformed / unknown-kind / foreign-session
- * frames never reach `onFrame`, whose open/close transitions reach the
- * optional `onState` signal (the phase hook pauses its poll on it), and whose
- * reconnects back off 1s → 15s until disposed (then nothing re-opens).
+ * frames never reach `onFrame`, whose answer-carrying cwd frames reach
+ * `onFrame` with their answer fields intact, whose open/close transitions
+ * reach the optional `onState` signal (each hook suspends its poll on it),
+ * and whose reconnects back off 1s → 15s until disposed (then nothing
+ * re-opens).
  */
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -166,6 +168,23 @@ describe('connectSessionPush', () => {
       expect(onFrame).toHaveBeenNthCalledWith(1, phase)
       expect(onFrame).toHaveBeenNthCalledWith(2, { kind: 'cwd', sessionId: 't1' })
       expect(onFrame).toHaveBeenNthCalledWith(3, { kind: 'cwd', sessionId: 't9' })
+    } finally {
+      dispose()
+    }
+  })
+
+  it('passes an answer-carrying cwd frame through with its answer fields intact', () => {
+    const onFrame = vi.fn()
+    const dispose = connectSessionPush(['t1'], onFrame)
+    try {
+      const socket = socketAt(0)
+      socket.open()
+      // The answer rides the frame verbatim: which session is "mine" and how
+      // to land the answer stay the hook's business.
+      const answered: SessionPushFrame = { kind: 'cwd', sessionId: 't1', cwd: '/wt', root: 'wt', parent: null }
+      socket.frame(answered)
+      expect(onFrame).toHaveBeenCalledTimes(1)
+      expect(onFrame).toHaveBeenCalledWith(answered)
     } finally {
       dispose()
     }

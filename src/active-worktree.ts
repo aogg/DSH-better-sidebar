@@ -17,11 +17,13 @@
  * newest event that has one wins; when there is no evidence the session cwd is
  * kept (lifted to the repository top level for subdirectory sessions).
  *
- * Resolutions are cached process-wide, so the client's periodic re-ask is
- * cheap after the first scan. A caller that KNOWS the answer moved — the
- * `/sidebar/ws/session` cwd notice — passes `fresh` to skip the cached read
- * and recompute immediately (the push's own coalescing window bounds how
- * often that happens); the fresh scan still refreshes the cache.
+ * Resolutions are cached process-wide, so re-asks are cheap after the first
+ * scan. A caller that KNOWS the answer moved — the `/sidebar/ws/session` push
+ * hub resolving a cwd frame's answer, or the client's fresh re-ask for a bare
+ * legacy frame — passes `fresh` to skip the cached read and recompute
+ * immediately (the push's own coalescing window bounds how often that
+ * happens); the fresh scan still refreshes the cache, which the client's 5s
+ * DROPPED-SOCKET fallback poll then reads for free.
  */
 import { stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join, sep } from 'node:path'
@@ -48,8 +50,8 @@ const ACTIVE_ROOT_PATH_PATTERN = /[A-Za-z]:(?:\\|\/)[^\\/\s"'\x60,;|)<>*?]+(?:[\
  * is the RAW base the caller passed (not the lifted one), because the entry has
  * to be usable BEFORE the git probe below: that probe is a real process spawn
  * (measured ~7 ms), and the repeated asks  every debounced watch frame, every
- * route call, the client's 5 s poll  are exactly what the TTL exists to keep
- * free.
+ * route call, the client's fallback poll  are exactly what the TTL exists to
+ * keep free.
  */
 const activeWorktreeRootCache = new Map<string, { root: string; base: string; expires: number }>()
 const pathTopCache = new Map<string, string | undefined>()
