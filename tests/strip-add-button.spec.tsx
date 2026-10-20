@@ -66,8 +66,8 @@ function buildStrip(paneId: string, tabs: number): { strip: HTMLElement; tabsRow
 }
 
 /** The stand-in button inside `strip`, if one is injected. */
-function standInOf(strip: HTMLElement): HTMLElement | null {
-  return strip.querySelector('[data-dsh-add-tab-standin]')
+function standInOf(strip: HTMLElement): HTMLButtonElement | null {
+  return strip.querySelector<HTMLButtonElement>('[data-dsh-add-tab-standin]')
 }
 
 /** The minimal ctx face the module reads: `get('sidebarRight')` → controller. */
