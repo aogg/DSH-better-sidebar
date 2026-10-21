@@ -33,6 +33,10 @@ import type {
   ContentSearchResult,
 } from '../content-search-types.ts'
 
+// Re-exported for the views that read the v2 wire shapes through this module
+// (SearchView's `import type { ContentSearchResult } from './api.ts'`).
+export type { ContentSearchMatchOptions, ContentSearchResult }
+
 /**
  * The `history.list` response: ONE FLAT PAGE of the current project's
  * user-prompt records. The page is a composite new→old sequence across

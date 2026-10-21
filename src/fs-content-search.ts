@@ -652,6 +652,14 @@ async function readSearchableLines(absolute: string): Promise<string[] | undefin
   }
 }
 
+/** One kept hit of the walk's scan phase: the 1-based line plus the shared
+ *  matcher's 0-based column/length — the wire coordinates, pre-context. */
+interface LineRange {
+  line: number
+  column: number
+  length: number
+}
+
 /** Turn kept ranges (line/column/length) into wire hits, pulling the
  *  context window straight out of the file's line array — file edges simply
  *  yield fewer than two lines, and two hits on adjacent lines share theirs. */
