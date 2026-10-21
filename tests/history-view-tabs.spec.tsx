@@ -1,0 +1,253 @@
+/**
+ * 「历史发送」页签的顶 tab 与记录跳转（v0.28.16）：
+ * - 顶 tab：当前会话（默认第一，payload scope:'session' + limit 50）/
+ *   总发送历史（scope:'project' + limit 20）；切 tab = 完整 reload，两个
+ *   tab 的 records 不串仓；
+ * - ws `history` 帧：session tab 只合并当前 sessionId 的帧，project tab
+ *   保持 watch 集逻辑（别的会话只要在 watch 集里就并入）；
+ * - 跳转按钮：本会话的记录不重复 openSession，直接主视图定位（data-* 行
+ *   命中 → 滚动 + 短暂高亮）；跨会话的记录先经 uiWorkspace.openSession 打
+ *   开，定位不到就降级（按钮 title 换「已打开会话」说明）；宿主桥缺席静
+ *   默不炸。api / session-push 模块级 mock（side-card-scope-tabs 手法），
+ *   定位时长经 jumpLocateOptions 注入（不真等 5s）。
+ */
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createElement } from 'react'
+import { act } from 'react-dom/test-utils'
+// First import: browser globals before the primitive-carrying sidebar graph loads.
+import './browser-globals.ts'
+import { renderRoot, setupReactAct } from './test-utils.ts'
+import type { HistorySendRecord } from '../src/prompt-history-extract.ts'
+
+setupReactAct()
+
+/** connectSessionPush 的捕获状态：记录每次连接的帧回调（emitFrame 用最后一个）。 */
+const { pushState } = vi.hoisted(() => ({
+  pushState: { handlers: [] as ((frame: unknown) => void)[] },
+}))
+
+vi.mock('../src/client/api.ts', () => ({
+  SidebarApiError: class SidebarApiError extends Error {
+    code: string
+    constructor(code: string, message: string) {
+      super(message)
+      this.code = code
+    }
+  },
+  api: {
+    historyList: vi.fn(async () => ({ available: true, records: [], hasMore: false, seeding: false })),
+    historyAnnotationsGet: vi.fn(async () => ({ version: 1, comments: {}, tags: {}, groups: [] })),
+    historyAnnotationsUpdate: vi.fn(async () => ({ version: 1, comments: {}, tags: {}, groups: [] })),
+  },
+}))
+
+vi.mock('../src/client/session-push.ts', () => ({
+  connectSessionPush: vi.fn((_sessionIds: readonly string[], onFrame: (frame: unknown) => void) => {
+    pushState.handlers.push(onFrame)
+    return () => { /* 测试用连接无需清理 */ }
+  }),
+}))
+
+import { api } from '../src/client/api.ts'
+import { HistoryView } from '../src/client/HistoryView.tsx'
+
+beforeEach(() => {
+  Object.defineProperty(navigator, 'language', { value: 'en-US', configurable: true })
+  pushState.handlers.length = 0
+})
+
+afterEach(() => {
+  document.body.innerHTML = ''
+  vi.clearAllMocks()
+})
+
+function rec(sessionId: string, seq: number, time: number, text: string): HistorySendRecord {
+  return { key: `${sessionId}:${seq}`, sessionId, seq, time, text, textTruncated: false }
+}
+
+const CUR_RECORDS = [
+  rec('cur', 0, 1_700_000_000_000, 'cur 的第一条提问'),
+  rec('cur', 1, 1_700_000_001_000, 'cur 的第二条提问'),
+]
+const PROJECT_RECORDS = [
+  rec('s2', 5, 1_700_000_010_000, 's2 要跳转的一条'),
+  rec('cur', 0, 1_700_000_000_000, 'cur 的第一条提问'),
+]
+
+/** api.historyList 按 scope 发不同的页（两个 tab 的仓分开可辨）。 */
+function mockHistoryListByScope(): void {
+  ;(api.historyList as ReturnType<typeof vi.fn>).mockImplementation(async (payload: { scope?: string }) => ({
+    available: true,
+    records: payload.scope === 'session' ? CUR_RECORDS : PROJECT_RECORDS,
+    hasMore: false,
+    seeding: false,
+  }))
+}
+
+interface JumpFace { openSession: ReturnType<typeof vi.fn> }
+
+type HistoryViewProps = React.ComponentProps<typeof HistoryView>
+
+/** 挂一个 HistoryView；uiWorkspaceFace 缺省给一个 openSession 间谍。 */
+function mountView(options: { sessionId?: string; uiWorkspace?: JumpFace | 'absent'; jumpLocateOptions?: HistoryViewProps['jumpLocateOptions'] } = {}) {
+  const face = options.uiWorkspace === 'absent' ? undefined : options.uiWorkspace ?? { openSession: vi.fn() }
+  const ctx = { get: (name: string) => (name === 'uiWorkspace' ? face : undefined) }
+  const view = renderRoot(createElement(HistoryView, {
+    sessionId: options.sessionId ?? 'cur',
+    ctx,
+    ...(options.jumpLocateOptions !== undefined ? { jumpLocateOptions: options.jumpLocateOptions } : {}),
+  } as unknown as HistoryViewProps))
+  return { face: face as JumpFace, view }
+}
+
+function tabButton(label: string): HTMLButtonElement {
+  const tabs = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+  const node = tabs.find(tab => tab.textContent?.trim() === label)
+  if (node === undefined) throw new Error(`scope tab ${label} not rendered`)
+  return node
+}
+
+function click(target: HTMLElement): void {
+  act(() => {
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  })
+}
+
+function jumpButton(key: string): HTMLButtonElement {
+  const node = document.querySelector<HTMLButtonElement>(`[data-dsh-history-jump="${key}"]`)
+  if (node === null) throw new Error(`jump button for ${key} not rendered`)
+  return node
+}
+
+/** act 内等待（冲掉 drip 定时器 / promise 微任务的 React 提交）。 */
+async function flush(ms = 120): Promise<void> {
+  await act(async () => {
+    await new Promise(resolve => { setTimeout(resolve, ms) })
+  })
+}
+
+async function waitForText(text: string): Promise<void> {
+  await act(async () => {
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain(text)
+    })
+  })
+}
+
+describe('history view 顶 tab（当前会话 / 总发送历史）', () => {
+  it('默认激活「当前会话」：payload scope=session + limit 50，只显示当前会话记录', async () => {
+    mockHistoryListByScope()
+    const { view } = mountView()
+    expect(document.querySelectorAll('[role="tab"]')).toHaveLength(2)
+    expect(tabButton('Current Session').getAttribute('aria-selected')).toBe('true')
+    expect(tabButton('All Sends').getAttribute('aria-selected')).toBe('false')
+    await waitForText('cur 的第一条提问')
+    expect(api.historyList).toHaveBeenCalledWith({ sessionId: 'cur', scope: 'session', limit: 50 })
+    // project 仓的记录不在当前会话 tab 上。
+    expect(document.body.textContent).not.toContain('s2 要跳转的一条')
+    view.unmount()
+  })
+
+  it('切「总发送历史」= 完整 reload（scope=project + limit 20），切回不残留上一 tab 的记录', async () => {
+    mockHistoryListByScope()
+    const { view } = mountView()
+    await waitForText('cur 的第一条提问')
+    click(tabButton('All Sends'))
+    expect(tabButton('All Sends').getAttribute('aria-selected')).toBe('true')
+    await waitForText('s2 要跳转的一条')
+    expect(api.historyList).toHaveBeenCalledWith({ sessionId: 'cur', scope: 'project', limit: 20 })
+    // 会话 tab 的私有记录（cur:1 只在 session 仓里）不残留。
+    expect(document.body.textContent).not.toContain('cur 的第二条提问')
+    click(tabButton('Current Session'))
+    await waitForText('cur 的第二条提问')
+    expect(document.body.textContent).not.toContain('s2 要跳转的一条')
+    view.unmount()
+  })
+
+  it('ws 合并不串仓：session tab 丢别的会话的帧；project tab 按 watch 集并入', async () => {
+    mockHistoryListByScope()
+    const { view } = mountView()
+    await waitForText('cur 的第一条提问')
+    // session tab：别的会话的帧绝不并入。
+    act(() => {
+      pushState.handlers.at(-1)?.({ kind: 'history', sessionId: 's2', records: [rec('s2', 0, 1, 's2 实时的一问')] })
+    })
+    await flush()
+    expect(document.body.textContent).not.toContain('s2 实时的一问')
+    // 当前会话的帧照常并入（渐进队列 ~40ms/条）。
+    act(() => {
+      pushState.handlers.at(-1)?.({ kind: 'history', sessionId: 'cur', records: [rec('cur', 9, 9, 'cur 实时的一问')] })
+    })
+    await waitForText('cur 实时的一问')
+    // 切 project tab：完整 reload 清掉会话 tab 的实时记录；别的会话的帧按
+    // watch 集并入（s2 的记录已在仓里 → 在 watch 集内）。
+    click(tabButton('All Sends'))
+    await waitForText('s2 要跳转的一条')
+    expect(document.body.textContent).not.toContain('cur 实时的一问')
+    act(() => {
+      pushState.handlers.at(-1)?.({ kind: 'history', sessionId: 's2', records: [rec('s2', 6, 10, 's2 实时的二问')] })
+    })
+    await waitForText('s2 实时的二问')
+    view.unmount()
+  })
+})
+
+describe('history view 记录跳转', () => {
+  it('本会话的记录：不重复 openSession，主视图 data-* 行命中 → 滚动 + 短暂高亮后复原', async () => {
+    mockHistoryListByScope()
+    // 主视图 DOM：宿主的稳定滚动容器 + 用户消息 flow 行。
+    const scrollport = document.createElement('div')
+    scrollport.setAttribute('data-conversation-scroll', '')
+    const row = document.createElement('div')
+    row.setAttribute('data-chat-flow-key', 'f1')
+    row.setAttribute('data-chat-flow-kind', 'user')
+    row.textContent = 'cur 的第一条提问'
+    scrollport.append(row)
+    document.body.append(scrollport)
+    const scrollTo = vi.fn((_options?: ScrollToOptions) => {})
+    ;(scrollport as unknown as { scrollTo: unknown }).scrollTo = scrollTo
+
+    const { face, view } = mountView({ jumpLocateOptions: { timeoutMs: 500, highlightMs: 40 } })
+    await waitForText('cur 的第一条提问')
+    click(jumpButton('cur:0'))
+    await act(async () => {
+      await vi.waitFor(() => { expect(scrollTo).toHaveBeenCalled() })
+    })
+    expect(face.openSession).not.toHaveBeenCalled()
+    expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'smooth' }))
+    expect(row.dataset.dshHistoryHighlight).toBe('1')
+    // 高亮到点复原。
+    await flush(140)
+    expect(row.dataset.dshHistoryHighlight).toBeUndefined()
+    view.unmount()
+  })
+
+  it('跨会话的记录：先 uiWorkspace.openSession；定位不到就降级（title 换「已打开会话」）', async () => {
+    mockHistoryListByScope()
+    const { face, view } = mountView({ jumpLocateOptions: { timeoutMs: 150, highlightMs: 20 } })
+    click(tabButton('All Sends'))
+    await waitForText('s2 要跳转的一条')
+    click(jumpButton('s2:5'))
+    expect(face.openSession).toHaveBeenCalledWith('s2')
+    // 主视图里没有那条消息（也没造 DOM）：等定位超时 → 降级说明上 title。
+    await act(async () => {
+      await vi.waitFor(() => {
+        expect(jumpButton('s2:5').title).toContain('Session opened')
+      }, { timeout: 2000 })
+    })
+    view.unmount()
+  })
+
+  it('宿主桥缺席（无 uiWorkspace）：跨会话跳转静默不炸，title 保持默认', async () => {
+    mockHistoryListByScope()
+    const { view } = mountView({ uiWorkspace: 'absent', jumpLocateOptions: { timeoutMs: 150, highlightMs: 20 } })
+    click(tabButton('All Sends'))
+    await waitForText('s2 要跳转的一条')
+    expect(() => { click(jumpButton('s2:5')) }).not.toThrow()
+    await flush(250)
+    expect(jumpButton('s2:5').title).toContain('Jump to this prompt')
+    expect(jumpButton('s2:5').title).not.toContain('Session opened')
+    view.unmount()
+  })
+})

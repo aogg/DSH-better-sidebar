@@ -13,7 +13,8 @@
  *   路由立即返回现有内容 + `seeding:true`，绝不让首屏等扫描）；
  * - 从内存索引出「新→旧」分页（复合键游标 `${time}:${sessionId}:${seq}`，
  *   见 prompt-history-persist.ts 的 historyPageOf；跨会话平铺，limit 默认
- *   50、上限 200）。
+ *   50、上限 200）。`scope:'session'` 时先在项目仓记录里过滤出 sessionId
+ *   那一场会话再分页（页大小仍由 limit 决定，缺省 'project' 不变）。
  *
  * 项目根解析不出（无活会话头、无持久头）时降级为「只读当前会话」的瞬时抽取
  * （活快照优先，持久日志分窗读，绝不落盘——没有可归属的 projectKey），
@@ -66,9 +67,15 @@ export interface HistoryRoutes {
   'history.annotationsUpdate'(payload: unknown): Promise<HistoryAnnotations>
 }
 
-/** history.list 的入参：当前会话（定位项目）+ 分页游标/条数。 */
+/** history.list 的入参：当前会话（定位项目）+ 作用域 + 分页游标/条数。 */
 export interface HistoryListPayload {
   sessionId?: string
+  /**
+   * 记录作用域：`'project'`（缺省，向后兼容）= 现状的项目全量跨会话视图；
+   * `'session'` = 只回 `sessionId` 那一场会话的记录（在项目仓记录里过滤出
+   * 该会话后再走复合键游标分页，游标语义与 project 完全一致）。
+   */
+  scope?: 'session' | 'project'
   /** 上页返回的 nextCursor；缺省从最新一页开始。 */
   cursor?: string
   /** 单页条数（默认 50，上限 200）。 */
@@ -213,6 +220,8 @@ export function buildPromptHistoryApi(ctx: Context, deps: PromptHistoryApiDeps =
     'history.list': async (payload: unknown) => {
       const record = (payload ?? {}) as HistoryListPayload
       const sessionId = typeof record.sessionId === 'string' && record.sessionId !== '' ? record.sessionId : undefined
+      // scope 缺省 'project'（wire 向后兼容：老客户端不带这个字段，行为不变）。
+      const scope = record.scope === 'session' ? 'session' : 'project'
       const cursor = typeof record.cursor === 'string' && record.cursor !== '' ? record.cursor : undefined
       const limit = normalizeHistoryLimit(record.limit)
       const root = await resolveProjectRootOf(ctx, sessionId)
@@ -230,7 +239,13 @@ export function buildPromptHistoryApi(ctx: Context, deps: PromptHistoryApiDeps =
       // 载入是快路径，扫描本身永远不等。
       live.kick(projectKey, root, sessionId)
       const entry = await store.loadProject(projectKey)
-      const page = historyPageOf(entry.records, cursor, limit)
+      // scope='session'：项目仓记录先按 sessionId 过滤，再走同一条复合键
+      // 游标分页——两个作用域的游标/hasMore 语义完全一致（页大小由客户端
+      // 显式传 limit，服务端默认值不动）。
+      const scoped = scope === 'session'
+        ? entry.records.filter(candidate => candidate.sessionId === sessionId)
+        : entry.records
+      const page = historyPageOf(scoped, cursor, limit)
       const degraded = live.degradedOf(projectKey)
       return {
         available: true,

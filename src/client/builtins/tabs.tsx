@@ -274,8 +274,10 @@ export function builtinTabs(ctx: Context): readonly TabDescriptor[] {
       // page, but a visible door on the guide and in the + menu.
       order: 38,
       single: true,
-      component: ({ scope, visible }) => (
-        <HistoryView visible={visible} sessionId={scope.sessionId} />
+      // ctx feeds the record-jump host bridge (uiWorkspace.openSession — the
+      // same ConversationNavigation face SubagentView's openConversation uses).
+      component: ({ ctx, scope, visible }) => (
+        <HistoryView ctx={ctx} visible={visible} sessionId={scope.sessionId} />
       ),
     },
     {

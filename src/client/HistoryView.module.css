@@ -18,6 +18,43 @@
   gap: 8px;
 }
 
+/* 顶部作用域 tab（当前会话 / 总发送历史）：与设置页 scope tabs 同一套
+ * 形制（分段容器 + 选中反白），体积收窄适配侧栏宽度。 */
+.scopeTabs {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--dsw-alias-border-l2, var(--dsw-alias-hairline));
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base)));
+  width: fit-content;
+}
+
+.scopeTab {
+  appearance: none;
+  border: 0;
+  padding: 3px 12px;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.scopeTab:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l4, var(--dsw-alias-accent, var(--dsw-alias-hairline)));
+  outline-offset: 1px;
+}
+
+.scopeTabOn {
+  background: var(--dsw-alias-interactive-bg-active);
+  color: var(--dsw-alias-label-primary);
+}
+
 .toolbar {
   display: flex;
   align-items: center;

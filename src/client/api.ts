@@ -786,8 +786,11 @@ export const api = {
    * 翻页透传 {@link HistoryListResult.nextCursor}；`seeding` 翻转由 ws 的
    * `history-seed` 帧告知，客户端只在收尾后一次性补拉首页，不轮询）。宿主
    * 没有 persistence 服务时抛 503 `history-error`（页签内联降级提示）。
+   * `scope:'session'` 只回 `sessionId` 那一场会话的记录（顶 tab 的「当前
+   * 会话」视图）；缺省 `'project'` 是项目全量视图。`limit` 由客户端显式传
+   * （当前会话 50 / 总发送历史 20），服务端默认值不动。
    */
-  historyList: (payload: { sessionId?: string; cursor?: string; limit?: number } = {}) =>
+  historyList: (payload: { sessionId?: string; scope?: 'session' | 'project'; cursor?: string; limit?: number } = {}) =>
     call<HistoryListResult>('history.list', payload),
   /** 「历史发送」注解库全量（评论/标签/关联组，记录 key → 注解）。 */
   historyAnnotationsGet: () =>

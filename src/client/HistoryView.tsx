@@ -30,6 +30,20 @@
  *    是复合键（`${time}:${sessionId}:${seq}`），实时新账都落在游标之前
  *    （更新端），不破坏下一页语义。
  *
+ * 顶部作用域 tab（v0.28.16+）：「当前会话」（默认激活，第一）只看本页签
+ * 会话（props.sessionId）的发送记录，每页 50；「总发送历史」是现状的项目
+ * 全量视图，每页 20。切 tab = 一次完整 reload（清空渐进队列/seen/meta 再
+ * 重拉首页，两个 tab 共用同一套状态机，绝不串仓）；在途的上一 tab 响应落
+ * 地时按 scope 快照核对丢弃。ws 实时追加两个 tab 都生效：session tab 只
+ * 合并当前 sessionId 的帧记录，project tab 保持 watch 集逻辑；
+ * seeding/history-seed 帧驱动的收尾补拉两个 tab 都保留。tab 选择不持久化。
+ *
+ * 记录跳转（v0.28.16+）：每条记录的 chips 区有「跳转」按钮——跨会话的记录
+ * 先经 `ctx.get('uiWorkspace').openSession` 打开目标会话（本会话的记录主视
+ * 图已开着，不重复切换），然后等待主视图渲染并滚动定位到那条发送、短暂高
+ * 亮（详见 history-jump.ts 的机制与降级）；没滚到就把按钮 title 换成
+ * 「已打开会话」。
+ *
  * 展示：按会话（=一场对话）分组保留，组内时间正序（旧→新的聊天顺序），
  * 组间按最近一条消息新→旧；组头 = 会话标识 + 最近时间 + 条数；行文本默认
  * 3 行截断、点击展开全文可收起。搜索/标签过滤/多选建组/评论/标签/关联组
@@ -41,12 +55,14 @@
  * 重连后自动恢复追加）；注解写失败 → 同一内联错误行；空库 → 空态文案。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { Context } from '../context-types.ts'
 import { api, SidebarApiError, type HistoryListResult } from './api.ts'
 import { connectSessionPush, type SessionPushFrame } from './session-push.ts'
 import { formatStamp, formatStampFull, t } from './locales.ts'
 import { collectHistoryTags, filterHistoryRecords, groupRecordsBySession, mergeHistoryRecords, type HistorySessionGroup } from '../prompt-history-groups.ts'
 import { annotationOfRecord, emptyAnnotations, type HistoryAnnotationOpInput, type HistoryAnnotations, type HistoryComment } from '../prompt-history-store.ts'
 import type { HistorySendRecord } from '../prompt-history-extract.ts'
+import { jumpToHistoryRecord, type HistoryJumpOutcome, type HistoryLocateOptions } from './history-jump.ts'
 import css from './HistoryView.module.css'
 
 /** 逐条上屏的微节奏（一条接一条的间隔；太短看不出渐进，太长拖泥带水）。 */
@@ -55,6 +71,12 @@ const DRIP_INTERVAL_MS = 40
 const LIVE_NOTICE_MS = 4000
 /** ws watch 集上限（当前会话 + 已加载记录出现过的会话，去重后截断）。 */
 const WATCH_SESSIONS_MAX = 64
+
+/** 顶部作用域 tab：'session' = 当前会话（默认第一），'project' = 总发送历史。 */
+export type HistoryScope = 'session' | 'project'
+
+/** 各 tab 的每页条数（客户端显式传 limit；服务端默认值不动）。 */
+const HISTORY_SCOPE_LIMITS: Record<HistoryScope, number> = { session: 50, project: 20 }
 
 /** 会话标识的短拼法（去掉 `session-` 前缀，取前 8 位；完整 id 走 title）。 */
 function shortSessionId(id: string): string {
@@ -99,10 +121,17 @@ function historyRecordsOf(payload: unknown): HistorySendRecord[] {
   return out
 }
 
-/** history.list 的请求负载（sessionId 取页签 scope；cursor 仅翻页时带）。 */
-function listPayload(sessionId: string | undefined, cursor?: string): { sessionId?: string; cursor?: string } {
+/** history.list 的请求负载（sessionId 取页签 scope；scope/limit 按 tab 定；
+ *  cursor 仅翻页时带）。limit 显式传：当前会话 50 / 总发送历史 20。 */
+function listPayload(
+  sessionId: string | undefined,
+  scope: HistoryScope,
+  cursor?: string,
+): { sessionId?: string; scope: HistoryScope; limit: number; cursor?: string } {
   return {
     ...(sessionId !== undefined && sessionId !== '' ? { sessionId } : {}),
+    scope,
+    limit: HISTORY_SCOPE_LIMITS[scope],
     ...(cursor !== undefined && cursor !== '' ? { cursor } : {}),
   }
 }
@@ -129,7 +158,7 @@ function metaOf(list: HistoryListResult): HistoryMeta {
   }
 }
 
-/** 一条发送记录行：时间、截断文本、评论/标签/组 chips 与行内编辑器。 */
+/** 一条发送记录行：时间、截断文本、评论/标签/组 chips、跳转与行内编辑器。 */
 function RecordRow(props: {
   record: HistorySendRecord
   comments: readonly HistoryComment[]
@@ -138,11 +167,14 @@ function RecordRow(props: {
   expanded: boolean
   multiSelect: boolean
   selected: boolean
+  /** 该记录的跳转是否已降级成「只打开了会话」（换 title 说明）。 */
+  jumpDegraded: boolean
   onToggleExpand: (key: string) => void
   onToggleSelect: (key: string) => void
+  onJump: (record: HistorySendRecord) => void
   onMutate: (op: HistoryAnnotationOpInput) => Promise<boolean>
 }) {
-  const { record, comments, tags, groupNames, expanded, multiSelect, selected } = props
+  const { record, comments, tags, groupNames, expanded, multiSelect, selected, jumpDegraded } = props
   const [commentDraft, setCommentDraft] = useState('')
   const [tagDraft, setTagDraft] = useState('')
   const submitComment = (): void => {
@@ -200,6 +232,17 @@ function RecordRow(props: {
             <span key={name} className={`${css.chip} ${css.groupChip}`}>{name}</span>
           ))}
           {record.textTruncated && <span className={css.note}>{t('historyTextTruncated')}</span>}
+          {/* 跳转：打开记录所属会话并定位到这条发送（降级时 title 说明）。 */}
+          <button
+            type="button"
+            className={`${css.chip} ${css.chipButton}`}
+            data-dsh-history-jump={record.key}
+            title={jumpDegraded ? t('historyJumpOpenedTitle') : t('historyJumpTitle')}
+            aria-label={jumpDegraded ? t('historyJumpOpenedTitle') : t('historyJumpTitle')}
+            onClick={() => { props.onJump(record) }}
+          >
+            {t('historyJump')}
+          </button>
         </div>
         <div
           className={expanded ? css.text : css.textClamped}
@@ -277,9 +320,18 @@ function RecordRow(props: {
 /**
  * 「历史发送」页签本体。`visible` 是页签激活+面板展开信号（保留给后续的
  * 可见性懒加载；首屏挂载即渲染空列表 + 细加载条，随后异步渐进填充）。
+ * `ctx` 供记录跳转读宿主的 uiWorkspace 桥（缺席时跳转只剩同会话定位）。
+ * `jumpLocateOptions` 只在测试里注入（定位超时/高亮时长）；生产走缺省。
  */
-export function HistoryView(props: { visible?: boolean; sessionId?: string }): React.JSX.Element {
+export function HistoryView(props: {
+  visible?: boolean
+  sessionId?: string
+  ctx?: Context
+  jumpLocateOptions?: HistoryLocateOptions
+}): React.JSX.Element {
   void props.visible
+  // 顶部作用域 tab（当前会话默认第一；选择不持久化）。
+  const [scope, setScope] = useState<HistoryScope>('session')
   // 渐进上屏的记录（可见列表）与其元数据。
   const [records, setRecords] = useState<HistorySendRecord[]>([])
   const [meta, setMeta] = useState<HistoryMeta>(HISTORY_META_EMPTY)
@@ -321,6 +373,9 @@ export function HistoryView(props: { visible?: boolean; sessionId?: string }): R
   const pagedRef = useRef(false)
   // 扫描收尾补拉的在途闸（同一收尾只补拉一次）。
   const seedRefetchRef = useRef(false)
+  // 当前 tab 的同步镜像（ws 回调/在途响应落地时读，不依赖渲染快照；切 tab
+  // 先写镜像再 setState，落地判 scopes 变化丢弃串仓响应）。
+  const scopeRef = useRef<HistoryScope>('session')
 
   const pumpRef = useRef<() => void>(() => {
     const next = queueRef.current.shift()
@@ -379,14 +434,17 @@ export function HistoryView(props: { visible?: boolean; sessionId?: string }): R
   /**
    * 扫描收尾后的一次性补拉首页（非定时器）：把 watch 建立前错过的会话记录
    * 补齐。只合并新账，绝不回卷翻页游标（已翻页时直接跳过）；在途闸保证同
-   * 一收尾只补拉一次。
+   * 一收尾只补拉一次。负载按发起时的 tab 快照构建，落地时 tab 已切走则丢弃
+   * （两个 tab 各自的 records/游标绝不串仓）。
    */
   const refetchFirstPageOnce = useCallback((): void => {
     if (pagedRef.current || seedRefetchRef.current) return
     seedRefetchRef.current = true
+    const payload = listPayload(props.sessionId, scopeRef.current)
     void (async (): Promise<void> => {
       try {
-        const list = await api.historyList(listPayload(props.sessionId))
+        const list = await api.historyList(payload)
+        if (scopeRef.current !== payload.scope) return
         const added = enqueue(list.records)
         refreshWatch()
         if (added > 0) flashLive(added)
@@ -413,8 +471,11 @@ export function HistoryView(props: { visible?: boolean; sessionId?: string }): R
     return enqueue(list.records)
   }, [enqueue, refetchFirstPageOnce])
 
-  /** 首屏/刷新：清空队列后重拉首页（annotations 失败静默降级为空库）。 */
+  /** 首屏/刷新/tab 切换：清空队列后重拉首页（annotations 失败静默降级为空
+   *  库）。响应落地（或失败）时 tab 已切走则整体丢弃——上一 tab 的在途结果
+   *  绝不写进新 tab 的状态。 */
   const load = useCallback(async (): Promise<void> => {
+    const scopeAtStart = scopeRef.current
     setInitialLoading(true)
     setLoadError(undefined)
     setActionError(undefined)
@@ -433,37 +494,52 @@ export function HistoryView(props: { visible?: boolean; sessionId?: string }): R
     setMeta(HISTORY_META_EMPTY)
     try {
       const [list, notes] = await Promise.all([
-        api.historyList(listPayload(props.sessionId)),
+        api.historyList(listPayload(props.sessionId, scopeAtStart)),
         api.historyAnnotationsGet().catch(() => emptyAnnotations()),
       ])
+      if (scopeRef.current !== scopeAtStart) return
       setAnnotations(notes)
       applyListResult(list)
       refreshWatch()
     } catch (error) {
+      if (scopeRef.current !== scopeAtStart) return
       // 降级为页签内联提示（任务要求的「服务缺席/读失败时不抛未捕获异常」）。
       setAnnotations(emptyAnnotations())
       setLoadError(error instanceof SidebarApiError ? `${error.code}: ${error.message}` : String(error))
     } finally {
-      setInitialLoading(false)
+      if (scopeRef.current === scopeAtStart) setInitialLoading(false)
     }
   }, [applyListResult, props.sessionId, refreshWatch])
   useEffect(() => { void load() }, [load])
 
+  /** 切顶部 tab：先写镜像（ws 回调/在途响应判仓用），再 setState 触发一次
+   *  完整 reload（load 依赖 scope，重建即重拉）——状态机只有一套，切 tab 不
+   *  保留上一 tab 的 records/游标，绝不串仓。 */
+  const switchScope = useCallback((next: HistoryScope): void => {
+    if (scopeRef.current === next) return
+    scopeRef.current = next
+    setScope(next)
+  }, [])
+
   /** 翻页：透传 nextCursor 拉下一页，新记录走同一渐进队列；失败内联提示。
-   *  成功即标记已翻页——扫描收尾的一次性补拉不再执行（游标语义优先）。 */
+   *  成功即标记已翻页——扫描收尾的一次性补拉不再执行（游标语义优先）。
+   *  响应落地时 tab 已切走则丢弃。 */
   const loadMore = useCallback(async (): Promise<void> => {
     const cursor = metaRef.current.nextCursor
     if (loadingMore || metaRef.current.hasMore !== true || cursor === undefined || cursor === '') return
+    const scopeAtStart = scopeRef.current
     setLoadingMore(true)
     setActionError(undefined)
     try {
-      const list = await api.historyList(listPayload(props.sessionId, cursor))
+      const list = await api.historyList(listPayload(props.sessionId, scopeAtStart, cursor))
+      if (scopeRef.current !== scopeAtStart) return
       const added = applyListResult(list)
       refreshWatch()
       // 翻页是用户主动行为，不为它闪「实时新记录」提示。
       void added
       pagedRef.current = true
     } catch (error) {
+      if (scopeRef.current !== scopeAtStart) return
       setActionError(error instanceof SidebarApiError ? `${error.code}: ${error.message}` : String(error))
     } finally {
       setLoadingMore(false)
@@ -494,6 +570,10 @@ export function HistoryView(props: { visible?: boolean; sessionId?: string }): R
   // ws 实时追加：watch 集变化才（重）连；帧过滤 = kind:'history' 且
   // sessionId 在当前 watch 集内；新记录去重后走同一渐进队列。
   // kind:'history-seed' 帧驱动 seeding 提示条与收尾补拉（见 handleSeedFrame）。
+  // 两个 tab 都吃实时帧，但按 tab 收窄：session tab 只合并当前页签会话的
+  // 帧（别的会话的新账与本 tab 无关，绝不串仓）；project tab 保持 watch 集
+  // 逻辑。帧处理读 scopeRef 镜像，切 tab 后旧 watch 连接的尾巴帧也不会进错
+  // 仓（watch 集本身随 tab 重载重建）。
   useEffect(() => {
     if (watchSessions.length === 0) return undefined
     try {
@@ -504,7 +584,11 @@ export function HistoryView(props: { visible?: boolean; sessionId?: string }): R
             return
           }
           if (frame.kind !== 'history') return
-          if (!watchRef.current.includes(frame.sessionId ?? '')) return
+          if (scopeRef.current === 'session') {
+            if ((frame.sessionId ?? '') !== (props.sessionId ?? '')) return
+          } else if (!watchRef.current.includes(frame.sessionId ?? '')) {
+            return
+          }
           const incoming = historyRecordsOf(frame.records)
           const added = enqueue(incoming)
           refreshWatch()
@@ -515,7 +599,7 @@ export function HistoryView(props: { visible?: boolean; sessionId?: string }): R
       // ws 不可用（构造即抛等极端环境）：页签仍可用，只是没有实时追加。
       return undefined
     }
-  }, [enqueue, flashLive, handleSeedFrame, refreshWatch, watchSessions])
+  }, [enqueue, flashLive, handleSeedFrame, props.sessionId, refreshWatch, watchSessions])
 
   const mutate = useCallback(async (op: HistoryAnnotationOpInput): Promise<boolean> => {
     setActionError(undefined)
@@ -545,6 +629,21 @@ export function HistoryView(props: { visible?: boolean; sessionId?: string }): R
       return next
     })
   }, [])
+
+  // 跳转降级簿：定位失败（只打开了会话没滚到）的记录 key → 按钮 title 换
+  // 「已打开会话」说明。成功定位/不可用都不进簿。
+  const [jumpDegraded, setJumpDegraded] = useState<ReadonlySet<string>>(new Set())
+  const handleJump = useCallback((record: HistorySendRecord): void => {
+    void jumpToHistoryRecord(props.ctx, record, props.sessionId, props.jumpLocateOptions).then((outcome: HistoryJumpOutcome) => {
+      if (outcome !== 'opened') return
+      setJumpDegraded(previous => {
+        if (previous.has(record.key)) return previous
+        const next = new Set(previous)
+        next.add(record.key)
+        return next
+      })
+    }).catch(() => { /* 跳转链路绝不冒泡（最坏就是没滚到） */ })
+  }, [props.ctx, props.jumpLocateOptions, props.sessionId])
 
   const flat = records
   const filtered = useMemo(
@@ -590,7 +689,29 @@ export function HistoryView(props: { visible?: boolean; sessionId?: string }): R
   }
 
   return (
-    <div className={css.view} data-dsh-history-view="">
+    <div className={css.view} data-dsh-history-view="" data-dsh-history-active-scope={scope}>
+      {/* 顶部作用域 tab：当前会话（默认第一）每页 50 / 总发送历史每页 20。
+          切 tab = 一次完整 reload（见 switchScope），选择不持久化。 */}
+      <div className={css.scopeTabs} role="tablist" aria-label={t('historySent')} data-dsh-history-scope-tabs="">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={scope === 'session'}
+          className={scope === 'session' ? `${css.scopeTab} ${css.scopeTabOn}` : css.scopeTab}
+          onClick={() => { switchScope('session') }}
+        >
+          {t('historyScopeSession')}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={scope === 'project'}
+          className={scope === 'project' ? `${css.scopeTab} ${css.scopeTabOn}` : css.scopeTab}
+          onClick={() => { switchScope('project') }}
+        >
+          {t('historyScopeProject')}
+        </button>
+      </div>
       <div className={css.toolbar}>
         <input
           className={css.search}
@@ -775,8 +896,10 @@ export function HistoryView(props: { visible?: boolean; sessionId?: string }): R
           expanded={expanded}
           multiSelect={multiSelect}
           selected={selected}
+          jumpDegraded={jumpDegraded}
           onToggleExpand={toggleExpanded}
           onToggleSelect={toggleSelected}
+          onJump={handleJump}
           onMutate={mutate}
         />
       ))}
@@ -806,8 +929,10 @@ function SessionGroupSection(props: {
   expanded: ReadonlySet<string>
   multiSelect: boolean
   selected: ReadonlySet<string>
+  jumpDegraded: ReadonlySet<string>
   onToggleExpand: (key: string) => void
   onToggleSelect: (key: string) => void
+  onJump: (record: HistorySendRecord) => void
   onMutate: (op: HistoryAnnotationOpInput) => Promise<boolean>
 }) {
   const { group, projectCwd, annotations } = props
@@ -835,8 +960,10 @@ function SessionGroupSection(props: {
             expanded={props.expanded.has(record.key)}
             multiSelect={props.multiSelect}
             selected={props.selected.has(record.key)}
+            jumpDegraded={props.jumpDegraded.has(record.key)}
             onToggleExpand={props.onToggleExpand}
             onToggleSelect={props.onToggleSelect}
+            onJump={props.onJump}
             onMutate={props.onMutate}
           />
         )

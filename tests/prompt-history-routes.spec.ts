@@ -21,6 +21,7 @@ import { projectKeyOf, PromptHistoryStore } from '../src/prompt-history-persist.
 import { createPromptHistoryLive } from '../src/prompt-history-live.ts'
 import { emptyAnnotations } from '../src/prompt-history-store.ts'
 import { SidebarError } from '../src/wire.ts'
+import type { HistorySendRecord } from '../src/prompt-history-extract.ts'
 import type { Context } from '../src/context-types.ts'
 
 /** 事件夹具（seq 与数组下标对齐，假句柄按 seq 切窗）。 */
@@ -279,6 +280,101 @@ describe('prompt-history routes（history.list：项目过滤 / 分页 / 种子�
     // 活快照赢下记录读取；唯一的持久读是项目根解析的 header 探针（不带窗长
     // 的整读），记录读取没有走分窗路径（那会带 HISTORY_READ_WINDOW 的窗长）。
     expect(reads.every(read => read.length === undefined)).toBe(true)
+  })
+})
+
+describe('prompt-history routes（history.list scope=session：会话内过滤 + 独立分页 + limit 透传）', () => {
+  /** 一条内存记录（直接入仓，绕开扫描等待；时间决定新→旧序）。 */
+  function rec(sessionId: string, seq: number, time: number, text: string): HistorySendRecord {
+    return { key: `${sessionId}:${seq}`, sessionId, seq, time, text, textTruncated: false }
+  }
+
+  /** 仓库夹具：'cur' 活会话定位项目根；records 直接 appendRecords 入仓。
+   *  持久层 events 留空 + 只有 cur 一个头，后台种子扫描不会添乱（幂等也无账
+   *  可扫），断言对内存索引完全确定。 */
+  async function scopeFixture(seed: readonly HistorySendRecord[]) {
+    const { persistence } = fakePersistence({ headers: [{ header: { id: 'cur', cwd: '/work/alpha' } }], events: {} })
+    const ctx = makeCtx(persistence, { cur: { header: { cwd: '/work/alpha' } } })
+    const store = new PromptHistoryStore({ root: join(home, 'scope-store') })
+    if (seed.length > 0) await store.appendRecords(projectKeyOf('/work/alpha'), seed)
+    return { ctx, store, api: buildPromptHistoryApi(ctx, { store }) }
+  }
+
+  const SEED = [
+    ...Array.from({ length: 25 }, (_, index) => rec('s1', index, 1_700_000_000_000 + index, `s1 第 ${index} 问`)),
+    ...Array.from({ length: 5 }, (_, index) => rec('s2', index, 1_700_001_000_000 + index, `s2 第 ${index} 问`)),
+    rec('cur', 0, 1_700_002_000_000, 'cur 当前的一问'),
+  ]
+
+  it('scope=session 只回该会话的记录；分页在该会话内独立收口（cursor/hasMore 不串别的会话）', async () => {
+    const { api } = await scopeFixture(SEED)
+    const first = await api['history.list']({ sessionId: 's1', scope: 'session', limit: 2 })
+    expect(first.records.map(record => record.sessionId)).toEqual(['s1', 's1'])
+    expect(first.records.map(record => record.text)).toEqual(['s1 第 24 问', 's1 第 23 问'])
+    expect(first.hasMore).toBe(true)
+    const second = await api['history.list']({ sessionId: 's1', scope: 'session', cursor: first.nextCursor, limit: 2 })
+    expect(second.records.map(record => record.text)).toEqual(['s1 第 22 问', 's1 第 21 问'])
+    expect(second.hasMore).toBe(true)
+    // 一路翻到底：只在 s1 的 25 条里收口，s2/cur 的记录绝不出现。
+    let page = second
+    let guard = 0
+    while (page.hasMore && guard < 20) {
+      page = await api['history.list']({ sessionId: 's1', scope: 'session', cursor: page.nextCursor, limit: 2 })
+      guard += 1
+    }
+    expect(page.hasMore).toBe(false)
+    expect(page.nextCursor).toBeUndefined()
+    expect(page.records.at(-1)?.text).toBe('s1 第 0 问')
+    const all = await api['history.list']({ sessionId: 's1', scope: 'session', limit: 200 })
+    expect(all.records).toHaveLength(25)
+    expect(all.records.every(record => record.sessionId === 's1')).toBe(true)
+  })
+
+  it('limit 由客户端显式透传（会话 tab 20 / 当前默认 50 不变），服务端默认值不动', async () => {
+    const { api } = await scopeFixture(SEED)
+    // 会话 tab 的每页 20：25 条里截 20，hasMore 收口。
+    const sessionTab = await api['history.list']({ sessionId: 's1', scope: 'session', limit: 20 })
+    expect(sessionTab.records).toHaveLength(20)
+    expect(sessionTab.hasMore).toBe(true)
+    // 不带 limit：默认 50（HISTORY_PAGE_DEFAULT 不动）——s1 只有 25 条，全回。
+    const fallback = await api['history.list']({ sessionId: 's1', scope: 'session' })
+    expect(fallback.records).toHaveLength(25)
+    expect(fallback.hasMore).toBe(false)
+    // project 作用域同样吃显式 limit：8+ 仓里 limit 3 就回 3 条。
+    const projectTab = await api['history.list']({ sessionId: 'cur', scope: 'project', limit: 3 })
+    expect(projectTab.records).toHaveLength(3)
+    expect(projectTab.hasMore).toBe(true)
+    // 超上限 200 钳到 200（既有 normalizeHistoryLimit 契约不变）。
+    const clamped = await api['history.list']({ sessionId: 's1', scope: 'session', limit: 10_000 })
+    expect(clamped.records).toHaveLength(25)
+  })
+
+  it('wire 向后兼容：不带 scope = project 全量跨会话平铺（老客户端行为不变）', async () => {
+    const { api } = await scopeFixture(SEED)
+    const legacy = await api['history.list']({ sessionId: 'cur' })
+    expect(legacy.records).toHaveLength(SEED.length)
+    expect(new Set(legacy.records.map(record => record.sessionId))).toEqual(new Set(['s1', 's2', 'cur']))
+    // 显式 scope:'project' 与缺省完全同参。
+    const explicit = await api['history.list']({ sessionId: 'cur', scope: 'project' })
+    expect(explicit.records.map(record => record.key)).toEqual(legacy.records.map(record => record.key))
+  })
+
+  it('scope=session 但 sessionId 缺席：空页（不是错误，也不回退成 project 全量）', async () => {
+    const { api } = await scopeFixture(SEED)
+    const empty = await api['history.list']({ scope: 'session', limit: 50 })
+    expect(empty.records).toEqual([])
+    expect(empty.hasMore).toBe(false)
+  })
+
+  it('降级路径（项目根解析不出）下 scope=session 一样只回当前会话的瞬时抽取', async () => {
+    const { persistence } = fakePersistence({ events: { headless: [userMessage(0, '持久的一问')] } })
+    const ctx = makeCtx(persistence, {
+      headless: { snapshotEvents: () => [userMessage(0, '活的一问'), userMessage(1, '活的二问')] },
+    })
+    const api = buildPromptHistoryApi(ctx)
+    const result = await api['history.list']({ sessionId: 'headless', scope: 'session', limit: 50 })
+    expect(result.degraded).toBe(true)
+    expect(result.records.map(record => record.text)).toEqual(['活的二问', '活的一问'])
   })
 })
 
