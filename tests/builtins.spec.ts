@@ -427,7 +427,7 @@ describe('built-in file viewer registrations', () => {
   it('the html viewer declares its sandbox and default-unsafe related settings', () => {
     const { service } = setup()
     const toggles = service.getFileViewers().find(v => v.id === 'html')?.settings?.toggles ?? []
-    expect(toggles.map(t => t.key)).toEqual(['htmlViewerNoSandbox', 'htmlViewerDefaultUnsafe'])
+    expect(toggles.map(t => t.key)).toEqual(['htmlViewerNoSandbox', 'htmlViewerDefaultUnsafe', 'editorMinimap'])
     expect(toggles[0]?.title).toBeDefined()
     expect(toggles[0]?.desc).toBeDefined()
     expect(toggles[1]?.title).toBeDefined()
@@ -440,7 +440,7 @@ describe('built-in file viewer registrations', () => {
       (service.getFileViewers().find(v => v.id === id)?.settings?.toggles ?? []).map(t => t.key)
     // The viewer is new; its declarative settings row must be the same ONE
     // switch the editable code surface carries — no per-part switches.
-    expect(toggles('jsonl')).toEqual(['editorGitGutter'])
+    expect(toggles('jsonl')).toEqual(['editorGitGutter', 'editorMinimap'])
     expect(toggles('jsonl')).toEqual(toggles('code'))
   })
 

@@ -75,8 +75,10 @@ describe('buildRoundDiffTree', () => {
     ])
     const src = asDir(tree[0]!)
     expect(src.children).toHaveLength(2)
-    expect(src.children.map(child => child.name)).toEqual(['a.ts', 'nested'])
-    const nested = asDir(src.children[1]!)
+    // Directories sort before files within a level.
+    expect(src.children.map(child => child.kind)).toEqual(['dir', 'file'])
+    expect(src.children.map(child => child.name)).toEqual(['nested', 'a.ts'])
+    const nested = asDir(src.children[0]!)
     expect(nested.path).toBe('src/nested')
   })
 
