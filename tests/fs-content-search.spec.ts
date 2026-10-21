@@ -110,7 +110,7 @@ describe('resolveMatchOptions + createLineMatcher (the ONE matcher)', () => {
     const match = createLineMatcher('Answer', resolveMatchOptions({}))
     expect(match('an answer and an ANSWER end')).toEqual([
       { start: 3, length: 6 },
-      { start: 16, length: 6 },
+      { start: 17, length: 6 },
     ])
     // Slicing the ORIGINAL text with the reported range yields the hit.
     const [only] = match('an ANSWER here')
@@ -137,7 +137,7 @@ describe('resolveMatchOptions + createLineMatcher (the ONE matcher)', () => {
     const match = createLineMatcher('\\d+', resolveMatchOptions({ regex: true }))
     expect(match('run 42 times, then 7 more')).toEqual([
       { start: 4, length: 2 },
-      { start: 18, length: 1 },
+      { start: 19, length: 1 },
     ])
     // `a*` matches empty at every position: the scan must advance.
     expect(createLineMatcher('a*', resolveMatchOptions({ regex: true }))('aaa')).toHaveLength(4)
@@ -441,7 +441,9 @@ describe('searchContentPlain (the fallback walk)', () => {
       const fileCapped = await searchContentPlain(dir, 'answer', EMPTY_SCOPES, { maxMatches: 2 })
       expect(fileCapped.truncated).toBe(true)
       expect(fileCapped.matches).toHaveLength(2)
-      const visited = await searchContentPlain(dir, 'answer', EMPTY_SCOPES, { maxVisited: 2 })
+      const visited = await searchContentPlain(dir, 'answer', EMPTY_SCOPES, { maxVisited: 1 })
+      // The FIRST candidate already spends the budget inside scanFile, so
+      // nothing is read and nothing matches.
       expect(visited.truncated).toBe(true)
       expect(visited.matches).toEqual([])
     } finally {
