@@ -22,11 +22,6 @@ import type { HistorySendRecord } from '../src/prompt-history-extract.ts'
 
 setupReactAct()
 
-/** connectSessionPush 的捕获状态：记录每次连接的帧回调（emitFrame 用最后一个）。 */
-const { pushState } = vi.hoisted(() => ({
-  pushState: { handlers: [] as ((frame: unknown) => void)[] },
-}))
-
 vi.mock('../src/client/api.ts', () => ({
   SidebarApiError: class SidebarApiError extends Error {
     code: string
@@ -40,6 +35,13 @@ vi.mock('../src/client/api.ts', () => ({
     historyAnnotationsGet: vi.fn(async () => ({ version: 1, comments: {}, tags: {}, groups: [] })),
     historyAnnotationsUpdate: vi.fn(async () => ({ version: 1, comments: {}, tags: {}, groups: [] })),
   },
+}))
+
+// 注意顺序：vi.hoisted 放在 api mock 之后（实测放在它前面会让 api mock 工厂
+// 失效——historyList 的 mockImplementation 落到另一个实例上，记录永远空页）。
+/** connectSessionPush 的捕获状态：记录每次连接的帧回调（emitFrame 用最后一个）。 */
+const { pushState } = vi.hoisted(() => ({
+  pushState: { handlers: [] as ((frame: unknown) => void)[] },
 }))
 
 vi.mock('../src/client/session-push.ts', () => ({
