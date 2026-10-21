@@ -23,10 +23,11 @@ import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { renderRoot, setupReactAct } from './test-utils.ts'
 import { SideChatView, consumeSidechatSeed } from '../src/client/SideChatView.tsx'
+import { markSidechatThreadRead, sidechatReadAt } from '../src/client/sidechat-unread.ts'
 import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { attachLocale } from '../src/client/locales.ts'
 import css from '../src/client/SideChatView.module.css'
-import type { Context, SidebarSessionList } from '../src/context-types.ts'
+import type { Context, SidebarSessionList, SidebarSessionSummary } from '../src/context-types.ts'
 import type { SidebarTab } from '../src/client/state.ts'
 
 setupReactAct()
@@ -977,7 +978,16 @@ describe('SideChatView top-right history list', () => {
     return card
   }
 
+  /** Watermarks beyond every catalog date: the 全局未读 group stays empty so
+   *  these cases keep testing the 本会话 list alone (the group has its own
+   *  describe below). */
+  function markHistoryThreadsRead(): void {
+    markSidechatThreadRead('t1', Date.now() + 60_000)
+    markSidechatThreadRead('t2', Date.now() + 60_000)
+  }
+
   it('renders the corner button on the bound page and lists threads newest first', async () => {
+    markHistoryThreadsRead()
     const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(historyStore()))))
     await act(async () => {})  // flush the initial transcript pull
 
@@ -996,6 +1006,7 @@ describe('SideChatView top-right history list', () => {
   })
 
   it('reopens a closed thread from a row through park + openTab (dedupe path)', async () => {
+    markHistoryThreadsRead()
     const host = makeArchiveHost()
     const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeArchiveCtx(historyStore(), host))))
     await act(async () => {})
@@ -1018,6 +1029,7 @@ describe('SideChatView top-right history list', () => {
   })
 
   it('re-clicking the CURRENT thread\'s row opens nothing', async () => {
+    markHistoryThreadsRead()
     const host = makeArchiveHost()
     const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeArchiveCtx(historyStore(), host))))
     await act(async () => {})
@@ -1043,6 +1055,159 @@ describe('SideChatView top-right history list', () => {
 
     const card = await openHistory(container)
     expect(card.textContent ?? '').toContain('暂无侧边对话')
+    unmount()
+  })
+})
+
+/** The css-module map is `Record<string, string>` (index access reads
+ *  `string | undefined`): an absent key means the class was renamed out from
+ *  under the test — fail loudly once, here, instead of at every query. */
+function requiredClass(name: string | undefined): string {
+  if (name === undefined) throw new Error('the css module class map lacks the class')
+  return name
+}
+
+describe('SideChatView global unread group', () => {
+  /** Open the history popover (portaled to body) — same steps as the 本会话
+   *  describe above, kept local so the two suites stay independent. */
+  async function openHistory(container: HTMLElement): Promise<HTMLElement> {
+    const trigger = container.querySelector<HTMLButtonElement>('button[aria-label="历史对话"]')
+    if (trigger === null) throw new Error('the top-right history button is absent')
+    await act(async () => { trigger.click() })
+    const card = document.body.querySelector<HTMLElement>('[role="dialog"]')
+    if (card === null) throw new Error('the history popover must open')
+    return card
+  }
+
+  /** The bound thread t1 (never unread — excluded as the tab's own thread),
+   *  a same-session unread thread, and a FOREIGN-workspace unread thread
+   *  whose parent session sits in another cwd. */
+  function unreadStore(): ReturnType<typeof makeStore> {
+    return makeStore({
+      byId: {
+        root: { id: 'root', displayTitle: '主会话', cwd: '/p', running: false },
+        t1: { id: 't1', displayTitle: 'Side: 线程一', origin: 'subagent', parentId: 'root', running: false },
+        local: { id: 'local', displayTitle: 'Side: 本区未读', origin: 'subagent', parentId: 'root', updatedAt: Date.now() - 30_000, running: true },
+        ws2: { id: 'ws2', displayTitle: '另一工作区', cwd: '/other/proj', running: false },
+        remote: { id: 'remote', displayTitle: 'Side: 外区线程', origin: 'subagent', parentId: 'ws2', updatedAt: Date.now() - 60_000, running: false },
+      },
+    })
+  }
+
+  /** makeCtx plus a readable uiWorkspace.openSession — the host bridge the
+   *  cross-workspace jump rides (same face as the history-send jump). */
+  function makeJumpCtx(store: ReturnType<typeof makeStore>): { ctx: Context; openSession: ReturnType<typeof vi.fn>; betterSidebar: { openTab: ReturnType<typeof vi.fn> } } {
+    const openSession = vi.fn()
+    const betterSidebar = { openTab: vi.fn(), updateTab: vi.fn() }
+    const ctx = {
+      sessions: { list: store },
+      get: (key: string) => {
+        if (key === 'betterSidebar') return betterSidebar
+        if (key === 'uiWorkspace') return { openSession }
+        return undefined
+      },
+    } as unknown as Context
+    return { ctx, openSession, betterSidebar }
+  }
+
+  it('lists cross-workspace unread threads with workspace · parent and a badge, bound thread excluded', async () => {
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(unreadStore()))))
+    await act(async () => {})
+
+    // The badge rides the corner button: two unread threads.
+    const badge = container.querySelector(`.${css.sidechatHistoryBadge}`)
+    expect(badge?.textContent).toBe('2')
+
+    const card = await openHistory(container)
+    const text = card.textContent ?? ''
+    // Both groups render, global first, with its count.
+    expect(text).toContain('全局未读')
+    expect(text).toContain('本会话')
+    // Row content: workspace basename · parent session title; the bound
+    // thread t1 must NOT leak into the global group.
+    expect(text).toContain('proj · 另一工作区')
+    expect(text).toContain('外区线程')
+    expect(text).toContain('p · 主会话')
+    const globalRows = [...card.querySelectorAll<HTMLButtonElement>('button')].filter(row => row.className.includes(requiredClass(css.sidechatHistoryRowGlobal)))
+    expect(globalRows.map(row => row.textContent)).toEqual([
+      expect.stringContaining('本区未读'),
+      expect.stringContaining('外区线程'),
+    ])
+    unmount()
+  })
+
+  it('jumps cross-workspace on click: mark read, park thread, openTab under the parent scope, switch main view', async () => {
+    const { ctx, openSession, betterSidebar } = makeJumpCtx(unreadStore())
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(ctx)))
+    await act(async () => {})
+
+    const card = await openHistory(container)
+    const row = [...card.querySelectorAll<HTMLButtonElement>('button')]
+      .find(candidate => candidate.textContent?.includes('外区线程'))
+    expect(row).toBeDefined()
+    await act(async () => { row?.click() })
+
+    // Read on click (the watermark lands in the shared store)…
+    expect(sidechatReadAt('remote')).toBeGreaterThan(0)
+    // …the sidechat tab is seated under the PARENT session's scope…
+    expect(betterSidebar.openTab).toHaveBeenCalledTimes(1)
+    expect(betterSidebar.openTab).toHaveBeenCalledWith({ type: 'sidechat' }, { sessionId: 'ws2', cwd: '/other/proj' })
+    // …the thread id parked for that tab's createTab…
+    expect(consumeSidechatSeed()).toBe('remote')
+    expect(consumeSidechatSeed()).toBeUndefined()
+    // …and the main view switched to the parent session via the host bridge.
+    expect(openSession).toHaveBeenCalledTimes(1)
+    expect(openSession).toHaveBeenCalledWith('ws2')
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull()
+    unmount()
+  })
+
+  it('renders a thread whose parent session is missing as disabled and inert', async () => {
+    const store = makeStore({
+      byId: {
+        root: { id: 'root', displayTitle: '主会话', running: false },
+        t1: { id: 't1', displayTitle: 'Side: 线程一', origin: 'subagent', parentId: 'root', running: false },
+        orphan: { id: 'orphan', displayTitle: 'Side: 孤线程', origin: 'subagent', parentId: 'ghost', updatedAt: Date.now() - 1_000, running: false },
+      },
+    })
+    const { ctx, openSession, betterSidebar } = makeJumpCtx(store)
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(ctx)))
+    await act(async () => {})
+
+    const card = await openHistory(container)
+    const row = [...card.querySelectorAll<HTMLButtonElement>('button')]
+      .find(candidate => candidate.textContent?.includes('孤线程'))
+    expect(row).toBeDefined()
+    expect(row?.disabled).toBe(true)
+    await act(async () => { row?.click() })
+
+    // No navigation of any kind, and the popover stays open.
+    expect(betterSidebar.openTab).not.toHaveBeenCalled()
+    expect(openSession).not.toHaveBeenCalled()
+    expect(consumeSidechatSeed()).toBeUndefined()
+    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull()
+    unmount()
+  })
+
+  it('caps the badge at 9+ when more than nine threads are unread', async () => {
+    const byId: Record<string, SidebarSessionSummary> = {
+      root: { id: 'root', displayTitle: '主会话', running: false },
+      t1: { id: 't1', displayTitle: 'Side: 线程一', origin: 'subagent', parentId: 'root', running: false },
+    }
+    for (let index = 0; index < 10; index += 1) {
+      byId[`bulk${index}`] = {
+        id: `bulk${index}`,
+        displayTitle: `Side: 批量${index}`,
+        origin: 'subagent',
+        parentId: 'root',
+        updatedAt: Date.now() - (index + 1) * 1_000,
+        running: false,
+      }
+    }
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(makeStore({ byId })))))
+    await act(async () => {})
+
+    expect(container.querySelector(`.${css.sidechatHistoryBadge}`)?.textContent).toBe('9+')
     unmount()
   })
 })

@@ -159,6 +159,14 @@ export interface SidebarSessionSummary {
   parentId?: string
   /** Whether the session's agent is currently running. */
   running?: boolean
+  /**
+   * Last host activity of the session (epoch ms). Structural mirror of the
+   * host's projectList row (dsh-api-session-controller writes `updatedAt`;
+   * 0.2.0-rc.2+). The subagentCatalog-fallback rows the host synthesizes for
+   * unlisted children carry 0 — treat 0 / absent as "no date", never as a
+   * real timestamp.
+   */
+  updatedAt?: number
 }
 
 /** Durable parent/child address that selects subagent transport in the client. */

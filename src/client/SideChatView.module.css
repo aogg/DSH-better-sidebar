@@ -36,6 +36,7 @@
 
 .sidechatHistoryBtn {
   pointer-events: auto;
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -54,6 +55,30 @@
 .sidechatHistoryBtn:hover {
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
+}
+
+/* The global-unread count pinned to the button's corner: a quiet capsule in
+ * the accent family, small enough to ride a 24px control without shouting
+ * (10+ collapses to the badge's '9+' text). aria-hidden — the popover is the
+ * accessible surface; the glyph alone would just be noise. */
+.sidechatHistoryBadge {
+  position: absolute;
+  top: -5px;
+  right: -6px;
+  min-width: 14px;
+  height: 13px;
+  padding: 0 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border-radius: 7px;
+  background: var(--dsw-alias-button-info-fill, var(--dsw-alias-accent));
+  color: var(--dsw-alias-button-info-label, var(--dsw-alias-accent-ink, #fff));
+  font: var(--dsw-font-xxs-12);
+  font-size: 9px;
+  line-height: 1;
+  pointer-events: none;
 }
 
 /* The anchored card (AnchoredPopover): same surface family as the Tasks
@@ -137,6 +162,65 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+
+/* One group band inside the history card: 「全局未读」 and 「本会话」 get the
+ * same quiet caps treatment as the card head, one step smaller in presence
+ * (no bottom padding gap of its own — rows carry the spacing). */
+.sidechatHistoryGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 6px 2px;
+  font: var(--dsw-font-xxs-12);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dsw-alias-label-tertiary);
+  user-select: none;
+}
+
+/* The unread count chip at the group head's right of the label. */
+.sidechatHistoryGroupCount {
+  min-width: 16px;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border-radius: 7px;
+  background: var(--dsw-alias-button-info-fill, var(--dsw-alias-accent));
+  color: var(--dsw-alias-button-info-label, var(--dsw-alias-accent-ink, #fff));
+  font-size: 10px;
+  letter-spacing: 0;
+  line-height: 1.4;
+}
+
+/* A GLOBAL row sits one step quieter than a 本会话 row (it belongs to another
+ * conversation; only its unread state should pull the eye). Its disabled
+ * form — a thread whose parent session is not listed — loses the pointer and
+ * the hover tint: nothing is clickable, so nothing may look clickable. */
+.sidechatHistoryRowGlobal {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.sidechatHistoryRowGlobal:disabled {
+  color: var(--dsw-alias-label-tertiary);
+  cursor: default;
+}
+
+.sidechatHistoryRowGlobal:disabled:hover {
+  background: transparent;
+}
+
+/* The row's trailing unread marker: a filled accent dot, right-aligned, the
+ * same "something new" glyph language as StateDot's ongoing state. */
+.sidechatUnreadDot {
+  flex: none;
+  margin-left: auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dsw-alias-button-info-fill, var(--dsw-alias-accent));
 }
 
 /* ── composer-bar controls (model picker · thread menu · save · archive):

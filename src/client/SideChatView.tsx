@@ -72,13 +72,15 @@ import { markdownTextProps } from './markdown-labels.tsx'
 import { useMarkdownSurface } from './use-markdown-surface.ts'
 import { IconHistoryOutline16, IconSaveOutline16 } from './icons.tsx'
 import { AnchoredPopover } from './AnchoredPopover.tsx'
-import type { Context, SidebarHistoryEntry, SidebarSessionEvent } from '../context-types.ts'
+import type { Context, SidebarHistoryEntry, SidebarSessionEvent, SidebarSessionList } from '../context-types.ts'
 import {
   SIDE_LABEL_PREFIX,
   SIDE_NEW_THREAD_TITLE,
+  globalSideThreadRows,
   sideThreadRows,
   threadHasCompletedTurn,
   threadTrailingPending,
+  type GlobalSideThreadRow,
   type SidechatLiveEvent,
   type SidechatModelCatalog,
   type SidechatModelInfo,
@@ -98,6 +100,8 @@ import { api } from './api.ts'
 import { usePolling } from './use-polling.ts'
 import { useSidechatPush } from './use-sidechat-push.ts'
 import { sidechatWindows } from './sidechat-windows.ts'
+import { markSidechatThreadRead, sidechatReadStore } from './sidechat-unread.ts'
+import { openHistorySession } from './history-jump.ts'
 import { t, relativeTime } from './locales.ts'
 import type { SessionScope } from './api.ts'
 import type { SidebarTab } from './state.ts'
@@ -253,6 +257,18 @@ function mergeBySeq(
 function threadDisplayTitle(title: string): string {
   if (title === SIDE_NEW_THREAD_TITLE) return t('sideChatUntitled')
   return title.startsWith(SIDE_LABEL_PREFIX) ? title.slice(SIDE_LABEL_PREFIX.length) : title
+}
+
+/** Last activity of one global row: the host's `updatedAt` when it has one,
+ *  else the PARENT projection's subagentCatalog creation time — the session
+ *  list row predates `updatedAt` on older hosts, and the catalog the parent
+ *  already carries dates its children. A thread neither source dates reads as
+ *  0 = never unread (a fake "just now" would be worse than a silent row). */
+function globalRowActivityAt(row: GlobalSideThreadRow, list: SidebarSessionList): number {
+  if (row.lastActivityAt > 0) return row.lastActivityAt
+  if (row.parentId === undefined) return 0
+  const catalog = list.projectionsBySession?.[row.parentId]?.values.subagentCatalog
+  return catalog?.find(entry => entry.id === row.id)?.createdAt ?? 0
 }
 
 /** How long a composer-bar control waits before its hover bubble opens. */
@@ -621,6 +637,24 @@ export function SideChatView(props: {
   const threadId = sidechatThreadIdOf(tab)
   const autoCreate = (tab.meta as { autoCreate?: unknown } | undefined)?.autoCreate === true
 
+  // Threads currently popped out (a floating chat is being read = read), and
+  // the stored read watermarks (a mark lands here → the group recomputes).
+  const floatingThreads = useSyncExternalStore(sidechatWindows.subscribe, sidechatWindows.getSnapshot)
+  const sidechatReads = useSyncExternalStore(sidechatReadStore.subscribe, sidechatReadStore.getSnapshot)
+
+  /** The history popover's GLOBAL UNREAD group: every side thread of EVERY
+   *  workspace whose last activity postdates its read watermark, minus what
+   *  is on screen right now (this tab's bound thread, floating windows) and
+   *  what the host hides as archived. Read marks arrive through
+   *  `sidechatReads` above, so marking read collapses the row on the spot. */
+  const globalUnreadRows = useMemo(() => {
+    const exclude = new Set<string>()
+    if (threadId !== undefined) exclude.add(threadId)
+    for (const window of floatingThreads) exclude.add(window.threadId)
+    return globalSideThreadRows(list.byId, { archivedIds, excludeIds: [...exclude] })
+      .filter(row => globalRowActivityAt(row, list) > (sidechatReads[row.id] ?? 0))
+  }, [list, archivedIds, threadId, floatingThreads, sidechatReads])
+
   const [composer, setComposer] = useState('')
   const [busy, setBusy] = useState<'starting' | 'sending' | 'saving' | 'archiving' | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -714,6 +748,15 @@ export function SideChatView(props: {
     void startThread()
   }, [threadId, autoCreate, visible, startThread])
 
+  // A bound thread counts as read from the moment its tab mounts (floating
+  // windows reuse this component, so they mark through the same effect): the
+  // reader is holding the thread, so it must not feed the global-unread
+  // group or the history button's badge. Every successful pull below keeps
+  // the stamp fresh.
+  useEffect(() => {
+    if (threadId !== undefined) markSidechatThreadRead(threadId)
+  }, [threadId])
+
   // The tab title follows the thread's durable label (the first prompt
   // renames the thread; the strip picks it up here). A floating window
   // renders on a synthetic tab id — the real tab (if open) does its own
@@ -756,6 +799,11 @@ export function SideChatView(props: {
         cache.entries = mergeBySeq(cache.entries, incoming)
       }
       setRevision(value => value + 1)
+      // A landed pull means the thread advanced AND the reader is attached:
+      // refresh its read watermark (push bursts and polls all come through
+      // here). Marking — a synchronous localStorage write — stays in this
+      // async success path, never in a render pass.
+      markSidechatThreadRead(childId)
     } catch {
       // Aborted by a newer pull or a wire failure: keep the last rows.
     }
@@ -984,6 +1032,39 @@ export function SideChatView(props: {
     reopenThread(id)
   }
 
+  /** Open one GLOBAL-UNREAD row: mark it read first, then land the reader on
+   *  the thread. A row of THIS session reopens through the same park +
+   *  openTab path as the 本会话 rows; a FOREIGN session's thread additionally
+   *  opens its sidechat tab under the PARENT's scope (so the tab is seated in
+   *  the conversation it belongs to, not the one it was clicked from) and
+   *  switches the main view to that parent via the host bridge
+   *  (openHistorySession — the same jump the history-send rows use). A row
+   *  whose parent session is not listed cannot be navigated to; it renders
+   *  disabled and this handler returns early. */
+  const openGlobalUnread = (row: GlobalSideThreadRow): void => {
+    const parentId = row.parentId
+    if (parentId === undefined || list.byId[parentId] === undefined) return
+    markSidechatThreadRead(row.id)
+    if (parentId === scope.sessionId) {
+      setHistoryOpen(null)
+      reopenThread(row.id)
+      return
+    }
+    const parentCwd = list.byId[parentId]?.cwd
+    parkSidechatReopen(row.id)
+    ctx.get('betterSidebar')?.openTab(
+      { type: 'sidechat' },
+      parentCwd === undefined ? { sessionId: parentId } : { sessionId: parentId, cwd: parentCwd },
+    )
+    openHistorySession(ctx, parentId)
+    setHistoryOpen(null)
+  }
+
+  /** One global row's second line: workspace · parent title, whichever half
+   *  exists (both missing → only the time cell remains). */
+  const globalRowWhere = (row: GlobalSideThreadRow): string =>
+    [row.workspaceName, row.parentTitle].filter((part): part is string => part !== undefined).join(' · ')
+
   /** The history popover's rows: every listed side thread of this session,
    *  newest first (the catalog's creation times; an undated thread sorts
    *  last). Same feed the composer-bar menu reads — a CLOSED tab stays listed
@@ -1005,10 +1086,13 @@ export function SideChatView(props: {
   /** The top-right history control: a quiet button pinned over the
    *  transcript's corner — the overlay wrapper never catches pointers, so
    *  scrolled content under it stays fully interactive — and its anchored
-   *  popover listing every side thread of this session. A row click reopens
-   *  that thread through the same park + openTab + dedupe path the
-   *  composer-bar thread menu uses; the row bound to THIS tab is marked and
-   *  re-clicking it is a no-op (no second tab for the same thread). */
+   *  popover listing the cross-workspace UNREAD threads first, then every
+   *  side thread of this session. A row click reopens that thread (same
+   *  session) or jumps across workspaces (foreign session, see
+   *  openGlobalUnread); the row bound to THIS tab is marked and re-clicking
+   *  it is a no-op (no second tab for the same thread). The button carries
+   *  the global unread count as a corner badge — the one signal a reader
+   *  sees without opening the popover. */
   const historyControl = (
     <>
       <div className={css.sidechatHistoryOverlay}>
@@ -1025,13 +1109,56 @@ export function SideChatView(props: {
             aria-label={t('sideChatHistory')}
           >
             <IconHistoryOutline16 />
+            {globalUnreadRows.length > 0 && (
+              <span className={css.sidechatHistoryBadge} aria-hidden="true">
+                {globalUnreadRows.length > 9 ? '9+' : String(globalUnreadRows.length)}
+              </span>
+            )}
           </button>
         </Tooltip>
       </div>
       <AnchoredPopover anchor={historyOpen} onClose={() => { setHistoryOpen(null) }} width={280}>
         <div className={css.sidechatHistoryCard}>
           <div className={css.sidechatHistoryHead}>{t('sideChatHistory')}</div>
-          {historyRows.length === 0 && (
+          {globalUnreadRows.length > 0 && (
+            <>
+              <div className={css.sidechatHistoryGroup}>
+                <span>{t('sideChatGlobalUnread')}</span>
+                <span className={css.sidechatHistoryGroupCount}>{globalUnreadRows.length}</span>
+              </div>
+              {globalUnreadRows.map(row => {
+                const at = globalRowActivityAt(row, list)
+                const time = at > 0 ? relativeTime(new Date(at).toISOString()) : undefined
+                const where = globalRowWhere(row)
+                // A parent that is not in the list cannot be navigated to:
+                // the row stays visible but inert (no park, no jump).
+                const unaddressable = row.parentId === undefined || list.byId[row.parentId] === undefined
+                return (
+                  <button
+                    key={row.id}
+                    type="button"
+                    className={clsx(css.sidechatHistoryRow, css.sidechatHistoryRowGlobal)}
+                    disabled={unaddressable}
+                    onClick={() => { openGlobalUnread(row) }}
+                  >
+                    <span className={css.sidechatHistoryTitle}>{threadDisplayTitle(row.title)}</span>
+                    <span className={css.sidechatHistoryMeta}>
+                      {row.running && <StateDot state="ongoing" size={8} />}
+                      {where !== '' && <span>{where}</span>}
+                      {time !== undefined && <span>{time}</span>}
+                      <span className={css.sidechatUnreadDot} aria-hidden="true" />
+                    </span>
+                  </button>
+                )
+              })}
+            </>
+          )}
+          <div className={css.sidechatHistoryGroup}>
+            <span>{t('sideChatCurrentSession')}</span>
+          </div>
+          {/* The empty state is a whole-CARD affair: it only means something
+              when NEITHER group has a row to show. */}
+          {historyRows.length === 0 && globalUnreadRows.length === 0 && (
             <div className={css.sidechatHistoryEmpty}>{t('sideChatEmpty')}</div>
           )}
           {historyRows.map(row => {

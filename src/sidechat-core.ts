@@ -499,6 +499,76 @@ export function sideLabel(question: string): string {
   return `${SIDE_LABEL_PREFIX}${body}`
 }
 
+/** One GLOBAL side-thread row (the history popover's cross-workspace group):
+ *  the whole client session list scanned for side threads instead of one
+ *  parent's children, so each row carries where to jump — the parent session
+ *  (its title) and the workspace (its cwd basename) — plus the last-activity
+ *  stamp the unread check compares against the reader's per-thread watermark. */
+export interface GlobalSideThreadRow {
+  id: string
+  title: string
+  running: boolean
+  /** The parent session id (absent only when the row itself is malformed). */
+  parentId?: string
+  /** The parent's display title; undefined when the parent is not listed. */
+  parentTitle?: string
+  /** Basename of the parent's cwd (last `/`- or `\`-separated segment —
+   *  hosts may hand out Windows paths); undefined when there is no usable
+   *  segment, so the UI can drop the whole clause. */
+  workspaceName?: string
+  /** Last activity (the row's own updatedAt; 0 when the host supplies no
+   *  date — callers may fall back to the parent projection's catalog). */
+  lastActivityAt: number
+}
+
+/** The last non-empty segment after a `/` or `\` (both, because a host cwd
+ *  may be a Windows path). `/w/a/b` → `b`; `D:\w\a` → `a`; a bare or slash-
+ *  terminated cwd yields the empty tail → undefined. */
+function workspaceBasename(cwd: string | undefined): string | undefined {
+  if (cwd === undefined) return undefined
+  const cut = Math.max(cwd.lastIndexOf('/'), cwd.lastIndexOf('\\'))
+  const name = cut >= 0 ? cwd.slice(cut + 1) : cwd
+  return name === '' ? undefined : name
+}
+
+/**
+ * Derive the GLOBAL side-thread rows from the whole client session list (the
+ * cross-workspace counterpart of {@link sideThreadRows}: no parentId filter —
+ * every listed `origin: 'subagent'` session whose title carries the side
+ * label prefix). Archived threads and `excludeIds` (the thread this tab
+ * binds, threads floating in a window) drop out entirely; a row whose parent
+ * session is not listed STAYS, with its parent fields undefined — the thread
+ * itself still exists and the UI decides how to render an unaddressable row.
+ * Ordered by last activity, newest first, undated (0) rows last; the sort is
+ * stable so equal stamps keep their list order.
+ */
+export function globalSideThreadRows(
+  byId: Readonly<Record<string, SidebarSessionSummary>>,
+  opts: { archivedIds?: readonly string[]; excludeIds?: readonly string[] } = {},
+): GlobalSideThreadRow[] {
+  const archived = new Set(opts.archivedIds ?? [])
+  const excluded = new Set(opts.excludeIds ?? [])
+  const rows: GlobalSideThreadRow[] = []
+  for (const summary of Object.values(byId)) {
+    if (summary.origin !== 'subagent' || !summary.displayTitle.startsWith(SIDE_LABEL_PREFIX)) continue
+    if (archived.has(summary.id) || excluded.has(summary.id)) continue
+    const parent = summary.parentId === undefined ? undefined : byId[summary.parentId]
+    const workspaceName = parent === undefined ? undefined : workspaceBasename(parent.cwd)
+    rows.push({
+      id: summary.id,
+      title: summary.displayTitle,
+      running: summary.running === true,
+      ...(summary.parentId !== undefined ? { parentId: summary.parentId } : {}),
+      ...(parent !== undefined ? { parentTitle: parent.displayTitle } : {}),
+      ...(workspaceName !== undefined ? { workspaceName } : {}),
+      // Only a POSITIVE stamp is a date: the host's catalog-fallback rows
+      // carry 0, which must not read as "the epoch".
+      lastActivityAt: summary.updatedAt !== undefined && summary.updatedAt > 0 ? summary.updatedAt : 0,
+    })
+  }
+  return rows.sort((a, b) => b.lastActivityAt - a.lastActivityAt)
+}
+
 /**
  * Whether the thread log already carries the side boundary message — i.e.
  * the first prompt was delivered. Tolerant to the content shape (block
