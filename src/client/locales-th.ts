@@ -168,6 +168,7 @@ export const th: Record<string, string> = {
   close: 'ปิด',
   closeOtherTabs: 'ปิด Tab อื่น',
   tabUnread: 'มีหน้าใหม่ที่คุณยังไม่ได้ดู',
+  tabLoading: 'กำลังโหลด',
   closeLeftTabs: 'ปิด Tab ด้านซ้าย',
   closeRightTabs: 'ปิด Tab ด้านขวา',
   closeAllTabs: 'ปิด Tab ทั้งหมด',

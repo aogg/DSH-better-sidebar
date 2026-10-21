@@ -18,6 +18,7 @@ import { act } from 'react-dom/test-utils'
 import { ChangesTab, opCountOf } from '../src/client/changes/ChangesTab.tsx'
 import { createSidebarStore } from '../src/client/state.ts'
 import { api, type GitStatusEntry, type GitStatusResult, type GitWorktree } from '../src/client/api.ts'
+import { clearTabLoading, tabLoadingOf } from '../src/client/tab-loading.ts'
 import { t } from '../src/client/locales.ts'
 import type { Context } from '../src/context-types.ts'
 import type { SidebarTab } from '../src/client/state.ts'
@@ -841,3 +842,110 @@ describe('ChangesTab', () => {
 function chevron(container: HTMLElement, hashFull: string): HTMLButtonElement | undefined {
   return container.querySelector<HTMLButtonElement>(`[data-commit="${hashFull}"] [data-commit-toggle]`) ?? undefined
 }
+
+/**
+ * The tab strip's loading mark (tab-loading.ts): the tab reports itself
+ * loading until its FIRST event pull settles — the span in which the page
+ * shows nothing but a loading Notice. The steady-state 2.5s poll afterwards
+ * is not a load and never reports; a session switch re-arms the report for
+ * the fresh session's first pull. The registry is module-level, so these
+ * cases read it directly (the strip side is pinned in
+ * tab-bar-loading.spec.tsx).
+ */
+describe('ChangesTab tab-loading report', () => {
+  afterEach(() => { clearTabLoading('git') })
+
+  /** Render the tab under an explicit session (the switch case retargets). */
+  function renderAs(root: Root, sessionId: string, visible = true): void {
+    act(() => {
+      root.render(createElement(ChangesTab, {
+        ctx: fakeContext(),
+        store: createSidebarStore(),
+        scope: { sessionId, cwd: MAIN },
+        tab: { id: 'git', type: 'git', title: 'Changes' },
+        visible,
+        onOpenFile: () => {},
+        onOpenDiff: () => {},
+      }))
+    })
+  }
+
+  it('reports the first event pull and clears the mark when it settles', async () => {
+    mockGit([])
+    // The pull the test answers by hand, so the in-flight span is observable.
+    let resolveOps: (value: { events: never[]; lastSeq: number }) => void = () => {}
+    vi.spyOn(api, 'changesOps').mockImplementation(() => new Promise(resolve => { resolveOps = resolve }))
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root: Root = createRoot(container)
+    try {
+      renderAs(root, 'session')
+      expect(tabLoadingOf('session', 'git')).toBe(true)
+      await act(async () => {
+        resolveOps({ events: [], lastSeq: 0 })
+        await Promise.resolve()
+      })
+      expect(tabLoadingOf('session', 'git')).toBe(false)
+    } finally {
+      act(() => { root.unmount() })
+      container.remove()
+    }
+  })
+
+  it('never reports again once the first pull is in (the 2.5s poll is not a load)', async () => {
+    mockGit([])
+    const pull = vi.spyOn(api, 'changesOps').mockResolvedValue({ events: [], lastSeq: 0 })
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root: Root = createRoot(container)
+    try {
+      renderAs(root, 'session')
+      await flushEffects()
+      expect(tabLoadingOf('session', 'git')).toBe(false)
+      // A later pull (the visibility flip re-catch-up here; a poll tick would
+      // behave the same) runs WITHOUT the mark ever coming back: only the
+      // FIRST pull of a session is a load.
+      renderAs(root, 'session', false)
+      renderAs(root, 'session', true)
+      await flushEffects()
+      expect(pull.mock.calls.length).toBeGreaterThanOrEqual(2)
+      expect(tabLoadingOf('session', 'git')).toBe(false)
+    } finally {
+      act(() => { root.unmount() })
+      container.remove()
+    }
+  })
+
+  it('a session switch resets the report: the new session\'s first pull reports again', async () => {
+    mockGit([])
+    // Every pull parks until the test releases it, in call order.
+    const pending: Array<(value: { events: never[]; lastSeq: number }) => void> = []
+    vi.spyOn(api, 'changesOps').mockImplementation(() => new Promise(resolve => { pending.push(resolve) }))
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root: Root = createRoot(container)
+    try {
+      renderAs(root, 'session')
+      expect(tabLoadingOf('session', 'git')).toBe(true)
+      await act(async () => {
+        pending[0]!({ events: [], lastSeq: 0 })
+        await Promise.resolve()
+      })
+      expect(tabLoadingOf('session', 'git')).toBe(false)
+      // The switch: the old session's mark is gone (the report's cleanup
+      // names the session) and the fresh first pull reports under the new
+      // seat — the reset effect has re-armed the report.
+      renderAs(root, 'session-2')
+      expect(tabLoadingOf('session', 'git')).toBe(false)
+      expect(tabLoadingOf('session-2', 'git')).toBe(true)
+      await act(async () => {
+        pending[1]!({ events: [], lastSeq: 0 })
+        await Promise.resolve()
+      })
+      expect(tabLoadingOf('session-2', 'git')).toBe(false)
+    } finally {
+      act(() => { root.unmount() })
+      container.remove()
+    }
+  })
+})

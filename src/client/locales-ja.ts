@@ -168,6 +168,7 @@ export const ja: Record<string, string> = {
   close: '閉じる',
   closeOtherTabs: '他のタブを閉じる',
   tabUnread: '未読の新しいページがあります',
+  tabLoading: '読み込み中',
   closeLeftTabs: '左のタブを閉じる',
   closeRightTabs: '右のタブを閉じる',
   closeAllTabs: 'すべてのタブを閉じる',

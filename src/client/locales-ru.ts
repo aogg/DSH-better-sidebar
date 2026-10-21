@@ -164,6 +164,7 @@ export const ru: Record<string, string> = {
   close: 'Закрыть',
   closeOtherTabs: 'Закрыть остальные вкладки',
   tabUnread: 'Есть новая страница, которую вы ещё не открывали',
+  tabLoading: 'Загрузка',
   closeLeftTabs: 'Закрыть вкладки слева',
   closeRightTabs: 'Закрыть вкладки справа',
   closeAllTabs: 'Закрыть все вкладки',

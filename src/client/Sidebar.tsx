@@ -773,6 +773,7 @@ export function Sidebar(props: { ctx: Context; store: SidebarStore }) {
             getTabRightActions={tabRightActionsOf}
             onRevealInFileManager={revealTabFile}
             tabMenuCwd={cwd}
+            sessionId={sessionId}
           />
         </div>
       </div>

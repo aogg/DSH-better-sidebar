@@ -168,6 +168,7 @@ export const vi: Record<string, string> = {
   close: 'Đóng',
   closeOtherTabs: 'Đóng các tab khác',
   tabUnread: 'Có một trang mới bạn chưa xem',
+  tabLoading: 'Đang tải',
   closeLeftTabs: 'Đóng tab bên trái',
   closeRightTabs: 'Đóng tab bên phải',
   closeAllTabs: 'Đóng tất cả tab',

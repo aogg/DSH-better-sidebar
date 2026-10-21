@@ -159,6 +159,7 @@ export const it: Record<string, string> = {
   close: 'Chiudi',
   closeOtherTabs: 'Chiudi le altre schede',
   tabUnread: 'C’è una nuova pagina non ancora visualizzata',
+  tabLoading: 'Caricamento',
   closeLeftTabs: 'Chiudi le schede a sinistra',
   closeRightTabs: 'Chiudi le schede a destra',
   closeAllTabs: 'Chiudi tutte le schede',

@@ -168,6 +168,7 @@ export const hi: Record<string, string> = {
   close: 'बंद करें',
   closeOtherTabs: 'अन्य टैब बंद करें',
   tabUnread: 'एक नया पृष्ठ है जिसे आपने अभी तक नहीं देखा',
+  tabLoading: 'लोड हो रहा',
   closeLeftTabs: 'बाएँ टैब बंद करें',
   closeRightTabs: 'दाएँ टैब बंद करें',
   closeAllTabs: 'सभी टैब बंद करें',

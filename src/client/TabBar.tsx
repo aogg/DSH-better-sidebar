@@ -18,6 +18,7 @@ import {
 import type { SidebarTab } from './state.ts'
 import { t } from './locales.ts'
 import { relativeTo } from './paths.ts'
+import { useTabLoading } from './tab-loading.ts'
 import css from './sidebar.module.css'
 
 /** One + menu option. */
@@ -55,6 +56,126 @@ export function parseDrag(raw: string): TabDragPayload | null {
 function setTabDragging(active: boolean): void {
   if (active) document.body.setAttribute('data-dsh-tab-dragging', '')
   else document.body.removeAttribute('data-dsh-tab-dragging')
+}
+
+/**
+ * One chip of the strip: the draggable / closable row. Extracted from
+ * TabBar's map because the loading flag is a per-tab subscription
+ * ({@link useTabLoading}) and a hook may not be called inside a loop or
+ * conditionally — the chip calls it at its top level instead.
+ *
+ * Deliberately not `memo`-wrapped: its callback props are fresh closures of
+ * the strip's render, so memoization could never bail out, and the
+ * confinement the loading mark needs is already delivered by the
+ * per-entry subscription — a load starting or settling re-renders only THAT
+ * chip (the strip itself does not subscribe; the boolean snapshot lets every
+ * other chip's `useSyncExternalStore` bail out), never the whole row set.
+ */
+function TabChip(props: {
+  tab: SidebarTab
+  active: boolean
+  paneId: string
+  /** The owning session (see TabBar's `sessionId`); absent → never loading. */
+  sessionId: string | undefined
+  onActivate: (tabId: string) => void
+  onClose: (tabId: string) => void
+  /** Drop of a tab ONTO this chip: (payload, insertBeforeTabId = this tab). */
+  onDropTab: (payload: TabDragPayload, before: string | null) => void
+  /** The right-click context menu opening on this chip (TabBar owns the
+   *  menu state; opening it also dismisses the + menu there). */
+  onTabMenu: (target: { tabId: string; x: number; y: number }) => void
+  /** Middle mouse-down on this chip: TabBar records the press target and
+   *  settles the close on the matching window-level mouseup. */
+  onMiddlePress: (tabId: string, node: HTMLElement) => void
+  /** A drag that started on this chip ended (or was cancelled): the strip's
+   *  drag flags clear along with its drop overlay. */
+  onDragEnded: () => void
+  getTabIcon?: (tab: SidebarTab) => ReactNode
+  getTabBadge?: (tab: SidebarTab) => ReactNode
+  isTabUnread?: (tab: SidebarTab) => boolean
+}) {
+  const {
+    tab, active, paneId, sessionId, onActivate, onClose, onDropTab, onTabMenu, onMiddlePress, onDragEnded,
+    getTabIcon, getTabBadge, isTabUnread,
+  } = props
+  // This tab's read-in-flight flag (a file read, a page's first pull —
+  // whoever reports it; see tab-loading.ts). While it holds, the spinner
+  // REPLACES the leading icon — the favicon→spinner slot a browser tab uses.
+  const loading = useTabLoading(sessionId, tab.id)
+  return (
+    <div
+      className={clsx(css.tab, active && css.tabActive)}
+      title={tab.title}
+      draggable
+      onDragStart={(event) => {
+        setTabDragging(true)
+        event.dataTransfer.setData(TAB_DRAG_TYPE, serializeDrag({ tabId: tab.id, paneId }))
+        event.dataTransfer.effectAllowed = 'move'
+      }}
+      onDragEnd={onDragEnded}
+      onDragOver={(event) => { event.preventDefault(); event.stopPropagation() }}
+      onDrop={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        setTabDragging(false)
+        const raw = event.dataTransfer.getData(TAB_DRAG_TYPE)
+        const payload = parseDrag(raw)
+        if (payload !== null) onDropTab(payload, tab.id)
+      }}
+      onClick={() => { onActivate(tab.id) }}
+      onMouseDown={(event) => {
+        // Middle-click close: record the press target and disarm Chrome's
+        // middle-click autoscroll (its indicator is inert here — the strip
+        // scrolls via the wheel handler only). The close itself settles on
+        // the first middle mouseup over this same tab (window-level), keeping
+        // release semantics.
+        if (event.button === 1) {
+          event.preventDefault()
+          onMiddlePress(tab.id, event.currentTarget)
+        }
+      }}
+      onContextMenu={(event) => {
+        // Take over the browser menu: the tab context menu offers the close
+        // operations for this pane.
+        event.preventDefault()
+        onTabMenu({ tabId: tab.id, x: event.clientX, y: event.clientY })
+      }}
+    >
+      {loading
+        ? (
+          <span
+            className={css.tabLoading}
+            role="img"
+            aria-label={t('tabLoading')}
+            title={t('tabLoading')}
+          />
+        )
+        : getTabIcon?.(tab) ?? null}
+      {getTabBadge?.(tab) ?? null}
+      <span className={css.tabTitle}>{tab.title}</span>
+      {isTabUnread?.(tab) === true
+        ? (
+          <span
+            className={css.tabUnreadDot}
+            role="img"
+            aria-label={t('tabUnread')}
+            title={t('tabUnread')}
+          />
+        )
+        : null}
+      <button
+        type="button"
+        className={css.tabClose}
+        aria-label={t('close')}
+        onClick={(event) => {
+          event.stopPropagation()
+          onClose(tab.id)
+        }}
+      >
+        <IconCloseFillRegular size={14} />
+      </button>
+    </div>
+  )
 }
 
 export function TabBar(props: {
@@ -108,12 +229,23 @@ export function TabBar(props: {
    * associated file, like the reveal row.
    */
   tabMenuCwd?: string
+  /**
+   * The session this strip's tabs belong to: the scope the tab-loading
+   * registry is read under, so a chip can swap its leading icon for a
+   * spinner while its page's first load runs (the favicon→spinner slot a
+   * browser tab uses; see tab-loading.ts). A tab id is unique only WITHIN a
+   * session, so the flag is meaningless without the seat — absent (the
+   * native right rail renders its own chip chrome) → no strip ever shows a
+   * spinner and every tab renders exactly as before this prop existed.
+   */
+  sessionId?: string
 }) {
   const {
     paneId, tabs, active, onActivate, onClose, onNewTab, newTabOptions, onDropTab, getTabIcon, getTabBadge, getTabRightActions,
     isTabUnread,
     onRevealInFileManager,
     tabMenuCwd,
+    sessionId,
   } = props
   const [menuOpen, setMenuOpen] = useState(false)
   // The tab right-click context menu: the target tab plus the cursor
@@ -234,72 +366,27 @@ export function TabBar(props: {
     >
       <div ref={listRef} className={css.tabList}>
         {tabs.map(tab => (
-          <div
+          <TabChip
             key={tab.id}
-            className={clsx(css.tab, active === tab.id && css.tabActive)}
-            title={tab.title}
-            draggable
-            onDragStart={(event) => {
-              setTabDragging(true)
-              event.dataTransfer.setData(TAB_DRAG_TYPE, serializeDrag({ tabId: tab.id, paneId }))
-              event.dataTransfer.effectAllowed = 'move'
-            }}
-            onDragEnd={() => { setTabDragging(false); setDragOver(false) }}
-            onDragOver={(event) => { event.preventDefault(); event.stopPropagation() }}
-            onDrop={(event) => {
-              event.preventDefault()
-              event.stopPropagation()
-              setTabDragging(false)
-              const raw = event.dataTransfer.getData(TAB_DRAG_TYPE)
-              const payload = parseDrag(raw)
-              if (payload !== null) onDropTab(payload, tab.id)
-            }}
-            onClick={() => { onActivate(tab.id) }}
-            onMouseDown={(event) => {
-              // Middle-click close: record the press target and disarm
-              // Chrome's middle-click autoscroll (its indicator is inert
-              // here — the strip scrolls via the wheel handler only). The
-              // close itself settles on the first middle mouseup over this
-              // same tab (window-level), keeping release semantics.
-              if (event.button === 1) {
-                event.preventDefault()
-                middlePressed.current = { id: tab.id, node: event.currentTarget }
-              }
-            }}
-            onContextMenu={(event) => {
-              // Take over the browser menu: the tab context menu offers the
-              // close operations for this pane. Opening it also dismisses
-              // the + menu (only one menu at a time).
-              event.preventDefault()
+            tab={tab}
+            active={active === tab.id}
+            paneId={paneId}
+            sessionId={sessionId}
+            onActivate={onActivate}
+            onClose={onClose}
+            onDropTab={onDropTab}
+            onTabMenu={(target) => {
+              // Opening the tab context menu dismisses the + menu (only one
+              // menu at a time); the menu state itself stays here.
               setMenuOpen(false)
-              setTabMenu({ tabId: tab.id, x: event.clientX, y: event.clientY })
+              setTabMenu(target)
             }}
-          >
-            {getTabIcon?.(tab) ?? null}
-            {getTabBadge?.(tab) ?? null}
-            <span className={css.tabTitle}>{tab.title}</span>
-            {isTabUnread?.(tab) === true
-              ? (
-                <span
-                  className={css.tabUnreadDot}
-                  role="img"
-                  aria-label={t('tabUnread')}
-                  title={t('tabUnread')}
-                />
-              )
-              : null}
-            <button
-              type="button"
-              className={css.tabClose}
-              aria-label={t('close')}
-              onClick={(event) => {
-                event.stopPropagation()
-                onClose(tab.id)
-              }}
-            >
-              <IconCloseFillRegular size={14} />
-            </button>
-          </div>
+            onMiddlePress={(id, node) => { middlePressed.current = { id, node } }}
+            onDragEnded={() => { setTabDragging(false); setDragOver(false) }}
+            getTabIcon={getTabIcon}
+            getTabBadge={getTabBadge}
+            isTabUnread={isTabUnread}
+          />
         ))}
         {/*
           The + sits immediately after the rightmost tab (sticky at the

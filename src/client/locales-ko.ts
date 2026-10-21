@@ -160,6 +160,7 @@ export const ko: Record<string, string> = {
   close: '닫기',
   closeOtherTabs: '다른 탭 닫기',
   tabUnread: '확인하지 않은 새 페이지가 있습니다',
+  tabLoading: '불러오는 중',
   closeLeftTabs: '왼쪽 탭 닫기',
   closeRightTabs: '오른쪽 탭 닫기',
   closeAllTabs: '모든 탭 닫기',

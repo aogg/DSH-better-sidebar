@@ -166,6 +166,7 @@ export const id: Record<string, string> = {
   close: 'Tutup',
   closeOtherTabs: 'Tutup Tab Lain',
   tabUnread: 'Ada halaman baru yang belum Anda lihat',
+  tabLoading: 'Memuat',
   closeLeftTabs: 'Tutup Tab di Kiri',
   closeRightTabs: 'Tutup Tab di Kanan',
   closeAllTabs: 'Tutup Semua Tab',

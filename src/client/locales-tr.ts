@@ -168,6 +168,7 @@ export const tr: Record<string, string> = {
   close: 'Kapat',
   closeOtherTabs: 'Diğer sekmeleri kapat',
   tabUnread: 'Henüz bakmadığınız yeni bir sayfa var',
+  tabLoading: 'Yükleniyor',
   closeLeftTabs: 'Soldaki sekmeleri kapat',
   closeRightTabs: 'Sağdaki sekmeleri kapat',
   closeAllTabs: 'Tüm sekmeleri kapat',

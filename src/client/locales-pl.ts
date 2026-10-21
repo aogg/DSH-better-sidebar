@@ -170,6 +170,7 @@ export const pl: Record<string, string> = {
   close: 'Zamknij',
   closeOtherTabs: 'Zamknij inne karty',
   tabUnread: 'Jest nowa, jeszcze nieobejrzana strona',
+  tabLoading: 'Ładowanie',
   closeLeftTabs: 'Zamknij karty po lewej',
   closeRightTabs: 'Zamknij karty po prawej',
   closeAllTabs: 'Zamknij wszystkie karty',

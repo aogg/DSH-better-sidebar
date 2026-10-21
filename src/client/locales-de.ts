@@ -154,6 +154,7 @@ export const de: Record<string, string> = {
   close: 'Schließen',
   closeOtherTabs: 'Andere Tabs schließen',
   tabUnread: 'Es gibt eine neue, noch nicht angesehene Seite',
+  tabLoading: 'Wird geladen',
   closeLeftTabs: 'Tabs links schließen',
   closeRightTabs: 'Tabs rechts schließen',
   closeAllTabs: 'Alle Tabs schließen',

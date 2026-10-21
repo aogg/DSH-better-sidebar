@@ -169,6 +169,7 @@ export const ar: Record<string, string> = {
   close: 'إغلاق',
   closeOtherTabs: 'إغلاق التبويبات الأخرى',
   tabUnread: 'هناك صفحة جديدة لم تطّلع عليها بعد',
+  tabLoading: 'جارٍ التحميل',
   closeLeftTabs: 'إغلاق التبويبات على اليسار',
   closeRightTabs: 'إغلاق التبويبات على اليمين',
   closeAllTabs: 'إغلاق كل التبويبات',

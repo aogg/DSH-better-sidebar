@@ -151,6 +151,7 @@ export const sv: Record<string, string> = {
   close: 'Stäng',
   closeOtherTabs: 'Stäng andra flikar',
   tabUnread: 'Det finns en ny sida som du inte har tittat på',
+  tabLoading: 'Laddar',
   closeLeftTabs: 'Stäng flikar till vänster',
   closeRightTabs: 'Stäng flikar till höger',
   closeAllTabs: 'Stäng alla flikar',

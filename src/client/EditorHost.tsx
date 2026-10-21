@@ -31,6 +31,7 @@ import { api, mediaUrl, type SessionScope } from './api.ts'
 import { BinaryDownload } from './binary-download.tsx'
 import { planFirstMatch, planFsReadOutcome, type EditorLoadAction } from './editor-load.ts'
 import { clearEditorDirty, setEditorDirty } from './editor-dirty.ts'
+import { clearTabLoading, setTabLoading } from './tab-loading.ts'
 import { baseName } from './FileTree.tsx'
 import { createFrameBatcher } from './frame-batcher.ts'
 import { openClaimedNativeFile, openSidebarFile } from './sidebar-file.ts'
@@ -512,6 +513,23 @@ export function EditorHost(props: {
     setEditorDirty(tab.id, toolbar?.dirty === true, scope.sessionId, path)
     return () => { clearEditorDirty(tab.id, scope.sessionId) }
   }, [tab.id, toolbar?.dirty, scope.sessionId, path, isDir])
+
+  // Publish this tab's read-in-flight state to the tab-loading registry: the
+  // tab strip swaps the tab's leading icon for a spinner while the load runs
+  // (the favicon→spinner slot a browser tab uses). A path-less window (the
+  // files home) and folder windows never run the viewer flow — their `load`
+  // state never leaves its initial 'loading' and must not report. The
+  // cleanup clears on unmount (tab closed, session switched) so a spinner can
+  // never outlive its load; an in-place path switch / manual refresh re-enters
+  // 'loading' and re-arms on the way through.
+  useEffect(() => {
+    if (showEmpty || isDir) {
+      setTabLoading(tab.id, false, scope.sessionId)
+      return
+    }
+    setTabLoading(tab.id, load.status === 'loading', scope.sessionId)
+    return () => { clearTabLoading(tab.id, scope.sessionId) }
+  }, [tab.id, load.status, scope.sessionId, showEmpty, isDir])
 
   // The docked panel's drag-resize: pointer capture on the handle itself
   // (no window listeners — the captured pointer keeps tracking even off the

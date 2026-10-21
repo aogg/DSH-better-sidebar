@@ -183,6 +183,7 @@ export const zhTW: Record<string, string> = {
   close: '關閉',
   closeOtherTabs: '關閉其他標籤',
   tabUnread: '有未檢視的新頁面',
+  tabLoading: '載入中',
   closeLeftTabs: '關閉左側標籤',
   closeRightTabs: '關閉右側標籤',
   closeAllTabs: '關閉全部標籤',

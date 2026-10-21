@@ -161,6 +161,7 @@ export const fr: Record<string, string> = {
   close: 'Fermer',
   closeOtherTabs: 'Fermer les autres onglets',
   tabUnread: 'Une nouvelle page non consultée est disponible',
+  tabLoading: 'Chargement',
   closeLeftTabs: 'Fermer les onglets à gauche',
   closeRightTabs: 'Fermer les onglets à droite',
   closeAllTabs: 'Fermer tous les onglets',

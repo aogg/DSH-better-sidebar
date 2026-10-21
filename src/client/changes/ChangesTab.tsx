@@ -31,6 +31,7 @@ import type { TabComponentProps } from '../service.ts'
 import { t } from '../locales.ts'
 import { api } from '../api.ts'
 import { usePolling } from '../use-polling.ts'
+import { clearTabLoading, setTabLoading } from '../tab-loading.ts'
 import type { SidebarDiffRef } from '../state.ts'
 import { IconButton, Notice } from '../ui/index.ts'
 import { GitLens } from './GitLens.tsx'
@@ -183,6 +184,15 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
   const pullingRef = useRef(false)
   const [opsError, setOpsError] = useState(false)
   const [tick, setTick] = useState(0)
+  /**
+   * Whether the tab's FIRST event pull has settled (resolve or reject —
+   * whatever it brought back). Until it has, the page shows nothing but a
+   * loading Notice and the tab reports itself loading to the strip (see the
+   * effect below). The steady-state 2.5s delta poll is NOT a load: once the
+   * first pull is in, the flag stays true and the later polls never touch it
+   * (setting an already-true state is a React bail-out, no re-render).
+   */
+  const [firstPullSettled, setFirstPullSettled] = useState(false)
   const pull = useCallback(async (signal?: AbortSignal): Promise<void> => {
     const generation = pollGen.current
     if (pullingRef.current) return
@@ -234,6 +244,11 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
       if (generation === pollGen.current && signal?.aborted !== true) setOpsError(true)
     } finally {
       pullingRef.current = false
+      // The first pull has settled — its own outcome does not matter, the
+      // tab is no longer "coming up" (idempotent for every later poll). A
+      // STALE generation's settle must not land: the session switch has
+      // already reset the flag for the fresh pull that is now in flight.
+      if (generation === pollGen.current) setFirstPullSettled(true)
     }
     // Granular scope fields: the scope object's identity churns, only its
     // sessionId / cwd fields gate the poll target.
@@ -246,12 +261,24 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
     addsRef.current = []
     seqRef.current = 0
     setOpsError(false)
+    // The new session's first pull has not run yet — the tab is "coming up"
+    // again (the report effect below re-arms from this reset).
+    setFirstPullSettled(false)
   }, [scope.sessionId])
   // One catch-up whenever the tab becomes visible (the badge count follows the
   // tab being opened); the CADENCE below runs only while an event-backed lens
   // is showing (the git lens folds nothing from the session log).
   useEffect(() => { if (visible) void pull() }, [visible, pull])
   usePolling(visible && lens !== 'git', pull, { intervalMs: 2_500 })
+  // Report the first pull's in-flight state to the tab strip's loading
+  // registry: until it settles the tab shows nothing but a loading Notice, so
+  // the strip's spinner is the tab's only "this page is coming" feedback.
+  // The cleanup clears on unmount (tab closed) so a spinner can never outlive
+  // its load; the session switch above re-arms through the reset.
+  useEffect(() => {
+    setTabLoading(tab.id, visible && !firstPullSettled, scope.sessionId)
+    return () => { clearTabLoading(tab.id, scope.sessionId) }
+  }, [tab.id, visible, firstPullSettled, scope.sessionId])
   // tick only forces the re-render; the fold reads the ref directly.
   void tick
   const ops = opsRef.current

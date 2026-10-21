@@ -19,6 +19,7 @@ import { api } from '../src/client/api.ts'
 import { createBetterSidebarService, type FileViewerProps } from '../src/client/service.ts'
 import { allLeaves, createSidebarStore, type SidebarTab } from '../src/client/state.ts'
 import { consumeSearchSeed } from '../src/client/search-seed.ts'
+import { clearTabLoading, tabLoadingOf } from '../src/client/tab-loading.ts'
 
 /**
  * Diagnostics bag for the render wait below: how many `fs.trees` answers the
@@ -1361,6 +1362,69 @@ describe('EditorHost add-to-search redirect', { timeout: 35_000 }, () => {
       expect(consumeSearchSeed()).toBeUndefined()
     } finally {
       unmount()
+    }
+  })
+})
+
+/**
+ * The tab strip's loading mark (tab-loading.ts): the host publishes its
+ * `load` state machine's 'loading' span to the registry, so the tab's chip
+ * can swap its icon for a spinner while the read runs. The registry is
+ * module-level, so these cases read it directly (the strip side is pinned in
+ * tab-bar-loading.spec.tsx).
+ */
+describe('EditorHost tab-loading report', () => {
+  afterEach(() => { clearTabLoading('editor:/tmp/slow.slow') })
+
+  it('arms the mark while the read is in flight and clears it on settle', async () => {
+    const { store, ctx } = setup()
+    const service = ctx.betterSidebar
+    service.registerFileViewer({ id: 'test:slow', exts: ['slow'], fetchStrategy: 'fsRead', component: () => null })
+    // A read the test answers by hand, so the in-flight span is observable.
+    let resolveRead: (result: { kind: 'text'; content: string; size: number }) => void = () => {}
+    fsRead.mockImplementationOnce(() => new Promise(resolve => { resolveRead = resolve }))
+    service.openTab({ type: 'editor', title: 'slow.slow', path: '/tmp/slow.slow', id: 'editor:/tmp/slow.slow' })
+    const fileTab = (): SidebarTab =>
+      allLeaves(store.getSnapshot().state!.bottomSplits).flatMap(leaf => leaf.tabs)
+        .find(tab => tab.path === '/tmp/slow.slow')!
+    const { unmount } = mountHost(ctx, store, fileTab)
+    try {
+      // The load effect ran ('loading') but the read has not answered yet.
+      expect(tabLoadingOf('editor-home-session', fileTab().id)).toBe(true)
+      await act(async () => {
+        resolveRead({ kind: 'text', content: 'body', size: 4 })
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(tabLoadingOf('editor-home-session', fileTab().id)).toBe(false)
+    } finally {
+      unmount()
+    }
+  })
+
+  it('clears on unmount: a tab closed mid-load leaves no spinner behind', () => {
+    const { store, ctx } = setup()
+    const service = ctx.betterSidebar
+    service.registerFileViewer({ id: 'test:slow', exts: ['slow'], fetchStrategy: 'fsRead', component: () => null })
+    fsRead.mockImplementationOnce(() => new Promise<never>(() => {}))
+    service.openTab({ type: 'editor', title: 'slow.slow', path: '/tmp/slow.slow', id: 'editor:/tmp/slow.slow' })
+    const fileTab = (): SidebarTab =>
+      allLeaves(store.getSnapshot().state!.bottomSplits).flatMap(leaf => leaf.tabs)
+        .find(tab => tab.path === '/tmp/slow.slow')!
+    const { unmount } = mountHost(ctx, store, fileTab)
+    expect(tabLoadingOf('editor-home-session', fileTab().id)).toBe(true)
+    unmount()
+    expect(tabLoadingOf('editor-home-session', fileTab().id)).toBe(false)
+  })
+
+  it('a path-less home tab never reports (its viewer flow never runs)', () => {
+    const { store, ctx, homeTab } = setup()
+    const { unmount } = mountHost(ctx, store, homeTab)
+    try {
+      expect(tabLoadingOf('editor-home-session', homeTab().id)).toBe(false)
+    } finally {
+      unmount()
+      clearTabLoading(homeTab().id)
     }
   })
 })

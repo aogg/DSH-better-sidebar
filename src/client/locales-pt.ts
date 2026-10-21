@@ -151,6 +151,7 @@ export const pt: Record<string, string> = {
   close: 'Fechar',
   closeOtherTabs: 'Fechar outras abas',
   tabUnread: 'Há uma nova página ainda não vista',
+  tabLoading: 'Carregando',
   closeLeftTabs: 'Fechar abas à esquerda',
   closeRightTabs: 'Fechar abas à direita',
   closeAllTabs: 'Fechar todas as abas',

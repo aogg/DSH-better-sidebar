@@ -166,6 +166,7 @@ export const nl: Record<string, string> = {
   close: 'Sluiten',
   closeOtherTabs: 'Andere tabbladen sluiten',
   tabUnread: 'Er is een nieuwe pagina die u nog niet heeft bekeken',
+  tabLoading: 'Laden',
   closeLeftTabs: 'Tabbladen links sluiten',
   closeRightTabs: 'Tabbladen rechts sluiten',
   closeAllTabs: 'Alle tabbladen sluiten',
