@@ -127,11 +127,14 @@ async function flush(ms = 120): Promise<void> {
   })
 }
 
+/** 轮询等文本上屏（act 内真定时器步进；drip 一条 ~40ms，几十步足够）。 */
 async function waitForText(text: string): Promise<void> {
   await act(async () => {
-    await vi.waitFor(() => {
-      expect(document.body.textContent).toContain(text)
-    })
+    for (let step = 0; step < 60; step++) {
+      if (document.body.textContent?.includes(text) === true) return
+      await new Promise(resolve => { setTimeout(resolve, 50) })
+    }
+    expect(document.body.textContent).toContain(text)
   })
 }
 
@@ -211,8 +214,13 @@ describe('history view 记录跳转', () => {
     const { face, view } = mountView({ jumpLocateOptions: { timeoutMs: 500, highlightMs: 40 } })
     await waitForText('cur 的第一条提问')
     click(jumpButton('cur:0'))
+    // 立即定位路径：命中后滚动 + 高亮标记（等待渲染/定位的微任务冲刷）。
     await act(async () => {
-      await vi.waitFor(() => { expect(scrollTo).toHaveBeenCalled() })
+      for (let step = 0; step < 20; step++) {
+        if (scrollTo.mock.calls.length > 0) break
+        await new Promise(resolve => { setTimeout(resolve, 50) })
+      }
+      expect(scrollTo.mock.calls.length).toBeGreaterThan(0)
     })
     expect(face.openSession).not.toHaveBeenCalled()
     expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'smooth' }))
@@ -232,9 +240,11 @@ describe('history view 记录跳转', () => {
     expect(face.openSession).toHaveBeenCalledWith('s2')
     // 主视图里没有那条消息（也没造 DOM）：等定位超时 → 降级说明上 title。
     await act(async () => {
-      await vi.waitFor(() => {
-        expect(jumpButton('s2:5').title).toContain('Session opened')
-      }, { timeout: 2000 })
+      for (let step = 0; step < 40; step++) {
+        if (jumpButton('s2:5').title.includes('Session opened')) break
+        await new Promise(resolve => { setTimeout(resolve, 50) })
+      }
+      expect(jumpButton('s2:5').title).toContain('Session opened')
     })
     view.unmount()
   })
