@@ -1155,6 +1155,53 @@ describe('session cwd resolution over the API route', () => {
     }
   })
 
+  // The「搜索」page's line-level v2 contract, end to end through the real
+  // route (any engine or the walk answers identically — the shape and the
+  // matcher are host-owned), plus the regex compile-once gate.
+  it('fs.contentSearch answers the line-level v2 shape and gates an illegal regex', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-sidebar-content-v2-'))
+    const workspace = join(root, 'workspace')
+    mkdirSync(join(workspace, 'src'), { recursive: true })
+    writeFileSync(join(workspace, 'src', 'a.ts'), 'keep\nconst answer = 42\n')
+    try {
+      const route = mount({ sessions: { get: () => ({ header: { cwd: workspace } }) } })
+      const found = await invoke(route, 'fs.contentSearch', { sessionId: 's-content', query: 'answer' })
+      expect(found.ok).toBe(true)
+      const result = found.value as unknown as {
+        matches: Array<{ path: string; count: number; truncated: boolean; hits: Array<{
+          line: number; column: number; length: number; text: string; before: string[]; after: string[]
+        }> }>
+        truncated: boolean
+      }
+      expect(result.truncated).toBe(false)
+      expect(result.matches).toHaveLength(1)
+      const [file] = result.matches
+      expect(file!.path).toBe('src/a.ts')
+      expect(file!.count).toBe(1)
+      expect(file!.truncated).toBe(false)
+      expect(file!.hits).toEqual([{
+        line: 2, column: 6, length: 6, text: 'const answer = 42', before: ['keep'], after: [],
+      }])
+      // The match-mode booleans ride the payload: a case-EXACT query misses…
+      const sensitive = await invoke(route, 'fs.contentSearch', {
+        sessionId: 's-content', query: 'ANSWER', caseSensitive: true,
+      })
+      expect((sensitive.value as unknown as { matches: unknown[] }).matches).toEqual([])
+      // …a loose payload reads as the v1 default (hard booleans only)…
+      const loose = await invoke(route, 'fs.contentSearch', {
+        sessionId: 's-content', query: 'answer', caseSensitive: 'yes', wholeWord: 1,
+      })
+      expect(loose.ok).toBe(true)
+      expect((loose.value as unknown as { matches: unknown[] }).matches).toHaveLength(1)
+      // …and the route's compile-once check turns an illegal regex into a
+      // clean bad-request (never a mid-search throw).
+      const bad = await invoke(route, 'fs.contentSearch', { sessionId: 's-content', query: '(', regex: true })
+      expect(bad).toMatchObject({ ok: false, status: 400, error: { code: 'bad-request' } })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('fs.trees rejects an empty list and an oversized batch', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-sidebar-fs-trees-guard-'))
     const workspace = join(root, 'workspace')

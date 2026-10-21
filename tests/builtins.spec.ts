@@ -1,5 +1,5 @@
 /**
- * Built-in registration tests: the plugin registers 6 tabs and 4 file
+ * Built-in registration tests: the plugin registers 9 tabs and 4 file
  * viewers through the same service external plugins use (dogfooding);
  * the catch-all `code` viewer and the html sandbox settings pin the
  * registry's behavior. The read-only previews (image / pdf /
@@ -10,9 +10,14 @@
  * see src/client/plugins-viewers.ts.) The git tab is the unified changes
  * tab (git lens + session lens, PR #471's file-trace merged in).
  *
- * `terminal-bottom` (#774) is the sixth: the plugin's OWN bottom-workbench
- * terminal, which is `bottomOnly` and therefore contributes no native tab
- * type. It is the one built-in whose carrier surface is asserted here.
+ * `terminal-bottom` (#774) is the plugin's OWN bottom-workbench terminal,
+ * which is `bottomOnly` and therefore contributes no native tab type. It is
+ * the one built-in whose carrier surface is asserted here.
+ *
+ * `search` is the ninth: the PhpStorm-style Find-in-Files page (order 15,
+ * between files 10 and changes 20) — a createTab multi-instance kind (every
+ * open mints a fresh `search:<uuid>`; no dedupeKey/single), whose one-shot
+ * seed prefills the add-to-search redirect's chips.
  */
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
@@ -28,6 +33,7 @@ import { planFsReadOutcome } from '../src/client/editor-load.ts'
 import { createSidebarStore } from '../src/client/state.ts'
 import { registerBuiltins } from '../src/client/builtins/index.ts'
 import { parkSidechatReopen } from '../src/client/SideChatView.tsx'
+import { parkSearchSeed } from '../src/client/search-seed.ts'
 import { SettingsPage } from '../src/client/SettingsPage.tsx'
 
 function setup(): { service: ReturnType<typeof createBetterSidebarService>; store: ReturnType<typeof createSidebarStore>; dispose: () => void } {
@@ -38,10 +44,10 @@ function setup(): { service: ReturnType<typeof createBetterSidebarService>; stor
 }
 
 describe('built-in tab registrations', () => {
-  it('registers the 8 built-in tabs (the host owns the right-sidebar terminal and browser)', () => {
+  it('registers the 9 built-in tabs (the host owns the right-sidebar terminal and browser)', () => {
     const { service } = setup()
     expect(service.getTabs().map(t => t.id).sort()).toEqual(
-      ['diff', 'editor', 'git', 'history', 'settings', 'sidechat', 'subagent', 'terminal-bottom'],
+      ['diff', 'editor', 'git', 'history', 'search', 'settings', 'sidechat', 'subagent', 'terminal-bottom'],
     )
   })
 
@@ -203,6 +209,80 @@ describe('built-in tab registrations', () => {
     expect(reopen?.tab.meta).toEqual({ threadId: 'session-t1' })
     expect(sidechat?.dedupeKey?.(reopen!.tab)).toBe('session-t1')
     expect(sidechat?.dedupeKey?.(first!.tab)).toBeUndefined()
+  })
+
+  it('the search tab is the Find-in-Files page (order 15, visible, real page, NOT single)', () => {
+    const { service } = setup()
+    const search = service.getTab('search')
+    expect(search).toBeDefined()
+    // Slotted between the files window (10) and the changes tab (20).
+    expect(search?.order).toBe(15)
+    expect(search?.hidden).not.toBe(true)
+    expect(search?.bottomOnly).not.toBe(true)
+    expect(search?.icon).toBeDefined()
+    expect(search?.component).toBeDefined()
+    // Multi-instance ON PURPOSE: no single sugar, no dedupeKey — the service
+    // never dedupes a createTab kind without one, so pills, the + menu and
+    // the add-to-search redirect each mint their own page.
+    expect(search?.single).not.toBe(true)
+    expect(search?.dedupeKey).toBeUndefined()
+  })
+
+  it('createTab mints UNIQUE search:<uuid> tabs with the default meta (toggles off, empty chips)', () => {
+    const { service } = setup()
+    const search = service.getTab('search')
+    const first = search?.createTab?.(undefined as never)
+    const second = search?.createTab?.(undefined as never)
+    expect(first?.tab.id).toMatch(/^search:/)
+    expect(second?.tab.id).toMatch(/^search:/)
+    expect(first?.tab.id).not.toBe(second?.tab.id)
+    expect(first?.tab.type).toBe('search')
+    // Everything starts at the defaults = the v1 case-insensitive literal.
+    expect(first?.tab.meta).toEqual({
+      query: '',
+      caseSensitive: false,
+      wholeWord: false,
+      regex: false,
+      include: [],
+      exclude: [],
+    })
+  })
+
+  it('createTab consumes a parked add-to-search seed into the minted chips (one shot)', () => {
+    const { service } = setup()
+    const search = service.getTab('search')
+    parkSearchSeed({ target: 'exclude', chip: 'dist' })
+    const minted = search?.createTab?.(undefined as never)
+    expect(minted?.tab.meta).toEqual({
+      query: '',
+      caseSensitive: false,
+      wholeWord: false,
+      regex: false,
+      include: [],
+      exclude: ['dist'],
+    })
+    // One-shot: the next mint is plain (a refused/absent open leaves nothing
+    // parked for an unrelated future tab).
+    const plain = search?.createTab?.(undefined as never)
+    expect(plain?.tab.meta).toEqual({
+      query: '',
+      caseSensitive: false,
+      wholeWord: false,
+      regex: false,
+      include: [],
+      exclude: [],
+    })
+  })
+
+  it('the visible + menu order slots search between files (10) and changes (20)', () => {
+    const { service } = setup()
+    const ordered = service.getTabs()
+      .filter(descriptor => descriptor.hidden !== true)
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+      .map(descriptor => descriptor.id)
+    expect(ordered).toEqual([
+      'editor', 'search', 'git', 'subagent', 'sidechat', 'history', 'terminal-bottom', 'settings',
+    ])
   })
 
   it('the subagent tab declares its auto-open related settings', () => {

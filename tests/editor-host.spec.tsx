@@ -9,7 +9,7 @@
  * only, no editor chrome); file tabs keep the full chrome in both modes.
  */
 // @vitest-environment jsdom
-import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { beforeAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createElement, useEffect, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
@@ -18,6 +18,7 @@ import { EditorHost } from '../src/client/EditorHost.tsx'
 import { api } from '../src/client/api.ts'
 import { createBetterSidebarService, type FileViewerProps } from '../src/client/service.ts'
 import { allLeaves, createSidebarStore, type SidebarTab } from '../src/client/state.ts'
+import { consumeSearchSeed } from '../src/client/search-seed.ts'
 
 /**
  * Diagnostics bag for the render wait below: how many `fs.trees` answers the
@@ -31,10 +32,13 @@ const treeAnswers = (): { calls: number; landedAt: number[] } =>
  * Test script for the tree seam, used by the dropped-answer case below:
  * `slow` lists the 1-based call numbers that answer only after a beat (so a
  * refresh tick can land while they are in flight) and `hang` those that never
- * answer at all. On `globalThis` for the same hoisting reason as `treeAnswers`.
+ * answer at all. `entries` overrides the listed rows for ONE scenario (the
+ * add-to-search redirect's folder-window and out-of-root chips need rows the
+ * default /tmp listing cannot carry). On `globalThis` for the same hoisting
+ * reason as `treeAnswers`.
  */
-const treeScript = (): { slow: number[]; hang: number[] } =>
-  ((globalThis as unknown as { __treeScript?: { slow: number[]; hang: number[] } }).__treeScript ??= { slow: [], hang: [] })
+const treeScript = (): { slow: number[]; hang: number[]; entries?: { name: string; path: string; isDir: boolean }[] } =>
+  ((globalThis as unknown as { __treeScript?: { slow: number[]; hang: number[]; entries?: { name: string; path: string; isDir: boolean }[] } }).__treeScript ??= { slow: [], hang: [] })
 
 // The tree mounts inside EditorHost in these scenarios, so the api seam must
 // answer without a host (the sibling FileTree specs mock it the same way).
@@ -52,7 +56,7 @@ vi.mock('../src/client/api.ts', () => ({
       const answer = {
         levels: paths.map(path => ({
           path,
-          entries: [
+          entries: treeScript().entries ?? [
             { name: 'sub', path: '/tmp/sub', isDir: true },
             { name: 'a.ts', path: '/tmp/a.ts', isDir: false },
           ],
@@ -1087,6 +1091,267 @@ describe('EditorHost native-tab context-menu actions', { timeout: 35_000 }, () =
       expect(container.querySelector('[role="alert"]')?.textContent).toContain('Could not open: /tmp/a.ts')
     } finally {
       logged.mockRestore()
+      unmount()
+    }
+  })
+})
+
+/**
+ * 「添加到搜索中」的重定向（docs/plans/2026-10-21-find-in-files-page.md
+ * §3.3）：EditorHost 的 addToSearch 把右键行折算成 chip（cwd 相对；越界路径
+ * 绝对值透传；folder 窗口按其树根折算），parkSearchSeed 后
+ * `openTab({ type: 'search' })` 铸一个新搜索 tab —— 描述符的 createTab 消费
+ * 种子预填 meta.include/meta.exclude。不自动执行搜索；search 类型在设置里
+ * 禁用时整个动作不发生（isTabEnabled 门控，与调用方的子菜单隐藏同形）。
+ */
+describe('EditorHost add-to-search redirect', { timeout: 35_000 }, () => {
+  /** The search descriptor the way the builtins mint it: createTab consumes
+   *  the REAL one-shot seed, so the store's minted tab carries the chips. */
+  function serviceWithSearchTab(store: ReturnType<typeof createSidebarStore>): {
+    service: ReturnType<typeof createBetterSidebarService>
+    opens: Array<{ seed: { type: string }; scope?: { sessionId: string; cwd?: string } }>
+    searchTab: () => SidebarTab | undefined
+  } {
+    const service = createBetterSidebarService(store)
+    const opens: Array<{ seed: { type: string }; scope?: { sessionId: string; cwd?: string } }> = []
+    const real = service.openTab.bind(service)
+    service.openTab = ((seed: { type: string }, scope?: { sessionId: string; cwd?: string }) => {
+      opens.push({ seed, ...(scope === undefined ? {} : { scope }) })
+      real(seed, scope)
+    }) as typeof service.openTab
+    let seq = 0
+    service.registerTab({
+      id: 'search',
+      title: 'Search',
+      createTab: () => {
+        const seed = consumeSearchSeed()
+        return {
+          tab: {
+            id: `search:test-${++seq}`,
+            type: 'search',
+            title: 'Search',
+            ...(seed === undefined ? {} : {
+              meta: seed.target === 'include' ? { include: [seed.chip] } : { exclude: [seed.chip] },
+            }),
+          },
+        }
+      },
+      component: () => null,
+    })
+    return {
+      service,
+      opens,
+      searchTab: () => allLeaves(store.getSnapshot().state!.bottomSplits).flatMap(leaf => leaf.tabs)
+        .find(tab => tab.type === 'search'),
+    }
+  }
+
+  /** Mount a native tab whose docked tree lists the rows the mock serves. */
+  async function mountWithTree(
+    ctx: Context,
+    store: ReturnType<typeof createSidebarStore>,
+    tab: () => SidebarTab,
+  ): Promise<{ container: HTMLDivElement; unmount: () => void }> {
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    await act(async () => {
+      root.render(createElement(EditorHost, {
+        ctx,
+        store,
+        scope: { sessionId: 'editor-home-session', cwd: '/tmp' },
+        tab: tab(),
+        expanded: [],
+        revealed: [],
+        onToggleDir: () => {},
+        onReferenceFile: () => {},
+      }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    return {
+      container,
+      unmount: () => {
+        act(() => { root.unmount() })
+        container.remove()
+      },
+    }
+  }
+
+  /** Right-click the row and pick one Add-to-Search child. */
+  function clickAddToSearch(container: HTMLElement, rowName: string, childLabel: 'Add to Include' | 'Add to Exclude'): void {
+    const row = [...container.querySelectorAll<HTMLElement>('[role="button"]')]
+      .find(el => el.querySelector('[class*="explorerName"]')?.textContent === rowName)
+    if (row === undefined) {
+      throw new Error(`file row not found; names=${[...container.querySelectorAll('[class*="explorerName"]')].map(el => el.textContent).join('|')}`)
+    }
+    act(() => {
+      row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 20, clientY: 30 }))
+    })
+    const parent = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      .find(el => el.getAttribute('aria-haspopup') === 'menu' && el.textContent?.trim() === 'Add to Search')
+    if (parent === undefined) throw new Error('Add to Search submenu not found')
+    act(() => { parent.click() })
+    const child = [...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menu"] [role="menuitem"]')]
+      .find(el => el.textContent?.trim() === childLabel)
+    if (child === undefined) throw new Error(`submenu child not found: ${childLabel}`)
+    act(() => { child.click() })
+  }
+
+  const homeTabOf = (store: ReturnType<typeof createSidebarStore>): (() => SidebarTab) => () =>
+    allLeaves(store.getSnapshot().state!.bottomSplits).flatMap(leaf => leaf.tabs)
+      .find(tab => tab.type === 'editor' && tab.path === undefined)!
+
+  beforeEach(() => {
+    treeScript().entries = undefined
+    consumeSearchSeed() // drain any seed a failed previous test left parked
+  })
+  afterEach(() => {
+    treeScript().entries = undefined
+    treeScript().slow = []
+    treeScript().hang = []
+  })
+
+  it('menu click parks the seed, opens a NEW search tab, and the minted meta carries the chip', async () => {
+    const store = createSidebarStore()
+    const { service, opens, searchTab } = serviceWithSearchTab(store)
+    service.registerTab({ id: 'editor', title: 'Editor', dedupeKey: (tab) => tab.path, component: () => null })
+    store.setSession('editor-home-session')
+    store.setPrefs({ ...store.getPrefs(), editorExplorer: true })
+    service.openTab({ type: 'editor', title: 'Files', meta: { treeOpen: true } })
+    const ctx = {
+      betterSidebar: service,
+      get: (name: string) => name === 'betterSidebar' ? service : undefined,
+      sessions: { list: { subscribe: () => () => {}, getSnapshot: () => ({ byId: { 'editor-home-session': { cwd: '/tmp' } }, current: 'editor-home-session' }) } },
+    } as unknown as Context
+    const { container, unmount } = await mountWithTree(ctx, store, homeTabOf(store))
+    try {
+      await waitForTreeRow(container, 'a.ts')
+      clickAddToSearch(container, 'a.ts', 'Add to Include')
+      // The redirect opened a NEW search tab with THIS scope…
+      expect(opens).toEqual([{ seed: { type: 'search' }, scope: { sessionId: 'editor-home-session', cwd: '/tmp' } }])
+      // …whose createTab consumed the seed into the cwd-RELATIVE chip
+      // ('/tmp/a.ts' projected against '/tmp').
+      const minted = searchTab()
+      expect(minted?.id).toMatch(/^search:/)
+      expect(minted?.meta).toEqual({ include: ['a.ts'] })
+      // One-shot: nothing stays parked after the mint.
+      expect(consumeSearchSeed()).toBeUndefined()
+    } finally {
+      unmount()
+    }
+  })
+
+  it('the exclude list lands the same way; a second add mints ANOTHER tab', async () => {
+    const store = createSidebarStore()
+    const { service, opens, searchTab } = serviceWithSearchTab(store)
+    service.registerTab({ id: 'editor', title: 'Editor', dedupeKey: (tab) => tab.path, component: () => null })
+    store.setSession('editor-home-session')
+    store.setPrefs({ ...store.getPrefs(), editorExplorer: true })
+    service.openTab({ type: 'editor', title: 'Files', meta: { treeOpen: true } })
+    const ctx = {
+      betterSidebar: service,
+      get: (name: string) => name === 'betterSidebar' ? service : undefined,
+      sessions: { list: { subscribe: () => () => {}, getSnapshot: () => ({ byId: { 'editor-home-session': { cwd: '/tmp' } }, current: 'editor-home-session' }) } },
+    } as unknown as Context
+    const { container, unmount } = await mountWithTree(ctx, store, homeTabOf(store))
+    try {
+      await waitForTreeRow(container, 'sub')
+      clickAddToSearch(container, 'sub', 'Add to Exclude')
+      expect(searchTab()?.meta).toEqual({ exclude: ['sub'] })
+      clickAddToSearch(container, 'sub', 'Add to Exclude')
+      // createTab kind: every add mints a FRESH tab (no dedupe), even with
+      // one already open — the store now carries both.
+      expect(opens).toHaveLength(2)
+      const tabs = allLeaves(store.getSnapshot().state!.bottomSplits).flatMap(leaf => leaf.tabs)
+        .filter(tab => tab.type === 'search')
+      expect(tabs).toHaveLength(2)
+      for (const tab of tabs) expect(tab.meta).toEqual({ exclude: ['sub'] })
+    } finally {
+      unmount()
+    }
+  })
+
+  it('a folder window projects the chip against the FOLDER root, not the session cwd', async () => {
+    treeScript().entries = [{ name: 'deep.ts', path: '/work/src/deep.ts', isDir: false }]
+    const store = createSidebarStore()
+    const { service, searchTab } = serviceWithSearchTab(store)
+    service.registerTab({ id: 'editor', title: 'Editor', dedupeKey: (tab) => tab.path, component: () => null })
+    store.setSession('editor-home-session')
+    const ctx = {
+      betterSidebar: service,
+      get: (name: string) => name === 'betterSidebar' ? service : undefined,
+      sessions: { list: { subscribe: () => () => {}, getSnapshot: () => ({ byId: { 'editor-home-session': { cwd: '/tmp' } }, current: 'editor-home-session' }) } },
+    } as unknown as Context
+    service.openTab({
+      type: 'editor', title: 'src', path: '/work/src', id: 'editor:/work/src', meta: { dir: true },
+    }, { sessionId: 'editor-home-session' })
+    const dirTab = (): SidebarTab =>
+      allLeaves(store.getSnapshot().state!.bottomSplits).flatMap(leaf => leaf.tabs)
+        .find(tab => tab.path === '/work/src')!
+    const { container, unmount } = await mountWithTree(ctx, store, dirTab)
+    try {
+      await waitForTreeRow(container, 'deep.ts')
+      clickAddToSearch(container, 'deep.ts', 'Add to Include')
+      // '/work/src/deep.ts' against the FOLDER root '/work/src' — NOT the
+      // session cwd ('/tmp'), which would have produced an absolute chip.
+      expect(searchTab()?.meta).toEqual({ include: ['deep.ts'] })
+    } finally {
+      unmount()
+    }
+  })
+
+  it('an out-of-root row passes through as an ABSOLUTE chip', async () => {
+    treeScript().entries = [{ name: 'notes.log', path: '/var/elsewhere/notes.log', isDir: false }]
+    const store = createSidebarStore()
+    const { service, searchTab } = serviceWithSearchTab(store)
+    service.registerTab({ id: 'editor', title: 'Editor', dedupeKey: (tab) => tab.path, component: () => null })
+    store.setSession('editor-home-session')
+    store.setPrefs({ ...store.getPrefs(), editorExplorer: true })
+    service.openTab({ type: 'editor', title: 'Files', meta: { treeOpen: true } })
+    const ctx = {
+      betterSidebar: service,
+      get: (name: string) => name === 'betterSidebar' ? service : undefined,
+      sessions: { list: { subscribe: () => () => {}, getSnapshot: () => ({ byId: { 'editor-home-session': { cwd: '/tmp' } }, current: 'editor-home-session' }) } },
+    } as unknown as Context
+    const { container, unmount } = await mountWithTree(ctx, store, homeTabOf(store))
+    try {
+      await waitForTreeRow(container, 'notes.log')
+      clickAddToSearch(container, 'notes.log', 'Add to Exclude')
+      // relativeTo leaves the outside path unchanged: the host's resolveTarget
+      // accepts absolute entries, so the chip classifies identically.
+      expect(searchTab()?.meta).toEqual({ exclude: ['/var/elsewhere/notes.log'] })
+    } finally {
+      unmount()
+    }
+  })
+
+  it('the gate: a disabled search type parks nothing and opens nothing', async () => {
+    const store = createSidebarStore()
+    const { service, opens, searchTab } = serviceWithSearchTab(store)
+    service.registerTab({ id: 'editor', title: 'Editor', dedupeKey: (tab) => tab.path, component: () => null })
+    store.setSession('editor-home-session')
+    store.setPrefs({
+      ...store.getPrefs(),
+      editorExplorer: true,
+      tabsEnabled: { search: false },
+    })
+    service.openTab({ type: 'editor', title: 'Files', meta: { treeOpen: true } })
+    const ctx = {
+      betterSidebar: service,
+      get: (name: string) => name === 'betterSidebar' ? service : undefined,
+      sessions: { list: { subscribe: () => () => {}, getSnapshot: () => ({ byId: { 'editor-home-session': { cwd: '/tmp' } }, current: 'editor-home-session' }) } },
+    } as unknown as Context
+    const { container, unmount } = await mountWithTree(ctx, store, homeTabOf(store))
+    try {
+      await waitForTreeRow(container, 'a.ts')
+      clickAddToSearch(container, 'a.ts', 'Add to Include')
+      // isTabEnabled('search') false → addToSearch answered false before
+      // parking the seed or opening anything.
+      expect(opens).toEqual([])
+      expect(searchTab()).toBeUndefined()
+      expect(consumeSearchSeed()).toBeUndefined()
+    } finally {
       unmount()
     }
   })

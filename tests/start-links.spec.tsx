@@ -3,13 +3,14 @@
  *
  * 宿主 DOM 用假结构模拟（`[data-slot="main.conversation"]` + `[data-phase]` +
  * `[data-composer-seat]`，与 dock-fallback spec 同一手法）：相位标记是宿主
- * ConversationMainPanel 的稳定 data-* 输出，类名是哈希值不进断言。钉住八件事：
- * 相位 hero 渲染 7 个胶囊、相位离开 hero 移除、点击走正确的 openTab 参数
- * （含「历史发送」→ type: 'history'，且带 title/aria 说明文案）、无在屏会话时
- * 终端点击是 no-op（不抛错）、store 注入时设置胶囊打开内置设置页
- * （SideCardSection 本体，Esc/再点/相位离开收起）、store 缺席时设置胶囊走
- * settings-entry 探测链（已开直达分区 / 合成 settings.open 快捷键 / 探测失败
- * 静默 no-op）、observer/portal 随 disposer 清理。
+ * ConversationMainPanel 的稳定 data-* 输出，类名是哈希值不进断言。钉住九件事：
+ * 相位 hero 渲染 8 个胶囊（「搜索」在「变动」之后）、相位离开 hero 移除、点击
+ * 走正确的 openTab 参数（含「搜索」→ type: 'search' 多实例、「历史发送」→
+ * type: 'history'，且带 title/aria 说明文案）、无在屏会话时终端点击是 no-op
+ * （不抛错）、store 注入时设置胶囊打开内置设置页（SideCardSection 本体，
+ * Esc/再点/相位离开收起）、store 缺席时设置胶囊走 settings-entry 探测链
+ * （已开直达分区 / 合成 settings.open 快捷键 / 探测失败静默 no-op）、
+ * observer/portal 随 disposer 清理。
  */
 // @vitest-environment jsdom
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -104,7 +105,7 @@ function click(node: Element): void {
 }
 
 describe('hero start links（开始页快捷入口）', () => {
-  it('phase=hero 时渲染 7 个胶囊，行挂在相位根末尾（composer seat 之后）', async () => {
+  it('phase=hero 时渲染 8 个胶囊（搜索在变动之后），行挂在相位根末尾（composer seat 之后）', async () => {
     const { phaseRoot } = mountHero('hero')
     const ctx = makeCtx()
     const { fake } = service()
@@ -113,9 +114,9 @@ describe('hero start links（开始页快捷入口）', () => {
     try {
       await flush()
       const links = document.querySelectorAll('[data-dsh-start-link]')
-      expect(links).toHaveLength(7)
+      expect(links).toHaveLength(8)
       expect([...links].map(node => node.getAttribute('data-dsh-start-link'))).toEqual([
-        'files', 'changes', 'terminal', 'jobs', 'sidechat', 'history', 'settings',
+        'files', 'changes', 'search', 'terminal', 'jobs', 'sidechat', 'history', 'settings',
       ])
       const host = document.querySelector('[data-dsh-start-links-host]')
       expect(host, '入口行宿主必须存在').not.toBeNull()
@@ -136,7 +137,7 @@ describe('hero start links（开始页快捷入口）', () => {
     act(() => { dispose = registerStartLinks(ctx, fake) })
     try {
       await flush()
-      expect(document.querySelectorAll('[data-dsh-start-link]').length).toBe(7)
+      expect(document.querySelectorAll('[data-dsh-start-link]').length).toBe(8)
       act(() => { phaseRoot.setAttribute('data-phase', 'active') })
       await flush()
       expect(document.querySelector('[data-dsh-start-links-host]')).toBeNull()
@@ -168,10 +169,18 @@ describe('hero start links（开始页快捷入口）', () => {
       expect(openTab).toHaveBeenLastCalledWith({ type: 'editor' })
       open('changes')
       expect(openTab).toHaveBeenLastCalledWith({ type: 'git' })
+      open('search')
+      // 「搜索」：createTab 多实例语义对胶囊同样生效——每次点击铸新 tab；
+      // 无活动会话时 openTab 内部静默返回，点击不抛错。
+      expect(openTab).toHaveBeenLastCalledWith({ type: 'search' })
       open('jobs')
       expect(openTab).toHaveBeenLastCalledWith({ type: 'subagent' })
       open('sidechat')
       expect(openTab).toHaveBeenLastCalledWith({ type: 'sidechat' })
+      // 连续点击两次：两次都是铸新 tab 的同一参数（无去重 key 差异）。
+      open('search')
+      expect(openTab).toHaveBeenLastCalledWith({ type: 'search' })
+      expect(openTab).toHaveBeenCalledTimes(6)
     } finally {
       act(() => { dispose() })
     }
@@ -278,7 +287,7 @@ describe('hero start links（开始页快捷入口）', () => {
     let dispose: () => void = () => {}
     act(() => { dispose = registerStartLinks(ctx, fake) })
     await flush()
-    expect(document.querySelectorAll('[data-dsh-start-link]').length).toBe(7)
+    expect(document.querySelectorAll('[data-dsh-start-link]').length).toBe(8)
     act(() => { dispose() })
     expect(document.querySelector('[data-dsh-start-links-host]')).toBeNull()
     act(() => { phaseRoot.setAttribute('data-phase', 'settling') })

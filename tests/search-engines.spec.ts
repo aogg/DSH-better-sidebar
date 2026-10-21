@@ -27,6 +27,7 @@ import {
   resetEngines,
   rgArgv,
   runEngine,
+  runEngineArgv,
   setEngineHooks,
   SKIP_DIR_NAMES,
   usableEngines,
@@ -635,5 +636,98 @@ describe('streamLines settles on close, not exit', () => {
     second.emit('error', new Error('fd dirs stream exploded'))
     await expect(call).rejects.toThrow('fd dirs stream exploded')
     expect((await usableEngines()).map(probe => probe.engine)).toEqual([])
+  })
+})
+
+/**
+ * The RAW argv runner the content search's rg pass rides (`runEngineArgv`,
+ * fs-content-search.ts): under `--json` every stdout line is an EVENT
+ * (begin/match/context/end mixed), so the caller derives its stream cap from
+ * the HIT budget (match-event counted), not from a result-row count. The
+ * shared streamLines contract stays: cap+1 lines prove "there was more", the
+ * child is killed, and the truncated flag comes back honest.
+ */
+describe('runEngineArgv (the content search\'s raw event stream)', () => {
+  afterEach(() => {
+    resetEngines()
+  })
+
+  function scriptedJsonChild(lines: readonly string[], onKill?: () => void): void {
+    const stdout = new PassThrough()
+    const listeners = new Map<string, Array<(arg?: unknown) => void>>()
+    const child = {
+      stdout,
+      once(event: string, listener: (arg?: unknown) => void): ChildProcess {
+        const list = listeners.get(event) ?? []
+        list.push(listener)
+        listeners.set(event, list)
+        return child as unknown as ChildProcess
+      },
+      kill(): boolean {
+        onKill?.()
+        return true
+      },
+    }
+    const emit = (event: string, arg?: unknown): void => {
+      for (const listener of listeners.get(event) ?? []) listener(arg)
+    }
+    queueMicrotask(async () => {
+      stdout.write(`${lines.join('\n')}\n`)
+      stdout.end()
+      await new Promise<void>(resolve => { stdout.once('end', resolve) })
+      emit('close', 0)
+    })
+    setEngineHooks({
+      prober: async () => [rgProbe],
+      spawner: () => child as unknown as ChildProcess,
+    })
+  }
+
+  it('caps at the caller\'s event budget: kills the child and flags truncated', async () => {
+    // 18 event lines against a cap of 17: the 18th line is the sentinel
+    // proof — the child dies and the flag says the stream was cut.
+    const events = ['{"type":"begin"}']
+    for (let index = 1; index <= 17; index += 1) {
+      events.push(JSON.stringify({ type: 'match', data: { line_number: index } }))
+    }
+    let kills = 0
+    scriptedJsonChild(events, () => { kills += 1 })
+    const result = await runEngineArgv(rgProbe, ['--json'], '/workspace', 17)
+    expect(result.truncated).toBe(true)
+    expect(result.lines).toHaveLength(18)
+    expect(kills).toBe(1)
+  })
+
+  it('a stream within the cap settles clean and keeps exit 1 (nothing matched) a success', async () => {
+    let kills = 0
+    scriptedJsonChild(['{"type":"begin"}', '{"type":"end"}'], () => { kills += 1 })
+    const clean = await runEngineArgv(rgProbe, ['--json'], '/workspace', 10)
+    expect(clean.truncated).toBe(false)
+    expect(clean.lines).toHaveLength(2)
+    expect(kills).toBe(0)
+    // rg exits 1 when NOTHING matched — the empty run is a success here too.
+    const listeners = new Map<string, Array<(arg?: unknown) => void>>()
+    const child = {
+      stdout: new PassThrough(),
+      once(event: string, listener: (arg?: unknown) => void): ChildProcess {
+        const list = listeners.get(event) ?? []
+        list.push(listener)
+        listeners.set(event, list)
+        return child as unknown as ChildProcess
+      },
+      kill(): boolean { return true },
+    }
+    const emit = (event: string, arg?: unknown): void => {
+      for (const listener of listeners.get(event) ?? []) listener(arg)
+    }
+    setEngineHooks({
+      prober: async () => [rgProbe],
+      spawner: () => child as unknown as ChildProcess,
+    })
+    queueMicrotask(async () => {
+      emit('close', 1)
+    })
+    const empty = await runEngineArgv(rgProbe, ['--json'], '/workspace', 10)
+    expect(empty).toEqual({ lines: [], truncated: false })
   })
 })

@@ -1,14 +1,14 @@
 /**
- * The file tree's「添加到搜索中」context-menu chain. FileTree only REPORTS:
- * a right-clicked row (file or directory, absolute path) plus the picked
- * list (`include` / `exclude`) — behind an optional `onAddToContentSearch`
- * prop whose absence hides the whole submenu (the open-with contract).
- * TreePanel owns the chip lists: its `addToContentSearch` turns the row into
- * the cwd-relative chip (`relativeTo`; a path outside the cwd passes
- * through unchanged as an absolute entry), appends it deduped into the
- * matching list, force-expands the content-search section — and touches
- * nothing else: no content search is started, a live name search keeps
- * owning the results region, and the committed queries / drafts survive.
+ * 文件树「添加到搜索中」的迁移后语义。旧链路（TreePanel 持 chips、原地展开
+ * 面板）已随内容搜索迁往「搜索」页；现在的分工（docs/plans/2026-10-21
+ * -find-in-files-page.md §3.3）：
+ *
+ * - FileTree 只上报：右键行（文件或目录，绝对路径）+ 所选列表
+ *   (`include` / `exclude`)，挂在改名的 `onAddToSearch` prop 后，prop 缺席
+ *   时整个子菜单隐藏（与 open-with 同一契约）。两级菜单结构与图标逐字保留。
+ * - TreePanel 是单一透传：不持有任何 chips 状态/输入行，只把树的上报交给
+ *   调用方。真正的动作（折算 chip、parkSearchSeed、开新搜索 tab、门控）在
+ *   EditorHost —— 由 editor-host.spec.tsx 钉住。
  */
 // @vitest-environment jsdom
 import { beforeAll, afterEach, describe, expect, it, vi } from 'vitest'
@@ -17,14 +17,11 @@ import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
 import { FileTree } from '../src/client/FileTree.tsx'
 import { TreePanel } from '../src/client/TreePanel.tsx'
-// Type-only: gives the mocked fsContentSearch fn the REAL api signature, so
-// `mock.calls` entries stay typed (the same trick the content-search spec uses).
-import type { api } from '../src/client/api.ts'
 
 import { setupReactAct } from './test-utils.ts'
 setupReactAct()
 
-// vitest 4.1.11+ follows the OS locale; pin en-US so menu and panel copy are English.
+// vitest 4.1.11+ follows the OS locale; pin en-US so menu copy is English.
 beforeAll(() => {
   Object.defineProperty(window.navigator, 'language', { value: 'en-US', configurable: true })
 })
@@ -41,18 +38,15 @@ const DEFAULT_ROOT: Entry[] = [
   { name: 'a.ts', path: '/tmp/a.ts', isDir: false },
 ]
 
-const { fsTrees, fsSearch, fsContentSearch } = vi.hoisted(() => ({
+const { fsTrees, fsContentSearch } = vi.hoisted(() => ({
   fsTrees: vi.fn(async (_scope: unknown, _paths: readonly string[]) => ({ levels: [] as unknown[] })),
-  fsSearch: vi.fn(async (): Promise<{ matches: string[]; dirs: string[]; truncated: boolean }> =>
-    ({ matches: [], dirs: [], truncated: false })),
-  fsContentSearch: vi.fn<typeof api.fsContentSearch>(async () =>
-    ({ matches: ['src/a.ts'], truncated: false })),
+  fsContentSearch: vi.fn(async () => ({ matches: [], truncated: false })),
 }))
 
 vi.mock('../src/client/api.ts', () => ({
   api: {
     fsTrees,
-    fsSearch,
+    // The migration lock: nothing in the tree may touch the content search.
     fsContentSearch,
     // The tree reads the shared git-status store; a non-repo answer keeps
     // every row plain.
@@ -121,16 +115,16 @@ interface TreeHarness {
 }
 
 async function mountTree(overrides: {
-  onAddToContentSearch?: (path: string, target: 'include' | 'exclude') => void
+  onAddToSearch?: (path: string, target: 'include' | 'exclude') => void
 } = {}): Promise<TreeHarness> {
   const container = document.createElement('div')
   document.body.append(container)
   const root: Root = createRoot(container)
   const onAdd = vi.fn()
-  // Property-presence semantics: an explicit `onAddToContentSearch: undefined`
+  // Property-presence semantics: an explicit `onAddToSearch: undefined`
   // must reach FileTree (the submenu hides) instead of falling back.
-  const wired = Object.prototype.hasOwnProperty.call(overrides, 'onAddToContentSearch')
-    ? overrides.onAddToContentSearch
+  const wired = Object.prototype.hasOwnProperty.call(overrides, 'onAddToSearch')
+    ? overrides.onAddToSearch
     : onAdd
   await act(async () => {
     root.render(createElement(FileTree, {
@@ -144,7 +138,7 @@ async function mountTree(overrides: {
       refreshTick: 0,
       onUploadRequest: () => {},
       busy: false,
-      onAddToContentSearch: wired,
+      onAddToSearch: wired,
     }))
     await Promise.resolve()
   })
@@ -155,7 +149,7 @@ async function mountTree(overrides: {
   }
 }
 
-describe('FileTree add-to-search submenu', () => {
+describe('FileTree add-to-search submenu（改名后的上报契约）', () => {
   let harness: TreeHarness
   afterEach(() => {
     harness.unmount()
@@ -196,14 +190,14 @@ describe('FileTree add-to-search submenu', () => {
   })
 
   it('hides the whole submenu when the caller wires no callback', async () => {
-    harness = await mountTree({ onAddToContentSearch: undefined })
+    harness = await mountTree({ onAddToSearch: undefined })
     openMenuOn(harness.container, 'a.ts')
     expect(menuItems().some(item => item.textContent?.includes('Add to Search'))).toBe(false)
     expect(menuItems().some(item => item.getAttribute('aria-haspopup') === 'menu')).toBe(false)
   })
 })
 
-// ── TreePanel: the callback lands the chip and touches nothing else ──────
+// ── TreePanel: single passthrough, no chip state of its own ──────────────
 
 interface PanelHarness {
   container: HTMLDivElement
@@ -232,54 +226,7 @@ function mountPanel(overrides: Partial<ComponentProps<typeof TreePanel>> = {}): 
   }
 }
 
-function toggleButton(container: HTMLElement): HTMLButtonElement {
-  return container.querySelector<HTMLButtonElement>('[data-dsh-content-search-toggle]')!
-}
-
-function panel(container: HTMLElement): HTMLElement | null {
-  return container.querySelector<HTMLElement>('[data-dsh-content-search-panel]')
-}
-
-/** Type into one of the panel's inputs (by placeholder) and fire the event. */
-async function type(container: HTMLElement, placeholder: string, value: string): Promise<void> {
-  const input = [...panel(container)!.querySelectorAll<HTMLInputElement>('input')]
-    .find(el => el.placeholder === placeholder)!
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
-  await act(async () => {
-    setter.call(input, value)
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-  })
-}
-
-function inputByPlaceholder(container: HTMLElement, prefix: string): HTMLInputElement {
-  const input = [...panel(container)!.querySelectorAll<HTMLInputElement>('input')]
-    .find(el => el.placeholder.startsWith(prefix))
-  if (input === undefined) throw new Error(`input not found: ${prefix}`)
-  return input
-}
-
-/** The include (0) / exclude (1) group of the expanded panel, in panel order. */
-function searchGroup(container: HTMLElement, index: 0 | 1): HTMLElement {
-  const groups = [...panel(container)!.querySelectorAll<HTMLElement>('div[class*="contentSearchGroup"]')]
-  if (groups[index] === undefined) throw new Error(`content search group ${index} not mounted`)
-  return groups[index]!
-}
-
-function chipTexts(group: HTMLElement): string[] {
-  return [...group.querySelectorAll<HTMLElement>('span[class*="contentChip"]')].map(chip => chip.textContent ?? '')
-}
-
-/** The results region body (the explorer body that is NOT the file tree). */
-function resultsBody(container: HTMLElement): HTMLElement {
-  const tree = [...container.querySelectorAll<HTMLElement>('div[class*="explorerBody"]')]
-    .find(el => el.querySelector('[class*="explorerName"]') !== null)
-  const body = [...container.querySelectorAll<HTMLElement>('div[class*="explorerBody"]')]
-    .find(el => el !== tree)
-  if (body === undefined) throw new Error('results body not mounted')
-  return body
-}
-
-describe('TreePanel add-to-content-search chips', () => {
+describe('TreePanel add-to-search 透传（无本地 chips）', () => {
   let harness: PanelHarness
   afterEach(() => {
     harness.unmount()
@@ -287,95 +234,33 @@ describe('TreePanel add-to-content-search chips', () => {
     document.body.removeAttribute('data-dsh-sidebar-submenu')
     fsTrees.mockReset()
     installListings(DEFAULT_ROOT)
-    fsSearch.mockReset()
-    fsSearch.mockImplementation(async () => ({ matches: [], dirs: [], truncated: false }))
-    fsContentSearch.mockReset()
-    fsContentSearch.mockImplementation(async () => ({ matches: ['src/a.ts'], truncated: false }))
   })
 
-  it('lands the cwd-relative chip, force-expands the section, and runs no search', async () => {
-    installListings(DEFAULT_ROOT)
-    harness = mountPanel()
+  it('forwards the tree report to onAddToSearch verbatim (absolute path + list)', async () => {
+    const onAddToSearch = vi.fn()
+    harness = mountPanel({ onAddToSearch })
     await act(async () => {})
-    // Collapsed by default — the menu add must itself expand the section.
-    expect(toggleButton(harness.container).getAttribute('aria-expanded')).toBe('false')
-    expect(panel(harness.container)).toBeNull()
-
     addToSearch(harness.container, 'a.ts', 'Add to Include')
-    expect(toggleButton(harness.container).getAttribute('aria-expanded')).toBe('true')
-    expect(panel(harness.container)).not.toBeNull()
-    // '/tmp/a.ts' projected against the cwd '/tmp' is the bare relative form
-    // the host resolves against the session cwd.
-    expect(chipTexts(searchGroup(harness.container, 0))).toEqual(['a.ts×'])
-    expect(chipTexts(searchGroup(harness.container, 1))).toEqual([])
-    // Adding a chip never STARTS a content search — it only feeds the lists.
+    expect(onAddToSearch).toHaveBeenCalledTimes(1)
+    expect(onAddToSearch).toHaveBeenCalledWith('/tmp/a.ts', 'include')
+    addToSearch(harness.container, 'sub', 'Add to Exclude')
+    expect(onAddToSearch).toHaveBeenCalledWith('/tmp/sub', 'exclude')
+    // The menu action never touches the content search (it belongs to the
+    //「搜索」page now; the redirect handler's opens are EditorHost's).
     expect(fsContentSearch).not.toHaveBeenCalled()
   })
 
-  it('passes a path outside the cwd through as an absolute chip', async () => {
-    installListings([...DEFAULT_ROOT, { name: 'notes.log', path: '/var/elsewhere/notes.log', isDir: false }])
-    harness = mountPanel()
+  it('renders no chip lists or content-search inputs of its own', async () => {
+    const onAddToSearch = vi.fn()
+    harness = mountPanel({ onAddToSearch })
     await act(async () => {})
-
-    addToSearch(harness.container, 'notes.log', 'Add to Exclude')
-    // relativeTo leaves the outside path unchanged: the host's resolveTarget
-    // accepts absolute entries, so the chip classifies identically.
-    expect(chipTexts(searchGroup(harness.container, 1))).toEqual(['/var/elsewhere/notes.log×'])
-    expect(chipTexts(searchGroup(harness.container, 0))).toEqual([])
-    expect(fsContentSearch).not.toHaveBeenCalled()
-  })
-
-  it('silently ignores a duplicate chip', async () => {
-    installListings(DEFAULT_ROOT)
-    harness = mountPanel()
-    await act(async () => {})
-
-    addToSearch(harness.container, 'a.ts', 'Add to Include')
-    addToSearch(harness.container, 'a.ts', 'Add to Include')
-    expect(chipTexts(searchGroup(harness.container, 0))).toEqual(['a.ts×'])
-    expect(panel(harness.container)!.querySelectorAll('span[class*="contentChip"]')).toHaveLength(1)
-  })
-
-  it('touches neither the committed queries nor the drafts', async () => {
-    installListings(DEFAULT_ROOT)
-    harness = mountPanel()
-    await act(async () => {})
-    addToSearch(harness.container, 'a.ts', 'Add to Include')
-
-    // Drafts (uncommitted — no Enter anywhere): keyword + include input.
-    await type(harness.container, 'Search in file contents (Enter to run)…', 'zz')
-    await type(harness.container, 'Include: dir, file or glob — Enter to add', 'draft-x')
-
-    addToSearch(harness.container, 'sub', 'Add to Include')
-    expect(inputByPlaceholder(harness.container, 'Search in file contents').value).toBe('zz')
-    expect(inputByPlaceholder(harness.container, 'Include:').value).toBe('draft-x')
-    // Both chips appended in order; still no content search ran.
-    expect(chipTexts(searchGroup(harness.container, 0))).toEqual(['a.ts×', 'sub×'])
-    expect(fsContentSearch).not.toHaveBeenCalled()
-  })
-
-  it('a live name search keeps owning the results when a chip lands', async () => {
-    fsSearch.mockResolvedValue({ matches: ['src/b.ts'], dirs: [], truncated: false })
-    installListings(DEFAULT_ROOT)
-    harness = mountPanel()
-    await act(async () => {})
-    // Run a NAME search (300ms debounce).
-    const nameInput = harness.container.querySelector<HTMLInputElement>('input[class*="editorSearchInput"]')!
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
-    await act(async () => {
-      setter.call(nameInput, 'b')
-      nameInput.dispatchEvent(new Event('input', { bubbles: true }))
-    })
-    await act(async () => { await new Promise<void>(resolve => { window.setTimeout(resolve, 350) }) })
-    expect(fsSearch).toHaveBeenCalledTimes(1)
-    expect(resultsBody(harness.container).textContent).toContain('src/b.ts')
-
-    addToSearch(harness.container, 'a.ts', 'Add to Include')
-    // The chip landed (and the section expanded), but the name search was
-    // neither cleared nor displaced by a content search.
-    expect(chipTexts(searchGroup(harness.container, 0))).toEqual(['a.ts×'])
-    expect(nameInput.value).toBe('b')
-    expect(resultsBody(harness.container).textContent).toContain('src/b.ts')
-    expect(fsContentSearch).not.toHaveBeenCalled()
+    // The panel's only input is the file-name search; the chip rows live on
+    // the search page exclusively.
+    const inputs = [...harness.container.querySelectorAll<HTMLInputElement>('input')]
+      .map(input => input.placeholder)
+    expect(inputs.some(placeholder => placeholder.startsWith('Search files'))).toBe(true)
+    expect(inputs.some(placeholder => placeholder.includes('Include'))).toBe(false)
+    expect(inputs.some(placeholder => placeholder.includes('Exclude'))).toBe(false)
+    expect(inputs.some(placeholder => placeholder.includes('file contents'))).toBe(false)
   })
 })
