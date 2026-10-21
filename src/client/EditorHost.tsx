@@ -40,6 +40,7 @@ import { updatePluginSettings, updateProjectSettings } from './plugin-settings.t
 import { PROJECT_SETTINGS_KEY } from '../prefs-shared.ts'
 import { createOpenInApp } from './open-in-app.ts'
 import { gitHistoryRequestMeta } from './changes/ChangesTab.tsx'
+import { parkSearchSeed } from './search-seed.ts'
 import { requestBottomTerminalAt, webTerminals } from './terminal-client.ts'
 import { TreePanel } from './TreePanel.tsx'
 import { t } from './locales.ts'
@@ -373,6 +374,37 @@ export function EditorHost(props: {
     return true
   }
 
+  /**
+   * The context menu's 「添加到搜索中」 redirect (the content search left the
+   * tree panel for its own「搜索」tab — docs/plans/2026-10-21
+   * -find-in-files-page.md §3.3): fold the right-clicked row into the chip
+   * shape the search page's inputs would mean (the cwd-relative form; a path
+   * OUTSIDE the root passes through `relativeTo` as an absolute value, the
+   * host classifies both spellings identically), park it as a one-shot seed
+   * and open a NEW search tab — the descriptor's createTab consumes the seed
+   * to prefill the minted tab's `meta.include`/`meta.exclude`. NO search runs
+   * (fill ≠ run — the history dropdown's contract), because the chip lists
+   * are scope settings, not queries.
+   *
+   * The chip is projected against the cwd THIS panel's tree shows (a folder
+   * window is rooted at the folder) — the same projection the old in-panel
+   * handler did. Answers whether the open was attempted: a host without the
+   * service, or with the search page disabled in the side card settings,
+   * opens nothing and the tree reports nothing (the submenu is hidden anyway
+   * — the gate mirrors the caller's offer check).
+   */
+  const addToSearch = (absolute: string, target: 'include' | 'exclude'): boolean => {
+    if (service === undefined) return false
+    if (!service.isTabEnabled('search')) return false
+    const root = folderRoot ?? scope.cwd
+    if (root === undefined) return false
+    parkSearchSeed({ target, chip: relativeTo(root, absolute) })
+    // Every add mints a FRESH search tab (createTab kind, no dedupe) — even
+    // with another search page already open.
+    service.openTab({ type: 'search' }, scope)
+    return true
+  }
+
   /** The context menu's "open with" action: reveal the path in the OS file
    *  manager, or hand the target's URL to its opener — local `file` URLs go
    *  to the host's external opener, while the SSH-remote form for
@@ -701,6 +733,7 @@ export function EditorHost(props: {
           onPathRenamed={onPathRenamed}
           onPathMoved={onPathMoved}
           onPathDeleted={onPathDeleted}
+          onAddToSearch={addToSearch}
           exclude={exclude}
           service={ctx.get('betterSidebar')}
         />
@@ -842,6 +875,7 @@ export function EditorHost(props: {
               onPathRenamed={onPathRenamed}
               onPathMoved={onPathMoved}
               onPathDeleted={onPathDeleted}
+              onAddToSearch={addToSearch}
               exclude={exclude}
               service={ctx.get('betterSidebar')}
             />

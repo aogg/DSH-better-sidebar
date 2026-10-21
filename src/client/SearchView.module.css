@@ -1,0 +1,456 @@
+/* 「搜索」页（SearchView.tsx）：窄边栏里的 Find in Files——工具栏（查询框 +
+ * 三开关 + 历史下拉 + include/exclude chips）在上，结果区（文件头行 + 合并
+ * 块：命中行高亮、上下文行灰、行号列右对齐）在下。所有颜色/字体一律消费
+ * DSW 令牌（回退链指向旧 alias 令牌），零颜色字面量（tests/theme.spec.ts
+ * 双向钉死）。 */
+
+.view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── 工具栏 ──────────────────────────────────────────────────────────── */
+
+.toolbar {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1, var(--dsw-alias-hairline));
+}
+
+.queryRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.queryInput {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--dsw-alias-border-l1, var(--dsw-alias-hairline));
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base));
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxs-12);
+}
+
+.queryInput:focus {
+  outline: none;
+  border-color: var(--dsw-alias-border-l2, var(--dsw-alias-hairline));
+}
+
+.queryInput:disabled {
+  opacity: 0.6;
+}
+
+/* 正则预校验失败：标红边框 + 行内提示（.hintBad），不发请求。 */
+.queryInputBad {
+  border-color: var(--dsw-alias-danger, var(--dsw-alias-state-error-primary, var(--dsw-alias-hairline)));
+}
+
+.iconButton {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+.iconButton:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.iconButton:disabled {
+  opacity: 0.5;
+  cursor: default;
+  background: transparent;
+}
+
+.iconButtonOn {
+  color: var(--dsw-alias-accent, var(--dsw-alias-label-primary));
+}
+
+/* 三开关（Aa / W / .*）：PhpStorm 同款文本开关，切换态描边 + 强调色。 */
+.mode {
+  flex: none;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid var(--dsw-alias-border-l1, var(--dsw-alias-hairline));
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  cursor: pointer;
+}
+
+.mode:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.mode:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.modeOn {
+  color: var(--dsw-alias-accent, var(--dsw-alias-brand-primary, var(--dsw-alias-label-primary)));
+  border-color: var(--dsw-alias-accent, var(--dsw-alias-hairline));
+}
+
+/* ── 历史下拉 ────────────────────────────────────────────────────────── */
+
+.historyWrap {
+  position: relative;
+  flex: none;
+}
+
+.historyPanel {
+  position: absolute;
+  top: 26px;
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  max-width: 300px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--dsw-alias-border-l2, var(--dsw-alias-hairline));
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base)));
+  box-shadow: var(--dsw-shadow-lv2);
+}
+
+.historyItem {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px 3px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.historyItemOn {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.historyQuery {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.historyBadge {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base));
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxxs-11);
+  white-space: nowrap;
+}
+
+.historyDelete {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxs-12);
+  line-height: 16px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.historyDelete:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.historyEmpty {
+  padding: 8px 6px;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxs-12);
+  text-align: center;
+}
+
+/* ── include / exclude chips（旧面板 chips 的形制，搬进本模块） ───────── */
+
+.chipGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.chipInput {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--dsw-alias-border-l1, var(--dsw-alias-hairline));
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base));
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxs-12);
+}
+
+.chipInput:focus {
+  outline: none;
+  border-color: var(--dsw-alias-border-l2, var(--dsw-alias-hairline));
+}
+
+.chipInput:disabled {
+  opacity: 0.6;
+}
+
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  padding: 1px 4px 1px 8px;
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base)));
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  overflow: hidden;
+}
+
+.chipRemove {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxs-12);
+  line-height: 14px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.chipRemove:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.hintBad {
+  color: var(--dsw-alias-danger, var(--dsw-alias-state-error-primary, var(--dsw-alias-label-secondary)));
+  font: var(--dsw-font-xxs-12);
+}
+
+/* ── 结果区 ──────────────────────────────────────────────────────────── */
+
+.empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxs-12);
+  text-align: center;
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 6px 12px;
+  outline: none;
+}
+
+.body:focus-visible {
+  outline: 1px solid var(--dsw-alias-accent, var(--dsw-alias-hairline));
+  outline-offset: -1px;
+}
+
+.statusLine {
+  padding: 6px 4px;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxs-12);
+}
+
+.errorLine {
+  padding: 6px 4px;
+  color: var(--dsw-alias-danger, var(--dsw-alias-state-error-primary, var(--dsw-alias-label-secondary)));
+  font: var(--dsw-font-xxs-12);
+}
+
+.summary {
+  padding: 4px;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.fileBlock {
+  margin-top: 4px;
+}
+
+.fileHead {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 3px 4px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxs-12);
+  text-align: left;
+  cursor: pointer;
+}
+
+.fileHead:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.fileCaret {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.fileIcon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+.filePath {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--dsw-font-mono);
+}
+
+.fileCount {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxxs-11);
+  white-space: nowrap;
+}
+
+.fileTruncated {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base)));
+  color: var(--dsw-alias-state-warn-primary, var(--dsw-alias-label-secondary));
+  font: var(--dsw-font-xxxs-11);
+  white-space: nowrap;
+}
+
+.block {
+  padding: 2px 0 2px 12px;
+}
+
+.blockSelected {
+  background: var(--dsw-alias-interactive-bg-hover);
+  box-shadow: inset 2px 0 0 var(--dsw-alias-accent, var(--dsw-alias-hairline));
+}
+
+.line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+.lineHit {
+  color: var(--dsw-alias-label-primary);
+}
+
+.lineCtx {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.lineNo {
+  flex: none;
+  min-width: 30px;
+  text-align: right;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxxs-11);
+  font-family: var(--dsw-font-mono);
+  user-select: none;
+}
+
+.lineText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+  font: var(--dsw-font-xxs-12);
+  font-family: var(--dsw-font-mono);
+}
+
+.mark {
+  background: var(--dsw-alias-interactive-bg-active);
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+  border-radius: 2px;
+}
+
+/* 块尾「查看」：悬停命中行显形（键盘聚焦同样显形）。 */
+.viewButton {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--dsw-alias-hairline);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  white-space: nowrap;
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.line:hover .viewButton,
+.viewButton:focus-visible {
+  visibility: visible;
+}
+
+.viewButton:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}

@@ -23,11 +23,12 @@ import {
   VscGlobe,
   VscHistory,
   VscLayers,
+  VscSearch,
   VscSettingsGear,
   VscTerminal,
 } from 'react-icons/vsc'
 /** The styled wrapper classes; typed so a renamed rule fails the build. */
-const css = styles as Record<'files' | 'changes' | 'tasks' | 'sidechat' | 'terminal' | 'browser' | 'settings' | 'history', string>
+const css = styles as Record<'files' | 'changes' | 'tasks' | 'sidechat' | 'terminal' | 'browser' | 'settings' | 'history' | 'search', string>
 
 /** One tab type's glyph, sized by the caller's surface (14px in a strip). */
 export type TabIcon = (size: number) => ReactNode
@@ -82,3 +83,10 @@ export const settingsTabIcon: TabIcon = (size) =>
  */
 export const historyTabIcon: TabIcon = (size) =>
   themed(css.history, <VscHistory size={size} />)
+
+/**
+ * Search (Find in Files) — primary ink, a tool that reads text: the same
+ * family as the terminal and settings chips, not a live activity color.
+ */
+export const searchTabIcon: TabIcon = (size) =>
+  themed(css.search, <VscSearch size={size} />)

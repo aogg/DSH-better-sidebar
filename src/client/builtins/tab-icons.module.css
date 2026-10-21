@@ -48,3 +48,9 @@
      brand accent, like the changes chip's lens. */
   color: var(--dsw-alias-accent, var(--dsw-alias-brand-primary, var(--dsw-alias-label-primary)));
 }
+
+.search {
+  /* The Find-in-Files chip is a tool that reads text: ink, like the terminal
+     and settings chips. */
+  color: var(--dsw-alias-label-primary);
+}

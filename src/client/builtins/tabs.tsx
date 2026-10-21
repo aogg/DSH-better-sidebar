@@ -25,10 +25,12 @@
  */
 import { IconCodeOutlineRegular, IconPanelLeftOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
-  changesTabIcon, filesTabIcon, historyTabIcon, settingsTabIcon, sidechatTabIcon, tasksTabIcon, terminalTabIcon,
+  changesTabIcon, filesTabIcon, historyTabIcon, searchTabIcon, settingsTabIcon, sidechatTabIcon, tasksTabIcon, terminalTabIcon,
 } from './tab-icons.tsx'
 import { t } from '../locales.ts'
 import { openSidebarFile } from '../sidebar-file.ts'
+import { consumeSearchSeed } from '../search-seed.ts'
+import { SearchView } from '../SearchView.tsx'
 import { EditorHost } from '../EditorHost.tsx'
 import { OpenWithSettings } from '../open-with-settings.tsx'
 import { CommitModelSettings } from '../changes/CommitModelSettings.tsx'
@@ -45,7 +47,7 @@ import { api } from '../api.ts'
 import type { Context } from '../../context-types.ts'
 import type { TabDescriptor } from '../service.ts'
 
-/** The 7 built-in tab descriptors (the host owns the right-Sidebar terminal and browser). */
+/** The 9 built-in tab descriptors (the host owns the right-Sidebar terminal and browser). */
 export function builtinTabs(ctx: Context): readonly TabDescriptor[] {
   return [
     {
@@ -124,6 +126,49 @@ export function builtinTabs(ctx: Context): readonly TabDescriptor[] {
           onToggleDir={onToggleDir ?? (() => { /* no-op */ })}
           onReferenceFile={onReferenceFile ?? (() => { /* no-op */ })}
         />
+      ),
+    },
+    {
+      // 「搜索」(Find in Files): the PhpStorm-style CONTENT search as its own
+      // page — the tree panel's folded content-search section moved here
+      // wholesale and grew line-level results (docs/plans/2026-10-21
+      // -find-in-files-page.md). Slotted between the files window (10) and
+      // the changes tab (20).
+      //
+      // Multiple instances on purpose: every open MINTS a fresh
+      // `search:<uuid>` tab (no dedupeKey/single — the service never dedupes
+      // a createTab kind without one), so pills, the + menu and the tree's
+      // 「添加到搜索中」 redirect each land their own page. The one-shot seed
+      // (search-seed.ts — a createTab kind never sees the open's seed meta)
+      // prefills the minted tab's include/exclude chips; everything else
+      // starts at the defaults (= the v1 case-insensitive literal match).
+      // State rides `tab.meta` (query/toggles/chips persist with the layout;
+      // results re-run on mount — see SearchView).
+      id: 'search',
+      title: () => t('search'),
+      description: () => t('guideDescSearch'),
+      icon: searchTabIcon,
+      order: 15,
+      createTab: () => {
+        const seed = consumeSearchSeed()
+        return {
+          tab: {
+            id: `search:${crypto.randomUUID()}`,
+            type: 'search',
+            title: t('search'),
+            meta: {
+              query: '',
+              caseSensitive: false,
+              wholeWord: false,
+              regex: false,
+              include: seed?.target === 'include' ? [seed.chip] : [],
+              exclude: seed?.target === 'exclude' ? [seed.chip] : [],
+            },
+          },
+        }
+      },
+      component: ({ ctx, store, scope, tab, visible }) => (
+        <SearchView ctx={ctx} store={store} scope={scope} tab={tab} visible={visible} />
       ),
     },
     {

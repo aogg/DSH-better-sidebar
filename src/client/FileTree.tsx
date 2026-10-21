@@ -46,9 +46,10 @@
  * top of that level; the two creators are mutually exclusive); every row can
  * copy the relative or absolute path (with a brief
  * "copied" label replacing the button after a successful write), and every
- * row offers「添加到搜索中」— a submenu feeding the content-search
- * include/exclude chips with this row's path (when the caller provides
- * `onAddToContentSearch`). Every row but the workspace root also gets
+ * row offers「添加到搜索中」— a submenu reporting this row to the caller
+ * (when it provides `onAddToSearch`): the row lands as a prefilled chip on a
+ * NEW search tab (the content search's own page; fill ≠ run). Every row but
+ * the workspace root also gets
  * 「查看 Git 历史」— the changes tab's git lens, handed the row's path as its
  * history filter (a directory pathspec covers its whole subtree).
  *
@@ -736,12 +737,14 @@ export function FileTree(props: {
   /** Insert `@<relative path>` into the composer draft (file vs directory). */
   onReferenceFile: (path: string, isDir: boolean) => void
   /**
-   * Context-menu 「添加到搜索中」: the caller (TreePanel) owns the content-search
-   * chip lists — this tree only reports the right-clicked row's ABSOLUTE path
-   * plus which list the user picked (`include` / `exclude`). Absent → the
-   * whole submenu is not offered (the same contract as the open escapes).
+   * Context-menu 「添加到搜索中」: this tree only REPORTS the right-clicked
+   * row's ABSOLUTE path plus which list the user picked (`include` /
+   * `exclude`); the caller (EditorHost, via TreePanel) parks it as a one-shot
+   * search-page seed and opens a NEW search tab with the chip prefilled.
+   * Absent → the whole submenu is not offered (the same contract as the open
+   * escapes).
    */
-  onAddToContentSearch?: (path: string, target: 'include' | 'exclude') => void
+  onAddToSearch?: (path: string, target: 'include' | 'exclude') => void
   /** The explorerExclude pref patterns: the HOST filters the listing with
    *  them (excluded rows never arrive), so changing the list wipes the level
    *  cache and reloads — the rows themselves need no client-side filter. */
@@ -810,7 +813,7 @@ export function FileTree(props: {
   const {
     sessionId, cwd, expanded, revealed, onOpenFileNewTab, onOpenFileSide, onOpenTerminalAt, onOpenGitHistory,
     openInApp, openWithTargets, openWithPinned, openWithSsh, onOpenWith, onToggleOpenWithPin,
-    openWithShowPluginTargets, exclude, onAddToContentSearch,
+    openWithShowPluginTargets, exclude, onAddToSearch,
     onPathRenamed, onPathDeleted, refreshTick, onUploadRequest, busy, hidden, visible, service,
   } = props
   const sort = props.sort ?? DEFAULT_FILE_TREE_SORT
@@ -2117,16 +2120,18 @@ export function FileTree(props: {
   }
 
   /**
-   * The「添加到搜索中」submenu: feed the content-search section's
-   * include/exclude chip lists with the right-clicked row. The tree only
-   * REPORTS the row (absolute path + which list); TreePanel owns the chip
-   * lists and derives the chip shape — see TreePanel's addToContentSearch.
-   * The parent row copies the open-with submenu's label contract verbatim:
-   * the primitives Menu draws no chevron for submenu parents, so the
-   * trailing arrow rides inside the label (full-width flex row, right
-   * aligned). Rows: files AND directories alike (a directory names a
-   * subtree scope, a file names itself); the breadcrumb/compact rows and
-   * the workspace root reuse the same builder, which is expected.
+   * The「添加到搜索中」submenu: report the right-clicked row to the caller,
+   * which redirects it to the「搜索」tab (the content search's own page) as a
+   * prefilled include/exclude chip — a NEW tab each time, and NO search runs
+   * (fill ≠ run, the same contract as the history dropdown). The tree only
+   * reports the row (absolute path + which list); the chip shape is derived
+   * by the caller (EditorHost's addToSearch). The parent row copies the
+   * open-with submenu's label contract verbatim: the primitives Menu draws
+   * no chevron for submenu parents, so the trailing arrow rides inside the
+   * label (full-width flex row, right aligned). Rows: files AND directories
+   * alike (a directory names a subtree scope, a file names itself); the
+   * breadcrumb/compact rows and the workspace root reuse the same builder,
+   * which is expected.
    */
   const addToSearchSubmenu = (): MenuItem => ({
     id: 'add-to-search',
@@ -2877,10 +2882,10 @@ export function FileTree(props: {
             : []),
           // 5: ZIP of the current selection (≥2 rows, or one lone directory).
           ...(rowMenu === null ? [] : zipEntries(rowMenu)),
-          // 5.5:「添加到搜索中」— feed the content-search include/exclude
-          // chips with this row (every row kind; the caller decides whether
-          // the submenu is offered at all).
-          ...(rowMenu !== null && onAddToContentSearch !== undefined ? [addToSearchSubmenu()] : []),
+          // 5.5:「添加到搜索中」— report this row to the caller's search-page
+          // redirect (every row kind; the caller decides whether the submenu
+          // is offered at all).
+          ...(rowMenu !== null && onAddToSearch !== undefined ? [addToSearchSubmenu()] : []),
           // 5.6: the Windows clipboard trio. 复制/剪切 take the WHOLE current
           // selection (a right-click outside it already collapsed onto the
           // row) — never on the workspace root row, the root itself is not a
@@ -2981,9 +2986,10 @@ export function FileTree(props: {
             return
           }
           // 「添加到搜索中」submenu: hand the row + the picked list to the
-          // caller (TreePanel owns the chips; the id suffix IS the list).
+          // caller (the id suffix IS the list; the caller parks the search
+          // seed and opens a new「搜索」tab).
           if (id.startsWith('add-to-search:')) {
-            onAddToContentSearch?.(target.path, id === 'add-to-search:include' ? 'include' : 'exclude')
+            onAddToSearch?.(target.path, id === 'add-to-search:include' ? 'include' : 'exclude')
             return
           }
           if (id === 'download') {

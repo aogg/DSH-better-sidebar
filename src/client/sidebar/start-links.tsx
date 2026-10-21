@@ -32,7 +32,7 @@ import { useCallback, useEffect, useState, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { IconCloseFillRegular, IconSettingsOutlineRegular, ShortcutKeys } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Context } from '../../context-types.ts'
-import { changesTabIcon, filesTabIcon, historyTabIcon, sidechatTabIcon, tasksTabIcon, terminalTabIcon } from '../builtins/tab-icons.tsx'
+import { changesTabIcon, filesTabIcon, historyTabIcon, searchTabIcon, sidechatTabIcon, tasksTabIcon, terminalTabIcon } from '../builtins/tab-icons.tsx'
 import { mountedSessionId } from '../native/surface.ts'
 import { t } from '../locales.ts'
 import type { SidebarStore } from '../state.ts'
@@ -43,7 +43,7 @@ import css from './start-links.module.css'
 
 /** 一个入口的展示与动作（kind 也写进 data-dsh-start-link 供测试/样式锚定）。 */
 interface StartLink {
-  kind: 'files' | 'changes' | 'terminal' | 'jobs' | 'sidechat' | 'history' | 'settings'
+  kind: 'files' | 'changes' | 'search' | 'terminal' | 'jobs' | 'sidechat' | 'history' | 'settings'
   label: () => string
   icon: (size: number) => React.ReactNode
   /** 终端按钮的快捷键提示（宿主 catalog 的 unboxed 键帽；探测不到给静态回退）。 */
@@ -93,6 +93,12 @@ export function openStartLink(kind: StartLink['kind'], ctx: Context, service: Be
       return
     case 'changes':
       service.openTab({ type: 'git' })
+      return
+    case 'search':
+      // 「搜索」(Find in Files)：每次点击铸一个新搜索 tab（search 描述符是
+      // createTab 多实例语义，与文件页胶囊同一形态）；无活动会话时 openTab
+      // 内部静默返回，点击不抛错。
+      service.openTab({ type: 'search' })
       return
     case 'jobs':
       service.openTab({ type: 'subagent' })
@@ -178,6 +184,7 @@ export function StartLinks(props: { ctx: Context; service: BetterSidebarService;
   const links: StartLink[] = [
     { kind: 'files', label: () => t('files'), icon: filesTabIcon },
     { kind: 'changes', label: () => t('changes'), icon: changesTabIcon },
+    { kind: 'search', label: () => t('search'), icon: searchTabIcon },
     {
       kind: 'terminal',
       label: () => t('startNewTerminal'),
