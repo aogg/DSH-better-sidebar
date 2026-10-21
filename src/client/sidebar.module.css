@@ -1922,8 +1922,11 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
    strip. The row (not the inner editor) is editorMain's flex child, and it
    carries the preview hidden class (display:none) so the remaining preview
    surfaces keep owning the whole pane. `container-type` makes the row the
-   query container for the strip's narrow-pane hide rule below. */
-.editorCmRow {
+   query container for the strip's narrow-pane hide rule below. (Named
+   editorPaneRow — NOT editorCm*: existing specs locate the CodeMirror host
+   itself with [class*="editorCm"], which must keep matching exactly one
+   element.) */
+.editorPaneRow {
   flex: 1;
   min-width: 0;
   min-height: 0;

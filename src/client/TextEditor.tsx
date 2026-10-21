@@ -909,7 +909,7 @@ export function TextEditor(props: FileViewerProps) {
               class: a display:none row (not just the inner editor) keeps
               editorMain's remaining flex children (the markdown/html/jsonl
               preview) owning the whole pane. */}
-          <div className={clsx(css.editorCmRow, showingPreview && css.editorCmHidden)}>
+          <div className={clsx(css.editorPaneRow, showingPreview && css.editorCmHidden)}>
             <div className={css.editorCm} ref={hostRef} />
             {minimapVisible && (
               <EditorMinimap viewRef={viewRef} dark={dark} syncRef={minimapSyncRef} />

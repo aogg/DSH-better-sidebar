@@ -145,7 +145,7 @@ describe('minimap layout math (pure functions)', () => {
     // would silently paint nothing — same reasoning as the gutter's check.
     const sheet = readFileSync(resolve(import.meta.dirname, '../src/client/sidebar.module.css'), 'utf8')
     for (const source of [
-      'editorCmRow',
+      'editorPaneRow',
       'editorMinimap',
       'editorMinimapCanvas',
       'editorMinimapBand',
