@@ -34,7 +34,9 @@ function seedStorage(entries: unknown[]): void {
 
 describe('search-history storage contract', () => {
   beforeEach(() => {
-    window.localStorage.clear()
+    // A VALID empty list (not clear()): reads must come from storage so the
+    // module's in-memory fallback never leaks state between tests.
+    window.localStorage.setItem(SEARCH_HISTORY_KEY, '[]')
   })
 
   afterEach(() => {
@@ -133,13 +135,16 @@ describe('search-history storage contract', () => {
     const bomb = (): never => { throw new Error('storage blocked') }
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(bomb)
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(bomb)
-    // Reads survive; writes still land in memory and come back.
-    expect(readSearchHistory()).toEqual([])
+    // Reads survive; writes land in memory and come back newest-first (the
+    // assertions are RELATIVE to whatever the fallback carried in — the
+    // degrade contract does not depend on the module's history).
+    const before = readSearchHistory().map(item => item.query)
     const recorded = upsertSearchHistory({ query: 'offline', include: [], exclude: [] })
-    expect(recorded.map(item => item.query)).toEqual(['offline'])
-    expect(readSearchHistory().map(item => item.query)).toEqual(['offline'])
+    expect(recorded).toHaveLength(before.length + 1)
+    expect(recorded[0]!.query).toBe('offline')
+    expect(readSearchHistory().map(item => item.query)).toEqual(['offline', ...before])
     upsertSearchHistory({ query: 'offline two', include: [], exclude: [] })
-    expect(readSearchHistory().map(item => item.query)).toEqual(['offline two', 'offline'])
+    expect(readSearchHistory().map(item => item.query)).toEqual(['offline two', 'offline', ...before])
   })
 
   it('writes notify subscribers with a synthetic storage event; real events ride the same channel', () => {

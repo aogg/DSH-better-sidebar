@@ -63,13 +63,15 @@ describe('buildSearchBlocks merge boundaries', () => {
 
   it('a hit whose window merely TOUCHES the block (gap of one line) still merges', () => {
     // Block after hit 10 is [8..12]; hit 15's window starts at 13 — one
-    // untouched line (13 is `blockEnd + 1`): 15 − 12 = 3 ≤ 3 → merged.
+    // untouched line (13 is `blockEnd + 1`): 15 − 12 = 3 ≤ 3 → merged. The
+    // rendered rows only exist where the host supplied text (the after pair
+    // of hit 10 and the before/after pairs of hit 15).
     const blocks = buildSearchBlocks([
       hitOf(10, 0, 6, 'answer', [], ['a', 'b']), // after supplies rows 11, 12
-      hitOf(15, 0, 6, 'answer', ['c', 'd'], ['e', 'f']), // before supplies 13, 14
+      hitOf(15, 0, 6, 'answer', ['c', 'd'], ['e', 'f']), // before 13, 14; after 16, 17
     ])
     expect(blocks).toHaveLength(1)
-    expect(blocks[0]!.lines.map(row => row.line)).toEqual([8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
+    expect(blocks[0]!.lines.map(row => row.line)).toEqual([10, 11, 12, 13, 14, 15, 16, 17])
   })
 
   it('a gap of two or more untouched lines starts a NEW block', () => {
@@ -77,8 +79,9 @@ describe('buildSearchBlocks merge boundaries', () => {
     const blocks = buildSearchBlocks([hitOf(10), hitOf(16)])
     expect(blocks).toHaveLength(2)
     expect(blocks[0]).toMatchObject({ startLine: 8, endLine: 12, firstHitLine: 10 })
+    expect(blocks[0]!.lines.map(row => row.line)).toEqual([10])
     expect(blocks[1]).toMatchObject({ startLine: 14, endLine: 18, firstHitLine: 16 })
-    expect(blocks[1]!.lines.map(row => row.line)).toEqual([14, 15, 16, 17, 18])
+    expect(blocks[1]!.lines.map(row => row.line)).toEqual([16])
   })
 
   it('two hits on ONE line stay one block with two spans on the same row', () => {
@@ -101,8 +104,8 @@ describe('buildSearchBlocks merge boundaries', () => {
       hitOf(11, 0, 6, 'answer'),
     ])
     expect(blocks[0]!.firstHitLine).toBe(10)
-    expect(blocks[0]!.lines[0]!.line).toBe(8 + 0) // context row exists…
-    expect(blocks[0]!.lines[0]!.hits).toEqual([]) // …but carries no span
+    expect(blocks[0]!.lines[0]!.line).toBe(9) // the ONE provided context row…
+    expect(blocks[0]!.lines[0]!.hits).toEqual([]) // …carries no span
   })
 
   it('file-edge context shortens: missing neighbors never invent line numbers', () => {
@@ -144,9 +147,10 @@ describe('segmentsOfLine', () => {
   })
 
   it('drops out-of-range and overlapping spans (the first span wins an overlap)', () => {
-    // Span past the end and a negative column are noise, not crashes.
+    // A span past the end and a negative column are noise, not crashes: both
+    // dropped, so the line renders PLAIN.
     expect(segmentsOfLine('answer', [{ column: 0, length: 99 }, { column: -1, length: 2 }])).toEqual([
-      { text: 'answer', hit: true },
+      { text: 'answer', hit: false },
     ])
     // 0..4 covers 2..6 entirely: the later span is swallowed.
     expect(segmentsOfLine('answer', [{ column: 0, length: 4 }, { column: 2, length: 4 }])).toEqual([
