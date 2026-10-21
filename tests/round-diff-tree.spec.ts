@@ -45,9 +45,8 @@ describe('buildRoundDiffTree', () => {
     expect(src.children.map(child => child.name)).toEqual(['alpha.ts', 'Beta.ts'])
     // The leaves keep the patch's own spelling and status letter.
     expect(asFile(src.children[0]!)).toMatchObject({ kind: 'file', path: 'src/alpha.ts', status: 'M' })
-    expect(asFile(tree[0]!.children[0]!)).toMatchObject({ kind: 'file', path: 'docs/guide.md', status: 'A' })
+    expect(asFile(asDir(tree[0]!).children[0]!)).toMatchObject({ kind: 'file', path: 'docs/guide.md', status: 'A' })
   })
-
   it('compresses a single-child chain into one a/b/c row that carries the leaf count', () => {
     const tree = buildRoundDiffTree([file('a/b/c/deep.ts')])
     expect(tree).toHaveLength(1)
