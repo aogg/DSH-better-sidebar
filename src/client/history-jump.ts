@@ -84,9 +84,13 @@ export function findHistoryRecordRow(needle: string, doc: Document): HTMLElement
   const scrollport = doc.querySelector('[data-conversation-scroll]')
   const root = scrollport ?? doc.body
   if (root === null) return undefined
-  // 本插件自己的历史列表（data-dsh-history-view 子树）里也有同样的文本，
-  // 整段排除——定位只面向主视图。
-  const inSidebar = (element: Element): boolean => element.closest('[data-dsh-history-view]') !== null
+  // 本插件自己的历史列表（data-dsh-history-view 子树）里也有同样的文本——
+  // 子树内整段排除；子树的祖先（容器/body/html）textContent 同样含这份文本，
+  // 一并排除（contains 判定），定位只面向主视图。
+  const viewRoot = doc.querySelector('[data-dsh-history-view]')
+  const inSidebar = (element: Element): boolean =>
+    element.closest('[data-dsh-history-view]') !== null ||
+    (viewRoot !== null && element !== viewRoot && element.contains(viewRoot))
   const flowRows = root.querySelectorAll<HTMLElement>('[data-chat-flow-key]')
   if (flowRows.length > 0) {
     const users: HTMLElement[] = []

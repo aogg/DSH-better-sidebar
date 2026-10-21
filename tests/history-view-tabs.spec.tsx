@@ -137,6 +137,16 @@ async function waitForText(text: string): Promise<void> {
   expect(document.body.textContent).toContain(text)
 }
 
+/** 轮询等某条记录的跳转按钮上屏（主视图注入行可能与记录同文，不能拿文本等）。 */
+async function waitForJump(key: string): Promise<HTMLButtonElement> {
+  for (let step = 0; step < 60; step++) {
+    const node = document.querySelector<HTMLButtonElement>(`[data-dsh-history-jump="${key}"]`)
+    if (node !== null) return node
+    await sleep(50)
+  }
+  return jumpButton(key)
+}
+
 describe('history view 顶 tab（当前会话 / 总发送历史）', () => {
   it('默认激活「当前会话」：payload scope=session + limit 50，只显示当前会话记录', async () => {
     mockHistoryListByScope()
@@ -175,7 +185,7 @@ describe('history view 顶 tab（当前会话 / 总发送历史）', () => {
     act(() => {
       pushState.handlers.at(-1)?.({ kind: 'history', sessionId: 's2', records: [rec('s2', 0, 1, 's2 实时的一问')] })
     })
-    await flush()
+    await sleep(150)
     expect(document.body.textContent).not.toContain('s2 实时的一问')
     // 当前会话的帧照常并入（渐进队列 ~40ms/条）。
     act(() => {
@@ -211,7 +221,7 @@ describe('history view 记录跳转', () => {
     ;(scrollport as unknown as { scrollTo: unknown }).scrollTo = scrollTo
 
     const { face, view } = mountView({ jumpLocateOptions: { timeoutMs: 500, highlightMs: 40 } })
-    await waitForText('cur 的第一条提问')
+    await waitForJump('cur:0')
     click(jumpButton('cur:0'))
     // 立即定位路径：命中后滚动 + 高亮标记（等待渲染/定位的定时器步进）。
     for (let step = 0; step < 20 && scrollTo.mock.calls.length === 0; step++) {
@@ -231,7 +241,7 @@ describe('history view 记录跳转', () => {
     mockHistoryListByScope()
     const { face, view } = mountView({ jumpLocateOptions: { timeoutMs: 150, highlightMs: 20 } })
     click(tabButton('All Sends'))
-    await waitForText('s2 要跳转的一条')
+    await waitForJump('s2:5')
     click(jumpButton('s2:5'))
     expect(face.openSession).toHaveBeenCalledWith('s2')
     // 主视图里没有那条消息（也没造 DOM）：等定位超时 → 降级说明上 title。
@@ -247,7 +257,7 @@ describe('history view 记录跳转', () => {
     mockHistoryListByScope()
     const { view } = mountView({ uiWorkspace: 'absent', jumpLocateOptions: { timeoutMs: 150, highlightMs: 20 } })
     click(tabButton('All Sends'))
-    await waitForText('s2 要跳转的一条')
+    await waitForJump('s2:5')
     expect(() => { click(jumpButton('s2:5')) }).not.toThrow()
     await sleep(250)
     expect(jumpButton('s2:5').title).toContain('Jump to this prompt')
