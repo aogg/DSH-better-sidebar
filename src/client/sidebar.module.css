@@ -950,6 +950,10 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
 .explorerGitMark[data-mark='copied'] { background: #8250df; }
 .explorerGitMark[data-mark='conflict'] { background: #bf8700; }
 .explorerGitMark[data-mark='untracked'] { background: #6e40c9; }
+/* Ignored (a .gitignore path outside the repository's management): neutral
+   gray — neither a change color nor clean's green, which would lie about a
+   `node_modules` that .gitignore excludes. */
+.explorerGitMark[data-mark='ignored'] { background: #6e7781; }
 
 /* A "Show in folder" reveal highlight: the target row stays tinted until
    the transient reveal set is cleared (a reload starts unhighlighted).

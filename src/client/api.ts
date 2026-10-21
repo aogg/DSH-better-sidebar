@@ -122,6 +122,18 @@ export interface GitStatusResult {
   /** True when the host capped `entries` (huge untracked set); the panel
    *  shows a truncation notice instead of freezing (#369). */
   truncated?: boolean
+  /**
+   * The paths git IGNORES (repo-root-relative; an ignored directory arrives
+   * collapsed as `dir/`). Feeds the file tree's gray ⊘ ignored overlay —
+   * these paths are outside the repository's management, so they may wear
+   * neither a change badge nor the green ✓. Empty when nothing is ignored
+   * (or the ignore read failed; the status answer never fails because of it).
+   */
+  ignored?: string[]
+  /** True when the host capped `ignored`: paths beyond the cap may still be
+   *  ignored, so the green ✓ (which answers from completeness) must not be
+   *  painted while this flag stands. */
+  ignoredTruncated?: boolean
   root?: string
   repositories?: string[]
 }

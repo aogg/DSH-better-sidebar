@@ -185,13 +185,15 @@ function badgeToneOf(tone: GitTone): StatusTone {
 }
 
 /**
- * The TortoiseGit-style badge vocabulary a row can carry: a git tone, or the
- * special `'clean'` (tracked AND unchanged — the signature green ✓). A
- * primitive string on purpose: it crosses into the memoized rows as a prop,
- * and `React.memo` compares primitives by value, so a status poll that
- * changed nothing re-renders no row at all.
+ * The TortoiseGit-style badge vocabulary a row can carry: a git tone, or one
+ * of two specials — `'clean'` (tracked AND unchanged — the signature green ✓)
+ * and `'ignored'` (git-ignored: outside the repository's management, the gray
+ * ⊘ that keeps `node_modules` from wearing the clean mark .gitignore excluded
+ * it from). A primitive string on purpose: it crosses into the memoized rows
+ * as a prop, and `React.memo` compares primitives by value, so a status poll
+ * that changed nothing re-renders no row at all.
  */
-type GitMark = 'clean' | GitTone
+type GitMark = 'clean' | 'ignored' | GitTone
 
 /**
  * The badge's GLYPH, one character per mark (the TortoiseGit overlay words:
@@ -202,6 +204,7 @@ type GitMark = 'clean' | GitTone
 function gitMarkGlyph(mark: GitMark): string {
   switch (mark) {
     case 'clean': return '✓'
+    case 'ignored': return '⊘'
     case 'conflict': return '!'
     case 'modified': return '!'
     case 'deleted': return '✕'
@@ -214,10 +217,13 @@ function gitMarkGlyph(mark: GitMark): string {
 
 /**
  * The badge's tooltip word: the changed vocabulary the letter badges already
- * speak (`gitToneLabel`), plus the one new word the overlay adds — "clean".
+ * speak (`gitToneLabel`), plus the two new words the overlay adds — "clean"
+ * and "ignored".
  */
 function gitMarkLabel(mark: GitMark): string {
-  return mark === 'clean' ? t('gitStatusClean') : gitToneLabel(mark)
+  if (mark === 'clean') return t('gitStatusClean')
+  if (mark === 'ignored') return t('gitStatusIgnored')
+  return gitToneLabel(mark)
 }
 
 /**
@@ -2339,18 +2345,20 @@ export function FileTree(props: {
    * Whether a path may wear the green ✓ ("tracked and unchanged"). The
    * dangerous one of the two marks: a WRONG clean check would tell the user
    * "nothing to worry about" over a changed file, so it only answers from a
-   * COMPLETE status answer — a repo, a known root, and NOT truncated (a
-   * truncated `git status` dropped rows; the paths it did report look clean
-   * for exactly the reason the mark must not trust them: their changes may
-   * sit in the dropped tail). Paths outside the root (a linked container's
-   * row, a drive-relative oddity) stay unmarked too — git has no answer for
-   * them, and "no answer" must not paint as "clean".
+   * COMPLETE status answer — a repo, a known root, and NEITHER list
+   * truncated (a truncated `git status` dropped rows; a truncated ignore
+   * list leaves unknown-ignored paths unpainted — the paths the partial
+   * answers did report look clean for exactly the reason the mark must not
+   * trust them: the truth may sit in the dropped tail). Paths outside the
+   * root (a linked container's row, a drive-relative oddity) stay unmarked
+   * too — git has no answer for them, and "no answer" must not paint as
+   * "clean".
    */
   const gitCleanMarkOf = (absolutePath: string): 'clean' | undefined => {
     const snapshot = gitStatus.snapshot
     const repoRoot = snapshot?.root
     if (snapshot === null || snapshot.isRepo !== true || repoRoot === undefined) return undefined
-    if (snapshot.truncated === true) return undefined
+    if (snapshot.truncated === true || snapshot.ignoredTruncated === true) return undefined
     if (absolutePath !== repoRoot
       && !absolutePath.startsWith(`${repoRoot}/`)
       && !absolutePath.startsWith(`${repoRoot}\\`)) return undefined
@@ -2359,25 +2367,30 @@ export function FileTree(props: {
 
   /**
    * A FILE row's badge mark: the status store's tone when the path is
-   * changed, else the green ✓ under the rules above, else nothing. Primitive
-   * in, primitive out — the memoized row compares it by value.
+   * changed, the gray ⊘ when git ignores it (outside the repository's
+   * management — a change badge is impossible here and the green ✓ would be
+   * the lie this mark exists to prevent), else the green ✓ under the rules
+   * above, else nothing. Primitive in, primitive out — the memoized row
+   * compares it by value.
    */
   const gitMarkOf = (absolutePath: string): GitMark | undefined => {
     if (!gitBadges) return undefined
     const status = gitStatus.statusOf(absolutePath)
     if (status !== undefined) return status.tone
+    if (gitStatus.isIgnored(absolutePath)) return 'ignored'
     return gitCleanMarkOf(absolutePath)
   }
 
   /**
    * A DIRECTORY (or root) row's badge mark: the subtree's WORST tone from the
-   * store's directory index (`dirToneOf`), else the same green ✓, else
-   * nothing.
+   * store's directory index (`dirToneOf`), the same gray ⊘ when git ignores
+   * the directory itself, else the green ✓, else nothing.
    */
   const gitDirMarkOf = (absoluteDir: string): GitMark | undefined => {
     if (!gitBadges) return undefined
     const tone = gitStatus.dirToneOf(absoluteDir)
     if (tone !== undefined) return tone
+    if (gitStatus.isIgnored(absoluteDir)) return 'ignored'
     return gitCleanMarkOf(absoluteDir)
   }
 

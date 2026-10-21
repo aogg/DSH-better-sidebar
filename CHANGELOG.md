@@ -2,6 +2,12 @@
 
 > 本文档收录 dsh-better-sidebar 的完整发布历史（最新版摘要见 [README](README.md)；同步发布于 [GitHub Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)）。
 
+### v0.28.19
+
+- 🙈 **文件树的 git 状态徽标认识 .gitignore 了——被忽略的路径不再冒领「无改动」绿✓，改戴灰色 ⊘「已忽略」徽标**：过去只要路径在仓库根内、又不在变更索引里就打绿✓，`node_modules/`、`lib/` 这类被 .gitignore 排除的目录因此谎报「无改动」。现在宿主端 `src/git.ts` 的 `status()` 在同一并行批次里多带一路 `git ls-files --others --ignored --exclude-standard --directory -z`（忽略目录折叠成一条 `dir/` 行，pnpm 规模的树约 0.4s 出答案，等效的 `status --ignored` 下钻要走 45s——`tests/smoke.spec.ts` 的真仓冒烟正是被它拖到 30s 超时），解析为 `GitStatusResult.ignored`（独立 `GIT_STATUS_LIMIT` 截断 + `ignoredTruncated` 标志，忽略溢出不会误亮变更面板的截断提示）；客户端 `src/client/ui/git-status.ts` 把忽略集合并入快照索引并新增 `isIgnored()`（自身 + 祖先链 O(depth) 查询，`node_modules` 保持 O(1)，空集快路径让非仓库树回到 O(1)），`sameStatus` 把忽略集合纳入相等判定（集合没变的空闲轮询不重渲染，集合变了 ⊘ 徽标要移动）；`src/client/FileTree.tsx` 新增 `'ignored'` 徽标词汇（灰色 ⊘，`data-mark='ignored'`），文件行与目录行在「变更色调 → 忽略 ⊘ → 绿✓」的次序里判定，且忽略清单截断时绿✓一律不画（部分答案不配宣称「无改动」）。21 处 locale（`src/client/locales.ts` zh/en 两段 + 19 个 `src/client/locales-*.ts`）新增 `gitStatusIgnored`（各文件紧挨 `gitStatusClean`），zh/en 的 `settingsExplorerGitBadgesDesc` 徽标清单补「已忽略灰⊘」。
+  - **版本**：`SIDEBAR_SERVICE_VERSION` 与 package.json / dsh.plugin.json 一起升到 **0.28.19**。
+  - 🧪 测试：`tests/git.spec.ts` 新增 2 例（ls-files NUL 帧解析；临时真仓里 `status()` 带出折叠的 `node_modules/` 且变更行不受扰动）；`tests/file-tree-git-status.spec.tsx` 新增 4 例（忽略目录 ⊘、忽略目录下的每个文件经祖先链 ⊘、忽略文件精确命中且变更词汇不受扰、忽略清单截断时绿✓不画）；`tests/git-status-poll.spec.tsx` 新增 3 例（`isIgnored` 自身/子树/兄弟与 Windows 分隔符、无忽略数据时退化 false、忽略集合相等保持安静/变化才通知）。
+
 ### v0.28.18
 
 - 🗂️ **「本轮文件」视图（SessionLens）的筛选 chip 新增「写入+编辑」合并项——一枚 chip 同时放行 write 与 edit 两类操作，既有单类筛选行为一字不变**：`OpFilter` 在 `'all'` 与单 kind 之间加 `'mutate'` 合并桶（放行 `write` + `edit`），chip 行顺序变为 全部｜写入+编辑｜写入｜编辑｜读取，合并 chip 的计数是 write 与 edit 两个计数之和（读取不计入）。改动文件：`src/client/changes/SessionLens.tsx`；21 处 locale（`src/client/locales.ts` zh/en 两段 + 19 个 `src/client/locales-*.ts`）新增 `changesFilterMutate`（译法 = 各文件自己的 `changesWrite` + `changesEdit`）；`tests/session-lens-tree.spec.tsx` 新增 1 例（点合并 chip 后 read 分支整体消失、write/edit 行仍在、chip 计数为两者之和，回「全部」恢复）。

@@ -246,3 +246,67 @@ describe('the shared git status store cadence', () => {
     expect(gitStatus).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('the shared git status store ignore index (the ⊘ vocabulary)', () => {
+  /** Mount one probe on a snapshot and return its settled view. */
+  async function viewOf(id: string, snapshot: GitStatusResult): Promise<GitStatusView> {
+    vi.useFakeTimers()
+    gitStatus.mockResolvedValue(snapshot)
+    mounted = renderRoot(createElement(Probe, { scope: scopeFor(id), commits: { value: 0 } }))
+    await tick(0)
+    await flush()
+    if (latest === null) throw new Error('no view settled')
+    return latest
+  }
+
+  it('answers the ignored question for the entry itself and its subtree', async () => {
+    const view = await viewOf('ignored-tree', {
+      ...REPO,
+      ignored: ['node_modules/', 'logo.gen.png'],
+    })
+    // The collapsed directory row itself…
+    expect(view.isIgnored('/tmp/node_modules')).toBe(true)
+    // …everything under it…
+    expect(view.isIgnored('/tmp/node_modules/.pnpm/x/index.js')).toBe(true)
+    // …an ignored FILE exactly (never its "subtree" — files have none)…
+    expect(view.isIgnored('/tmp/logo.gen.png')).toBe(true)
+    // …and nothing else: siblings, the root, and paths that merely share a
+    // name segment answer false.
+    expect(view.isIgnored('/tmp/a.ts')).toBe(false)
+    expect(view.isIgnored('/tmp')).toBe(false)
+    expect(view.isIgnored('/tmp/other/node_modules/x.js')).toBe(false)
+    // Windows separators normalize to the same answer.
+    expect(view.isIgnored('\\tmp\\node_modules\\x.js')).toBe(true)
+  })
+
+  it('answers plain false with no ignore data at all (older host, failed read)', async () => {
+    const view = await viewOf('ignored-empty', REPO)
+    expect(view.isIgnored('/tmp/node_modules/x.js')).toBe(false)
+    const nothing = await viewOf('ignored-undefined', { ...REPO, ignored: undefined })
+    expect(nothing.isIgnored('/tmp/node_modules')).toBe(false)
+  })
+
+  it('keeps idle polls silent while the ignore set is equal, and notifies when it moves', async () => {
+    vi.useFakeTimers()
+    const WITH_IGNORE: GitStatusResult = { ...REPO, ignored: ['node_modules/'] }
+    gitStatus.mockResolvedValue(WITH_IGNORE)
+    const commits: Counter = { value: 0 }
+    mounted = renderRoot(createElement(Probe, { scope: scopeFor('ignored-cadence'), commits }))
+    await tick(0)
+    await flush()
+    const settled = commits.value
+
+    // A NEW object with the SAME ignore set (plus truncation flag): equal,
+    // so the idle poll must not re-render the tree's rows.
+    gitStatus.mockResolvedValue({ ...WITH_IGNORE })
+    await tick(30_000)
+    await flush()
+    expect(commits.value).toBe(settled)
+
+    // A different ignore set is a real answer change — the ⊘ badges move.
+    gitStatus.mockResolvedValue({ ...REPO, ignored: [] })
+    await tick(30_000)
+    await flush()
+    expect(commits.value).toBeGreaterThan(settled)
+  })
+})

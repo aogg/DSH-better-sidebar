@@ -21,10 +21,12 @@
  * returned early, so a click during the poll silently did nothing).
  *
  * Cadence: the fetch behind this store is `git status --untracked-files=all`
- * plus two `--numstat` diffs, and on a repository holding a large UNIGNORED
- * tree (a nested `node_modules`, a pnpm store) that is megabytes of output and
- * a fifth of a second of CPU. It therefore runs on a SLOW baseline (30 s) and
- * drops a tier whenever the last round trip came back slow — 2x, then 6x (the
+ * plus an `ls-files --others --ignored --exclude-standard --directory` read
+ * (the tree's ⊘ badges) and two `--numstat` diffs, and on a repository
+ * holding a large UNIGNORED tree (a nested `node_modules`, a pnpm store) that
+ * is megabytes of output and a fifth of a second of CPU. It therefore runs on
+ * a SLOW baseline (30 s) and drops a tier whenever the last round trip came
+ * back slow — 2x, then 6x (the
  * user's "60 s / 180 s"), and finally no automatic timer at all — so a
  * pathological repository cannot keep a git process running forever. Every
  * consumer keeps the event-driven refreshes (`refresh()`,
@@ -160,6 +162,15 @@ function sameStatus(a: GitStatusResult, b: GitStatusResult): boolean {
   if (a.repositories?.length !== b.repositories?.length) return false
   if (a.repositories !== undefined && b.repositories !== undefined
     && a.repositories.some((root, index) => root !== b.repositories![index])) return false
+  // The ignore list is part of the payload (it moves the tree's ⊘ badges):
+  // an idle poll that brings a different ignore set must notify, and one
+  // that re-answers with the same set must stay silent. `undefined` and `[]`
+  // are the same answer — the field is optional for older snapshots.
+  const aIgnored = a.ignored ?? []
+  const bIgnored = b.ignored ?? []
+  if (a.ignoredTruncated === true !== (b.ignoredTruncated === true)) return false
+  if (aIgnored.length !== bIgnored.length) return false
+  if (aIgnored.some((path, index) => path !== bIgnored[index])) return false
   return a.entries.every((entry, index) => {
     const other = b.entries[index]!
     return entry.path === other.path && entry.xy === other.xy && sameCounts(entry.counts, other.counts)
@@ -177,14 +188,24 @@ interface Index {
    * see no difference.
    */
   dirs: Map<string, GitTone>
+  /**
+   * Normalized absolute paths git IGNORES — both the entries themselves
+   * (files AND collapsed `dir/` rows) and, through the ancestor walk in
+   * `isIgnored`, everything under an ignored directory. Nothing here can
+   * wear a change badge (git never reports one for an ignored path); the
+   * set exists so the tree can badge these rows ⊘ instead of lying with
+   * the green ✓.
+   */
+  ignored: Set<string>
 }
 
 /** Build the lookup index for one snapshot (once per snapshot, O(rows × depth)). */
 function buildIndex(snapshot: GitStatusResult): Index {
   const files = new Map<string, GitFileStatus>()
   const dirs = new Map<string, GitTone>()
+  const ignored = new Set<string>()
   const root = snapshot.root
-  if (!snapshot.isRepo || root === undefined) return { files, dirs }
+  if (!snapshot.isRepo || root === undefined) return { files, dirs, ignored }
   for (const entry of snapshot.entries) {
     const status = statusOfXY(entry.xy)
     if (status === undefined) continue
@@ -209,7 +230,15 @@ function buildIndex(snapshot: GitStatusResult): Index {
       at = dir.lastIndexOf('/')
     }
   }
-  return { files, dirs }
+  // The ignored entries: the row itself (a collapsed `dir/` arrives here
+  // slash-stripped by normPath) seeds the set, and the ancestor walk inside
+  // `isIgnored` covers everything UNDER an ignored directory — one Set, no
+  // per-descendant rows to enumerate (node_modules stays O(1), never O(n)).
+  for (const rel of snapshot.ignored ?? []) {
+    const absolute = normPath(joinRoot(root, rel))
+    if (absolute !== '') ignored.add(absolute)
+  }
+  return { files, dirs, ignored }
 }
 
 interface Slot {
@@ -409,7 +438,9 @@ function release(slot: Slot, poll: boolean): void {
 /** The index for the current snapshot, rebuilt only when the snapshot changed. */
 function indexOf(slot: Slot): Index {
   if (slot.index === null || slot.indexSource !== slot.snapshot) {
-    slot.index = slot.snapshot === null ? { files: new Map(), dirs: new Map() } : buildIndex(slot.snapshot)
+    slot.index = slot.snapshot === null
+      ? { files: new Map(), dirs: new Map(), ignored: new Set() }
+      : buildIndex(slot.snapshot)
     slot.indexSource = slot.snapshot
   }
   return slot.index
@@ -439,6 +470,14 @@ export interface GitStatusView {
   statusOf(absolutePath: string): GitFileStatus | undefined
   /** Whether `absoluteDir` or anything under it has a change. */
   dirHasChanges(absoluteDir: string): boolean
+  /**
+   * Whether `absolutePath` is one of git's IGNORED paths or lives under an
+   * ignored directory. The file tree badges these rows ⊘ (they sit outside
+   * the repository's management) instead of the lying green ✓; `false` also
+   * covers a missing/failed ignore read, where "not known ignored" must
+   * degrade to the old behavior, never to a fabricated badge.
+   */
+  isIgnored(absolutePath: string): boolean
   /**
    * The WORST tone anywhere under `absoluteDir` (the TortoiseGit severity
    * ladder), or undefined when the subtree is clean/unknown. What the file
@@ -489,10 +528,25 @@ export function useGitStatus(
     (absoluteDir: string) => indexOf(slot).dirs.has(normPath(absoluteDir)),
     [slot],
   )
+  const isIgnored = useCallback((absolutePath: string): boolean => {
+    // Ancestor walk: the path itself, then each parent, against ONE set that
+    // holds both ignored entries and collapsed ignored directories. O(depth)
+    // Set hits per query — the same cost class as the render-path lookups
+    // above, and the empty-set fast path keeps non-repo trees at O(1).
+    const ignored = indexOf(slot).ignored
+    if (ignored.size === 0) return false
+    let at = normPath(absolutePath)
+    while (at !== '') {
+      if (ignored.has(at)) return true
+      const cut = at.lastIndexOf('/')
+      at = cut <= 0 ? '' : at.slice(0, cut)
+    }
+    return false
+  }, [slot])
   const dirToneOf = useCallback(
     (absoluteDir: string) => indexOf(slot).dirs.get(normPath(absoluteDir)),
     [slot],
   )
 
-  return { snapshot: slot.snapshot, loading: slot.loading, error: slot.error, refresh, statusOf, dirHasChanges, dirToneOf }
+  return { snapshot: slot.snapshot, loading: slot.loading, error: slot.error, refresh, statusOf, dirHasChanges, dirToneOf, isIgnored }
 }

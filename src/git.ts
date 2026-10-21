@@ -42,6 +42,20 @@ export interface GitStatusResult {
    *  panel shows a truncation notice instead of freezing on a huge untracked
    *  set (issue #369). */
   truncated?: boolean
+  /**
+   * The paths git IGNORES (a `git ls-files --others --ignored
+   * --exclude-standard --directory` read), repo-root-relative. An ignored
+   * directory arrives COLLAPSED as `dir/` (git never descends into what it
+   * ignores), so a `node_modules` costs one row, never every file under it.
+   * Feeds the file tree's "ignored" overlay; the changes list must not see
+   * these. Empty is a valid answer (nothing ignored, or the ignore read
+   * failed — the status answer itself never fails because of it).
+   */
+  ignored?: string[]
+  /** True when `ignored` hit `GIT_STATUS_LIMIT`: paths beyond the cap may
+   *  still be ignored, so a "clean" badge must not be painted from a partial
+   *  ignore list. */
+  ignoredTruncated?: boolean
   /** Selected repository root, or the discovered roots when the cwd is a container. */
   root?: string
   repositories?: string[]
@@ -114,6 +128,20 @@ export function parsePorcelainZ(output: string): GitStatusEntry[] {
     }
   }
   return entries
+}
+
+/**
+ * The IGNORED paths of one `git ls-files --others --ignored
+ * --exclude-standard --directory -z` answer: a NUL-framed path list, an
+ * ignored DIRECTORY collapsed to one `dir/` row (git never descends into
+ * what it ignores — measured 0.4 s on a pnpm-scale tree where the
+ * equivalent `status --ignored` walk costs 45 s), ignored FILES as
+ * themselves, negations (`.env.*` + `!.env.example`) resolved exactly as
+ * status would. An empty/failed read answers "nothing known" — never an
+ * error.
+ */
+export function ignoredPaths(output: string): string[] {
+  return output.split('\0').filter(path => path !== '')
 }
 
 /**
@@ -577,11 +605,20 @@ export async function status(cwd: string, selected?: string): Promise<GitStatusR
   const repositories = await repoRoots(cwd)
   if (repositories.length === 0) return { isRepo: false, entries: [], repositories: [] }
   const root = await repoRoot(cwd, selected)
-  const [branch, raw, unstagedNumstat, stagedNumstat] = await Promise.all([
+  const [branch, raw, unstagedNumstat, stagedNumstat, ignoredRaw] = await Promise.all([
     currentBranch(root).catch(() => 'HEAD'),
     runGit(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']),
     runGit(root, ['diff', '--numstat', '-z']).catch(() => ''),
     runGit(root, ['diff', '--cached', '--numstat', '-z']).catch(() => ''),
+    // The IGNORED paths ride the same batch via `ls-files --ignored`, NOT a
+    // `status --ignored` walk: ls-files answers in ~0.4 s on a pnpm-scale
+    // tree where the status walk costs ~45 s (git descends into every
+    // ignored directory before collapsing it), for the same collapsed
+    // `dir/` list. The file tree's "ignored" overlay needs them; the
+    // changes list must not see them. A failure costs the overlay, never
+    // the status answer.
+    runGit(root, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'])
+      .catch(() => ''),
   ])
   const parsed = parsePorcelainZ(raw)
   const lineCounts = new Map<string, GitLineCounts>()
@@ -589,6 +626,13 @@ export async function status(cwd: string, selected?: string): Promise<GitStatusR
   addLineCounts(lineCounts, parseNumstat(unstagedNumstat))
   const truncated = parsed.length > GIT_STATUS_LIMIT
   const bounded = truncated ? parsed.slice(0, GIT_STATUS_LIMIT) : parsed
+  // The ignore list is capped separately from `entries` and gets its own
+  // flag: an ignore overflow must not put the changes panel's truncation
+  // notice up (no change row was dropped), it only downgrades the tree's
+  // badges to "unknown" for the paths beyond the cap.
+  const ignoredAll = ignoredPaths(ignoredRaw)
+  const ignoredTruncated = ignoredAll.length > GIT_STATUS_LIMIT
+  const ignored = ignoredTruncated ? ignoredAll.slice(0, GIT_STATUS_LIMIT) : ignoredAll
   return {
     isRepo: true,
     branch,
@@ -599,6 +643,8 @@ export async function status(cwd: string, selected?: string): Promise<GitStatusR
       return counts === undefined ? entry : { ...entry, counts }
     }),
     truncated,
+    ignored,
+    ignoredTruncated,
     root,
     repositories,
   }

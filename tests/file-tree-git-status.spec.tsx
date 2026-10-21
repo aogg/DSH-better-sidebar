@@ -6,7 +6,7 @@
  * a non-repo (or unavailable git) degrades silently to plain rows.
  */
 // @vitest-environment jsdom
-import { beforeAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
@@ -21,17 +21,11 @@ beforeAll(() => {
   Object.defineProperty(window.navigator, 'language', { value: 'en-US', configurable: true })
 })
 
-const { gitStatus } = vi.hoisted(() => ({ gitStatus: vi.fn() }))
+const { gitStatus, fsTrees } = vi.hoisted(() => ({ gitStatus: vi.fn(), fsTrees: vi.fn() }))
 
 vi.mock('../src/client/api.ts', () => ({
   api: {
-    fsTrees: async (_scope: unknown, paths: readonly string[]) => ({
-      levels: paths.map(path => ({ path, entries: [
-        { name: 'sub', path: '/tmp/sub', isDir: true },
-        { name: 'a.ts', path: '/tmp/a.ts', isDir: false },
-        { name: 'b.ts', path: '/tmp/b.ts', isDir: false },
-      ], truncated: false })),
-    }),
+    fsTrees,
     gitStatus,
   },
   downloadUrl: () => '/sidebar/file',
@@ -54,7 +48,7 @@ interface Harness {
   unmount: () => void
 }
 
-async function mountTree(): Promise<Harness> {
+async function mountTree(options: { expanded?: readonly string[] } = {}): Promise<Harness> {
   const container = document.createElement('div')
   document.body.append(container)
   const root: Root = createRoot(container)
@@ -62,7 +56,7 @@ async function mountTree(): Promise<Harness> {
     root.render(createElement(FileTree, {
       sessionId: 'git-spec',
       cwd: '/tmp',
-      expanded: [],
+      expanded: [...(options.expanded ?? [])],
       revealed: [],
       onToggle: () => {},
       onOpenFile: () => {},
@@ -94,10 +88,22 @@ function nameSpan(row: HTMLElement): HTMLElement {
 }
 
 let harness: Harness
+beforeEach(() => {
+  // The default listing: the same three rows at every requested level (tests
+  // that need a real subtree override this).
+  fsTrees.mockImplementation(async (_scope: unknown, paths: readonly string[]) => ({
+    levels: paths.map(path => ({ path, entries: [
+      { name: 'sub', path: '/tmp/sub', isDir: true },
+      { name: 'a.ts', path: '/tmp/a.ts', isDir: false },
+      { name: 'b.ts', path: '/tmp/b.ts', isDir: false },
+    ], truncated: false })),
+  }))
+})
 afterEach(() => {
   harness.unmount()
   document.body.innerHTML = ''
   gitStatus.mockReset()
+  fsTrees.mockReset()
 })
 
 describe('FileTree git ink', () => {
@@ -137,5 +143,65 @@ describe('FileTree git ink', () => {
     expect(nameSpan(file).className).not.toContain('explorerGitName')
     const dir = rowByName(harness.container, 'sub')
     expect(nameSpan(dir).className).not.toContain('explorerDirChanged')
+  })
+})
+
+describe('FileTree ignored overlay (the ⊘ that keeps .gitignore paths from the clean ✓)', () => {
+  /** The overlay badge of one row, if the row carries one. */
+  function overlayMark(row: HTMLElement): HTMLElement | null {
+    return row.querySelector<HTMLElement>('[class*="explorerGitMark"]')
+  }
+
+  it('badges an ignored directory ⊘ instead of the green ✓', async () => {
+    // No change anywhere under sub: the tone index is empty for it, so the
+    // ignore answer decides the row's mark.
+    gitStatus.mockResolvedValue({ ...REPO, entries: [{ path: 'a.ts', xy: ' M' }], ignored: ['sub/'] })
+    harness = await mountTree()
+    const mark = overlayMark(rowByName(harness.container, 'sub'))
+    expect(mark).not.toBeNull()
+    expect(mark!.getAttribute('data-mark')).toBe('ignored')
+    expect(mark!.getAttribute('title')).toBe('Ignored')
+    expect(mark!.textContent).toBe('⊘')
+  })
+
+  it('badges every file UNDER an ignored directory ⊘ (the ancestor walk)', async () => {
+    // No change row under sub (git cannot track files there): the file's own
+    // tone is undefined, so the ancestor's ignore answer decides.
+    gitStatus.mockResolvedValue({ ...REPO, entries: [{ path: 'a.ts', xy: ' M' }], ignored: ['sub/'] })
+    // A real subtree: /tmp/sub holds one file (the mock's default listing is
+    // overridden for that one level).
+    fsTrees.mockImplementation(async (_scope: unknown, paths: readonly string[]) => ({
+      levels: paths.map(path => ({ path, entries: path === '/tmp/sub'
+        ? [{ name: 'inner.ts', path: '/tmp/sub/inner.ts', isDir: false }]
+        : [
+            { name: 'sub', path: '/tmp/sub', isDir: true },
+            { name: 'a.ts', path: '/tmp/a.ts', isDir: false },
+            { name: 'b.ts', path: '/tmp/b.ts', isDir: false },
+          ], truncated: false })),
+    }))
+    harness = await mountTree({ expanded: ['/tmp/sub'] })
+    const inner = overlayMark(rowByName(harness.container, 'inner.ts'))
+    expect(inner).not.toBeNull()
+    expect(inner!.getAttribute('data-mark')).toBe('ignored')
+    // A file outside the ignored directory keeps its own vocabulary.
+    expect(overlayMark(rowByName(harness.container, 'b.ts'))!.getAttribute('data-mark')).toBe('clean')
+  })
+
+  it('badges an ignored FILE exactly, and leaves the changed vocabulary untouched', async () => {
+    gitStatus.mockResolvedValue({ ...REPO, ignored: ['b.ts'] })
+    harness = await mountTree()
+    expect(overlayMark(rowByName(harness.container, 'b.ts'))!.getAttribute('data-mark')).toBe('ignored')
+    // The status tone still outranks everything: a modified file keeps its
+    // mark even while a sibling is ignored.
+    expect(overlayMark(rowByName(harness.container, 'a.ts'))!.getAttribute('data-mark')).toBe('modified')
+  })
+
+  it('keeps the clean ✓ off when the ignore list is truncated (unknown ≠ clean)', async () => {
+    gitStatus.mockResolvedValue({ ...REPO, entries: [{ path: 'a.ts', xy: ' M' }], ignored: ['sub/'], ignoredTruncated: true })
+    harness = await mountTree()
+    // A listed ignored path still badges ⊘; an UNLISTED clean path must not
+    // claim ✓ from a partial answer.
+    expect(overlayMark(rowByName(harness.container, 'sub'))!.getAttribute('data-mark')).toBe('ignored')
+    expect(overlayMark(rowByName(harness.container, 'b.ts'))).toBeNull()
   })
 })

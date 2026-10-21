@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import { parseUnifiedDiff } from '../src/client/diff/rows.ts'
-import { checkout, parseLogLines, parseLogNameStatus, parseNumstat, parsePorcelainZ, repoRoots, status } from '../src/git.ts'
+import { checkout, ignoredPaths, parseLogLines, parseLogNameStatus, parseNumstat, parsePorcelainZ, repoRoots, status } from '../src/git.ts'
 
 const execFileAsync = promisify(execFile)
 const normalizePath = (path: string): string => path.replaceAll('\\', '/')
@@ -109,6 +109,40 @@ describe('git parsing', () => {
       const result = await status(root)
       expect(result.entries).toHaveLength(3)
       expect(result.truncated).toBe(false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('splits the NUL-framed ls-files ignored read into its path list', () => {
+    const output = ['node_modules/', '.dsh/', 'logo.gen.png', ''].join('\0')
+    expect(ignoredPaths(output)).toEqual(['node_modules/', '.dsh/', 'logo.gen.png'])
+    // An empty/failed read answers "nothing known" — never an error.
+    expect(ignoredPaths('')).toEqual([])
+  })
+
+  it('carries the gitignore paths beside the change rows (the ⊘ vocabulary)', async () => {
+    // The file tree badges ignored paths instead of lying with the clean ✓:
+    // the ignore read rides the same status batch, directories arrive
+    // COLLAPSED (one `node_modules/` row, never every file under it), and
+    // the change rows stay untouched.
+    const root = mkdtempSync(join(tmpdir(), 'dsh-git-ignored-'))
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: root })
+      execFileSync('git', ['config', 'user.email', 't@t'], { cwd: root })
+      execFileSync('git', ['config', 'user.name', 't'], { cwd: root })
+      writeFileSync(join(root, '.gitignore'), 'node_modules/\n')
+      execFileSync('git', ['add', '.gitignore'], { cwd: root })
+      execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: root })
+      writeFileSync(join(root, 'a.ts'), 'changed')
+      const modules = join(root, 'node_modules')
+      mkdirSync(modules)
+      writeFileSync(join(modules, 'lib.js'), 'x')
+      writeFileSync(join(modules, 'deep.js'), 'x')
+      const result = await status(root)
+      expect(result.ignored).toEqual(['node_modules/'])
+      expect(result.ignoredTruncated).toBe(false)
+      expect(result.entries.map(entry => entry.path)).toEqual(['a.ts'])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
