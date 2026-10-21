@@ -821,24 +821,51 @@ function buildApi(
       const query = requireString(payload, 'query')
       return searchFiles(cwd, query, { exclude: compileExcludePatterns(record.exclude, cwd) })
     },
-    // The tree panel's text-CONTENT search. Same session-cwd rooting and
-    // budgets as `fs.search`; the include/exclude entries are raw strings
-    // classified host-side (existing dir → subtree scope/drop, existing file
-    // → single-file scope/drop, otherwise an exclude-patterns glob). The
-    // explorerExclude pref rides `prefExclude` and stacks on top of the
-    // user's `exclude` list, so the content search stays in lockstep with
-    // the tree listing and the name search.
+    // The tree panel's text-CONTENT search (line-level v2). Same session-cwd
+    // rooting and budgets as `fs.search`; the include/exclude entries are raw
+    // strings classified host-side (existing dir → subtree scope/drop,
+    // existing file → single-file scope/drop, otherwise an exclude-patterns
+    // glob). The explorerExclude pref rides `prefExclude` and stacks on top
+    // of the user's `exclude` list, so the content search stays in lockstep
+    // with the tree listing and the name search. The three match booleans
+    // are read LOOSELY (only JSON `true` counts — a stale client's "true"
+    // string or 1 must not silently flip the mode) and a regex query is
+    // compiled ONCE here so an illegal pattern is a clean bad-request
+    // instead of a mid-search throw.
     'fs.contentSearch': async (payload) => {
       const { cwd } = await cwdOf(payload)
-      const record = payload as { include?: unknown; exclude?: unknown; prefExclude?: unknown }
+      const record = payload as {
+        include?: unknown
+        exclude?: unknown
+        prefExclude?: unknown
+        caseSensitive?: unknown
+        wholeWord?: unknown
+        regex?: unknown
+      }
       const query = requireString(payload, 'query')
       if (query.length > EXCLUDE_PATTERN_MAX_LENGTH) {
         throw new SidebarError('bad-request', `"query" must not exceed ${EXCLUDE_PATTERN_MAX_LENGTH} characters`)
+      }
+      const match = {
+        caseSensitive: record.caseSensitive === true,
+        wholeWord: record.wholeWord === true,
+        regex: record.regex === true,
+      }
+      if (match.regex) {
+        // Compile once here (the contract's single validation point): an
+        // illegal pattern must be a clean bad-request, not a mid-search
+        // throw. A bare call constructs too (RegExp() === new RegExp()).
+        try {
+          RegExp(query)
+        } catch {
+          throw new SidebarError('bad-request', '"query" is not a valid regular expression')
+        }
       }
       return contentSearch(cwd, query, {
         include: sidebarEntryListOf(record.include),
         exclude: sidebarEntryListOf(record.exclude),
         prefExclude: compileExcludePatterns(record.prefExclude, cwd),
+        ...match,
       })
     },
     'fs.read': async (payload) => {

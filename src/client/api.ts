@@ -28,6 +28,10 @@ import type {
 import type { WorkflowRunView } from '../workflow-runs.ts'
 import type { HistorySendRecord } from '../prompt-history-extract.ts'
 import type { HistoryAnnotationOpInput, HistoryAnnotations } from '../prompt-history-store.ts'
+import type {
+  ContentSearchMatchOptions,
+  ContentSearchResult,
+} from '../content-search-types.ts'
 
 /**
  * The `history.list` response: ONE FLAT PAGE of the current project's
@@ -480,28 +484,47 @@ export const api = {
    *  tree; a pasted direct-open path is explicit intent and skips it). */
   fsSearch: (scope: SessionScope, query: string, exclude?: readonly string[], signal?: AbortSignal) =>
     call<{ matches: string[]; dirs: string[]; truncated: boolean }>('fs.search', scopePayload(scope, { query, exclude }), signal),
-  /** Global recursive CONTENT search rooted at the session cwd (the tree
-   *  panel's "文本内容搜索" section). `query` is a case-insensitive literal
-   *  substring of the file CONTENTS; `include`/`exclude` are raw entry
-   *  strings the HOST classifies — an existing directory scopes/drops that
-   *  subtree, an existing file scopes/drops that one file, anything else is
-   *  a glob in the exclude-patterns subset grammar. Only FILES come back
-   *  (root-relative, '/'-separated). `prefExclude` is the explorerExclude
-   *  preference, stacked host-side on top of `exclude` exactly like the name
-   *  search and the tree listing. */
+  /**
+   * Global recursive LINE-LEVEL content search rooted at the session cwd
+   * (v2 — the PhpStorm-style search page's foundation). `query` matches the
+   * file CONTENTS; `include`/`exclude` are raw entry strings the HOST
+   * classifies — an existing directory scopes/drops that subtree, an
+   * existing file scopes/drops that one file, anything else is a glob in
+   * the exclude-patterns subset grammar. `prefExclude` is the
+   * explorerExclude preference, stacked host-side on top of `exclude`
+   * exactly like the name search and the tree listing.
+   *
+   * `match` carries the optional mode booleans (`caseSensitive` /
+   * `wholeWord` / `regex`, default false each — the v1 literal
+   * case-insensitive search); an illegal regex is rejected by the route as
+   * `bad-request`.
+   *
+   * The result groups hits per file (`matches`, sorted by root-relative
+   * '/'-separated path): each hit carries the 1-based `line`, the 0-based
+   * `column` + `length` in JS string indices, the full line `text` (no
+   * trailing newline) and up to two `before`/`after` context lines.
+   * Host-side budgets bound the payload: ≤100 hits kept per file (the
+   * file's `count` stays the true total, `truncated` marks the cut), ≤2000
+   * hits kept per search, ≤200 files listed — any budget cutting the answer
+   * raises the top-level `truncated`.
+   */
   fsContentSearch: (
     scope: SessionScope,
     query: string,
     include: readonly string[],
     exclude: readonly string[],
     prefExclude?: readonly string[],
+    match?: ContentSearchMatchOptions,
     signal?: AbortSignal,
   ) =>
-    call<{ matches: string[]; truncated: boolean }>('fs.contentSearch', scopePayload(scope, {
+    call<ContentSearchResult>('fs.contentSearch', scopePayload(scope, {
       query,
       include: [...include],
       exclude: [...exclude],
       ...(prefExclude !== undefined && prefExclude.length > 0 ? { prefExclude: [...prefExclude] } : {}),
+      ...(match?.caseSensitive === true ? { caseSensitive: true } : {}),
+      ...(match?.wholeWord === true ? { wholeWord: true } : {}),
+      ...(match?.regex === true ? { regex: true } : {}),
     }), signal),
   fsRead: (scope: SessionScope, path: string, signal?: AbortSignal) =>
     call<FsReadResult>('fs.read', scopePayload(scope, { path }), signal),
