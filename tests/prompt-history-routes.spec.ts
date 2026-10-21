@@ -378,30 +378,6 @@ describe('prompt-history live（实时记录与水位续扫）', () => {
 })
 
 describe('prompt-history live（扫描期 ws 推送与 seeding 状态帧）', () => {
-  /** 带事件源的 ctx（同上一段的 eventCtx；扫描期推送测试的公共底座）。 */
-  function eventCtx(options: {
-    persistence?: unknown
-    liveSessions?: Record<string, { header?: { cwd?: string }; snapshotEvents?: () => readonly unknown[] }>
-  }): { ctx: Context; emit: (session: unknown, event: unknown) => void } {
-    const listeners = new Map<string, Set<(...args: unknown[]) => void>>()
-    const base = makeCtx(options.persistence, options.liveSessions)
-    const ctx = {
-      ...base,
-      on: (event: string, listener: (...args: unknown[]) => void) => {
-        let set = listeners.get(event)
-        if (set === undefined) listeners.set(event, set = new Set())
-        set.add(listener)
-        return () => { set.delete(listener) }
-      },
-    } as unknown as Context
-    return {
-      ctx,
-      emit: (session, event) => {
-        for (const listener of [...(listeners.get('session/event') ?? [])]) listener(session, event)
-      },
-    }
-  }
-
   it('扫描期每次 append 的新账都经 onRecords 推出（客户端免轮询的根）', async () => {
     const root = join(home, 'plugins', 'DSH-better-sidebar', 'seed-push')
     const { persistence } = fakePersistence({
