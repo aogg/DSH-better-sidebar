@@ -9,10 +9,20 @@
  * the reader expands headers one by one instead of facing a diff wall.
  * Untracked files produce no `git diff` output; the caller passes their
  * content to render as a full-file addition instead.
+ *
+ * Two opt-in extensions exist for the round-diff lens (both absent on every
+ * other caller, whose DOM and behavior stay byte-identical): `onOpenFile`
+ * renders a trailing 「查看原文件」 icon button on each file header (an
+ * absolutely positioned sibling of the header — never a child of it, so the
+ * header's `button[aria-expanded] + div` body contract survives), and
+ * `foldCommand` lets a parent drive every header open or closed at once
+ * (「全部展开」/「全部收起」) through a monotonic sequence number.
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import clsx from 'clsx'
+import { IconCodeOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import { t } from '../locales.ts'
+import { IconButton } from '../ui/index.ts'
 import { diffStats, displayPath, parseUnifiedDiff, unifiedSegments, untrackedFile, type DiffFile, type DiffRow, type FoldSegment } from './rows.ts'
 import { langOfPath } from './highlight.ts'
 import { DiffRows } from './DiffRows.tsx'
@@ -55,6 +65,32 @@ function fileTag(file: DiffFile): string | null {
   return null
 }
 
+/**
+ * The path an open-the-original-file action targets on one parsed file: the
+ * side the change LANDS on — the new path, except a deletion (`/dev/null`
+ * new side) where only the old path exists; a rename names both and the new
+ * one wins. Display-stripped (`a/`/`b/` prefixes off), so the callback sees
+ * the same spelling the header prints.
+ * @param file - one parsed diff file.
+ * @returns the repo-relative display path to open.
+ */
+export function openTargetOf(file: DiffFile): string {
+  return displayPath(file.newPath === '/dev/null' ? file.oldPath : file.newPath)
+}
+
+/**
+ * One externally issued fold instruction (「全部展开」/「全部收起」 from the
+ * round-diff lens's summary controls). `seq` is the issuer's monotonic
+ * command number: the component replays a command only when its seq differs
+ * from the last one it applied, so a re-render carrying the same command
+ * never re-folds the headers — and `seq` 0 means "never asked" (the initial
+ * state, never issued), leaving the ordinary defaults untouched.
+ */
+export interface DiffFoldCommand {
+  mode: 'expand' | 'collapse'
+  seq: number
+}
+
 export interface DiffFilesProps {
   /** Unified diff text (`git.diff` or `git.commit-diff` payloads). */
   diff: string
@@ -71,9 +107,18 @@ export interface DiffFilesProps {
    *  reset, so crossing the breakpoint rebuilds the defaults (manual
    *  expand/collapse states survive only while both stay unchanged). */
   allCollapsedByDefault?: boolean
+  /** Render a 「查看原文件」 icon button on every file header's row end,
+   *  calling back the file's display path (the new side, or the old side of
+   *  a deletion). Absent (every caller but the round-diff lens) renders
+   *  nothing and leaves the header DOM exactly as before. */
+  onOpenFile?: (path: string) => void
+  /** The latest open-all/close-all instruction (see {@link DiffFoldCommand});
+   *  a changed `seq` resets every header to the asked state. Undefined (or a
+   *  seq the component already applied) leaves the manual states alone. */
+  foldCommand?: DiffFoldCommand
 }
 
-export function DiffFiles({ diff, untrackedPath, untrackedContent, resolveFold, allCollapsedByDefault = false }: DiffFilesProps) {
+export function DiffFiles({ diff, untrackedPath, untrackedContent, resolveFold, allCollapsedByDefault = false, onOpenFile, foldCommand }: DiffFilesProps) {
   const parsed = useMemo(() => {
     if (untrackedPath !== undefined) {
       return { files: [untrackedFile(untrackedPath, untrackedContent ?? '')] }
@@ -82,6 +127,29 @@ export function DiffFiles({ diff, untrackedPath, untrackedContent, resolveFold, 
   }, [diff, untrackedPath, untrackedContent])
   const [expandedFiles, setExpandedFiles] = useState<Set<number>>(() => expandedFilesDefault(parsed.files, allCollapsedByDefault))
   useEffect(() => { setExpandedFiles(expandedFilesDefault(parsed.files, allCollapsedByDefault)) }, [parsed, allCollapsedByDefault])
+
+  // One external open-all/close-all instruction at a time: a seq the
+  // component has not applied yet resets every header to the asked state.
+  // The applied-seq ref starts at 0 ("never asked"), so a caller that has
+  // issued nothing renders the ordinary defaults — and a document swap
+  // (parsed) still rebuilds them through the reset effect above, exactly as
+  // it does for callers that never pass a command.
+  const appliedFoldSeq = useRef(0)
+  useEffect(() => {
+    if (foldCommand === undefined || foldCommand.seq === appliedFoldSeq.current) return
+    appliedFoldSeq.current = foldCommand.seq
+    setExpandedFiles(() => {
+      if (foldCommand.mode === 'collapse') return new Set<number>()
+      // Expand every header that CAN open: binary and hunk-less files have
+      // disabled headers with no body, so seeding their indices would only
+      // make the later `has()` reads claim a body that cannot render.
+      const next = new Set<number>()
+      parsed.files.forEach((file, index) => {
+        if (!file.binary && file.hunks.length > 0) next.add(index)
+      })
+      return next
+    })
+  }, [foldCommand, parsed])
 
   // One in-flight/resolved promise per file+fold key, so a fold re-clicked
   // after a remount (file header collapsed and re-expanded) resolves without
@@ -123,7 +191,7 @@ export function DiffFiles({ diff, untrackedPath, untrackedContent, resolveFold, 
       <div key={`file-${String(fileIndex)}`} className={css.fileBlock}>
         <button
           type="button"
-          className={css.file}
+          className={clsx(css.file, onOpenFile !== undefined && css.fileWithOpen)}
           disabled={!expandable}
           aria-expanded={expandable ? fileExpanded : undefined}
           onClick={() => {
@@ -148,6 +216,24 @@ export function DiffFiles({ diff, untrackedPath, untrackedContent, resolveFold, 
         </button>
         {expandable && fileExpanded && (
           <DiffRows segments={segments} lang={langOfPath(to)} resolveFold={resolveFold !== undefined ? (segment) => loadFold(file, segment) : undefined} />
+        )}
+        {/* The open action rides OUTSIDE the header button (a button inside a
+            button is invalid HTML) and AFTER the body sibling, so the sticky
+            header's `button[aria-expanded] + div` body contract survives; the
+            sheet pins it to the block's row end instead. A click never
+            reaches the header (siblings, not ancestors); stopPropagation
+            keeps the intent if the shape ever nests. */}
+        {onOpenFile !== undefined && (
+          <IconButton
+            size="sm"
+            className={css.fileOpen}
+            icon={<IconCodeOutlineRegular size={14} />}
+            label={t('changesViewOriginalFile')}
+            onClick={(event) => {
+              event.stopPropagation()
+              onOpenFile(openTargetOf(file))
+            }}
+          />
         )}
       </div>
     )

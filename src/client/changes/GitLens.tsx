@@ -34,7 +34,7 @@
  * included) and the paging position coherent. Only a real worktree/scope
  * switch (`clearDerived`) empties the surfaces.
  */
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import {
   Button, IconChevronRightOutlineRegular, IconCloseOutlineRegular, IconCodeOutlineRegular, IconCopyOutlineRegular,
   IconPlusOutlineRegular, IconSparkleRegular, IconTrashOutlineRegular, Menu, writeClipboard,
@@ -52,7 +52,8 @@ import {
   ConfirmDialog, IconButton, Notice, SectionHeader, StatusBadge, invalidateGitStatus, statusOfXY,
   useGitStatus, type GitFileStatus, type GitTone, type StatusTone,
 } from '../ui/index.ts'
-import { buildChangeTree, sumLineCounts, type ChangeDir, type ChangeFile, type ChangeNode } from './change-tree.ts'
+import { buildChangeTree, dirPathsOf, sumLineCounts, type ChangeDir, type ChangeFile, type ChangeNode } from './change-tree.ts'
+import type { LensControl } from './lens-control.ts'
 import diffCss from '../diff/diff.module.css'
 import css from './changes.module.css'
 
@@ -410,7 +411,14 @@ export interface GitLensProps {
   ctx?: Context
 }
 
-export function GitLens(props: GitLensProps) {
+/**
+ * The Git lens: the repository's own view, plus the fold handle the tab
+ * header's 「全部展开」/「全部收起」 drives — expand clears the collapsed set
+ * (every directory row of both groups opens, exactly the born state),
+ * collapse fills it with every directory row of BOTH trees, keyed per group
+ * (`s:`/`u:`) so the two never fight over one row.
+ */
+export const GitLens = forwardRef<LensControl, GitLensProps>(function GitLens(props, ref) {
   const { scope, onOpenFile, onPreview, selectedRef, visible, refreshTick = 0, ctx, pathFilter = null, onPathFilterChange } = props
   /** The filter at call time: the refresh chain's callbacks are stable, so
    *  they read the CURRENT filter through this ref instead of closing over
@@ -1047,6 +1055,23 @@ export function GitLens(props: GitLensProps) {
     })
   }, [])
 
+  // The tab header's 全部展开/全部收起: recreated per render, so the handle
+  // always closes over the CURRENT trees (collapse-all collects the real
+  // directory rows of both groups — a compressed chain contributes its own
+  // row key, never the swallowed intermediates that have no row).
+  useImperativeHandle(ref, (): LensControl => ({
+    expandAll: (): void => { setCollapsed(new Set()) },
+    collapseAll: (): void => {
+      const keys = new Set<string>()
+      for (const staged of [false, true]) {
+        for (const path of dirPathsOf(staged ? stagedTree : unstagedTree)) {
+          keys.add(`${staged ? 's' : 'u'}:${path}`)
+        }
+      }
+      setCollapsed(keys)
+    },
+  }))
+
   /** The latest-value holder for the actions a memoized row calls: a row's
    *  props must keep their identity across polls, so these callbacks read the
    *  current closures through the ref instead of closing over them. */
@@ -1541,4 +1566,4 @@ export function GitLens(props: GitLensProps) {
       />
     </div>
   )
-}
+})

@@ -599,6 +599,70 @@ describe('ChangesTab', () => {
     expect(groupHeader).toContain('top: 0')
   })
 
+  it('drives the mounted lens from the header 全部展开/全部收起 pair', async () => {
+    mockGit([
+      { path: 'src/a.ts', xy: ' M' },
+      { path: 'src/deep/b.ts', xy: ' M' },
+    ])
+    const ops = vi.spyOn(api, 'changesOps')
+      .mockResolvedValue({ events: [...writeEvents(1, 'src/client/a.ts')], lastSeq: 2 })
+
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root: Root = createRoot(container)
+    try {
+      mount(root)
+      await flushEffects()
+
+      // The header pair sits beside the refresh action, labeled for each way.
+      const expand = container.querySelector<HTMLButtonElement>(`button[aria-label="${t('changesExpandAll')}"]`)
+      const collapse = container.querySelector<HTMLButtonElement>(`button[aria-label="${t('changesCollapseAll')}"]`)
+      expect(expand).not.toBeNull()
+      expect(collapse).not.toBeNull()
+      expect(expand!.getAttribute('title')).toBe(t('changesExpandAll'))
+
+      // Git lens (default): 全部收起 folds every directory row of the tree…
+      const dir = container.querySelector<HTMLButtonElement>('button[data-dir="src"]')
+      expect(dir).not.toBeNull()
+      expect(dir!.getAttribute('aria-expanded')).toBe('true')
+      await act(async () => { collapse!.click() })
+      await flushEffects()
+      expect(container.querySelector<HTMLButtonElement>('button[data-dir="src"]')!.getAttribute('aria-expanded')).toBe('false')
+      expect(container.querySelector('button[data-path="src/a.ts"]')).toBeNull()
+
+      // …and 全部展开 opens them back up.
+      await act(async () => { expand!.click() })
+      await flushEffects()
+      expect(container.querySelector<HTMLButtonElement>('button[data-dir="src"]')!.getAttribute('aria-expanded')).toBe('true')
+      expect(container.querySelector('button[data-path="src/a.ts"]')).not.toBeNull()
+
+      // The handle re-arms on a lens switch: the session lens gets the next
+      // commands. 全部收起 folds its directories AND every disclosed file
+      // history; 全部展开 opens the directories back (the op histories stay
+      // folded — that axis only ever opens by its own header).
+      const sessionTab = lensTab(container, t('changesSessionLens'))
+      await act(async () => { sessionTab!.click() })
+      await flushEffects()
+      expect(ops).toHaveBeenCalled()
+      await expandFileGroup(container, 'src/client/a.ts')
+      expect(container.querySelector('button[data-op-kind]')).not.toBeNull()
+
+      await act(async () => { collapse!.click() })
+      await flushEffects()
+      expect(container.querySelector('button[data-dir-group="src/client"]')!.getAttribute('aria-expanded')).toBe('false')
+      expect(container.querySelector('button[data-file-head="src/client/a.ts"]')).toBeNull()
+
+      await act(async () => { expand!.click() })
+      await flushEffects()
+      expect(container.querySelector('button[data-dir-group="src/client"]')!.getAttribute('aria-expanded')).toBe('true')
+      expect(container.querySelector('button[data-file-head="src/client/a.ts"]')).not.toBeNull()
+      expect(container.querySelector('button[data-op-kind]')).toBeNull()
+    } finally {
+      act(() => { root.unmount() })
+      container.remove()
+    }
+  })
+
   it('polls the session events while an event-backed lens is on screen only', async () => {
     vi.useFakeTimers()
     mockGit([])

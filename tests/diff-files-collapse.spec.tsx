@@ -4,7 +4,12 @@
  * viewport (the repo's own narrow breakpoint, innerWidth < 768) hands the
  * renderer `allCollapsedByDefault` so a commit patch opens as an all-folded
  * file list — one tap per header. Worktree diffs and the fold-independent
- * defaults are pinned here too. The git api is mocked: no host, no binary.
+ * defaults are pinned here too, plus the round-diff lens's two opt-ins: the
+ * trailing 「查看原文件」 header action (callbacks the display path, the new
+ * side of a rename, the old side of a deletion — and never toggles the
+ * header) and the `foldCommand` open-all/close-all instruction (a changed
+ * seq replays, the same seq does not). The git api is mocked: no host, no
+ * binary.
  */
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -17,6 +22,7 @@ import { DiffTab } from '../src/client/DiffTab.tsx'
 import { api, type SessionScope } from '../src/client/api.ts'
 import type { Context } from '../src/context-types.ts'
 import type { SidebarDiffRef } from '../src/client/state.ts'
+import { t } from '../src/client/locales.ts'
 
 import { renderRoot, setupReactAct } from './test-utils.ts'
 setupReactAct()
@@ -118,6 +124,109 @@ describe('DiffFiles allCollapsedByDefault', () => {
     rerender(createElement(DiffFiles, { diff, allCollapsedByDefault: true }))
     expect(headersOf(container).map(header => header.getAttribute('aria-expanded'))).toEqual(['false', 'false', 'false'])
     rendered.unmount()
+  })
+})
+
+describe('DiffFiles onOpenFile (the round-diff lens opt-in)', () => {
+  it('renders a row-end open action per header that callbacks the path without toggling the fold', () => {
+    const opened: string[] = []
+    const rendered = renderRoot(createElement(DiffFiles, { diff, onOpenFile: (path) => { opened.push(path) } }))
+    const { container } = rendered
+    try {
+      // One action per file header, labeled 「查看原文件」.
+      const actions = [...container.querySelectorAll<HTMLButtonElement>(`button[aria-label="${t('changesViewOriginalFile')}"]`)]
+      expect(actions).toHaveLength(3)
+
+      // Clicking it does NOT toggle its header: the source file stays open.
+      act(() => { actions[0]!.click() })
+      expect(opened).toEqual(['src/a.ts'])
+      expect(headersOf(container).map(header => header.getAttribute('aria-expanded'))).toEqual(['true', 'false', 'false'])
+      expect(container.textContent).toContain('new-a')
+
+      act(() => { actions[1]!.click() })
+      expect(opened).toEqual(['src/a.ts', 'tests/b.spec.ts'])
+      expect(headersOf(container)[1]!.getAttribute('aria-expanded')).toBe('false')
+
+      // Without the prop nothing renders (the other callers' zero-change).
+      const bare = renderRoot(createElement(DiffFiles, { diff }))
+      try {
+        expect(bare.container.querySelectorAll('button[aria-pressed]')).toHaveLength(0)
+        expect(bare.container.querySelectorAll(`button[aria-label="${t('changesViewOriginalFile')}"]`)).toHaveLength(0)
+      } finally {
+        bare.unmount()
+      }
+    } finally {
+      rendered.unmount()
+    }
+  })
+
+  it('callbacks the new side of a rename and the old side of a deletion', () => {
+    const renamePatch = [
+      'diff --git a/src/old.ts b/src/renamed.ts',
+      'similarity index 100%',
+      'rename from src/old.ts',
+      'rename to src/renamed.ts',
+    ].join('\n')
+    const deletePatch = [
+      'diff --git a/src/gone.ts b/src/gone.ts',
+      'deleted file mode 100644',
+      '--- a/src/gone.ts',
+      '+++ /dev/null',
+      '@@ -1 +0,0 @@',
+      '-bye',
+    ].join('\n')
+    const opened: string[] = []
+    const rendered = renderRoot(createElement(DiffFiles, {
+      diff: `${renamePatch}\n${deletePatch}`,
+      onOpenFile: (path) => { opened.push(path) },
+    }))
+    try {
+      const actions = [...rendered.container.querySelectorAll<HTMLButtonElement>(`button[aria-label="${t('changesViewOriginalFile')}"]`)]
+      expect(actions).toHaveLength(2)
+      act(() => { actions[0]!.click() })
+      act(() => { actions[1]!.click() })
+      expect(opened).toEqual(['src/renamed.ts', 'src/gone.ts'])
+    } finally {
+      rendered.unmount()
+    }
+  })
+})
+
+describe('DiffFiles foldCommand (the open-all/close-all instruction)', () => {
+  it('expands and collapses every header on a changed seq and ignores a repeated one', () => {
+    const rendered = renderRoot(createElement(DiffFiles, { diff, foldCommand: { mode: 'collapse', seq: 0 } }))
+    const { container, rerender } = rendered
+    try {
+      // seq 0 = never asked: the source-open defaults stand.
+      expect(headersOf(container).map(header => header.getAttribute('aria-expanded'))).toEqual(['true', 'false', 'false'])
+
+      // 全部展开: every expandable header opens (a manual fold included).
+      rerender(createElement(DiffFiles, { diff, foldCommand: { mode: 'expand', seq: 1 } }))
+      expect(headersOf(container).map(header => header.getAttribute('aria-expanded'))).toEqual(['true', 'true', 'true'])
+      expect(container.textContent).toContain('new-doc')
+
+      // A re-render carrying the SAME command changes nothing.
+      rerender(createElement(DiffFiles, { diff, foldCommand: { mode: 'expand', seq: 1 } }))
+      expect(headersOf(container).map(header => header.getAttribute('aria-expanded'))).toEqual(['true', 'true', 'true'])
+
+      // A manual tap survives, then 全部收起 closes every header.
+      act(() => { headersOf(container)[0]!.click() })
+      expect(headersOf(container)[0]!.getAttribute('aria-expanded')).toBe('false')
+      rerender(createElement(DiffFiles, { diff, foldCommand: { mode: 'collapse', seq: 2 } }))
+      expect(headersOf(container).map(header => header.getAttribute('aria-expanded'))).toEqual(['false', 'false', 'false'])
+      expect(container.textContent).not.toContain('new-a')
+    } finally {
+      rendered.unmount()
+    }
+  })
+
+  it('leaves a caller without a command untouched', () => {
+    const rendered = renderRoot(createElement(DiffFiles, { diff }))
+    try {
+      expect(headersOf(rendered.container).map(header => header.getAttribute('aria-expanded'))).toEqual(['true', 'false', 'false'])
+    } finally {
+      rendered.unmount()
+    }
   })
 })
 

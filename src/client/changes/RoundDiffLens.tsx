@@ -5,11 +5,17 @@
  * together, A/M/D/R all inside the same patch — instead of the tab's bottom
  * preview pane. The patch renders through the shared {@link DiffFiles}
  * (per-file collapsible headers + DiffRows), and a compact summary band (one
- * M/A/D/R badge per file, parsed from the SAME patch via {@link parseDiffFiles}
- * — no second git read) tops the list. Each file section's body scrolls
- * INSIDE its group (the `.rounddiffList` cap in changes.module.css, hooked
- * onto DiffFiles' own `button[aria-expanded]` + next-sibling body) while the
- * header sticks, so one huge file cannot push the rest of the round away.
+ * directory TREE over the patch's files — {@link buildRoundDiffTree}, the
+ * session lens's shape, directories default-expanded with the fold tracked
+ * as the COLLAPSED set) tops the patches. Each summary row carries a
+ * 「查看原文件」 action: a file row opens the file in the sidebar (the tab's
+ * `onOpenFile`, resolved against the round's worktree root — the patch names
+ * repo-relative paths), a directory row lands on the plugin's 「文件」 page
+ * with the folder revealed ({@link activateFilesPage}, the conversation
+ * folder-link landing). Each file section's body scrolls INSIDE its group
+ * (the `.rounddiffList` cap in changes.module.css, hooked onto DiffFiles'
+ * own `button[aria-expanded]` + next-sibling body) while the header sticks,
+ * so one huge file cannot push the rest of the round away.
  *
  * "This round" is EXACTLY the round-commits lens' boundary: the event
  * window's earliest event time with a one-minute slack; the baseline comes
@@ -17,15 +23,25 @@
  * tree when every commit landed inside the round, and the empty state for a
  * repository without commits.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  IconChevronRightOutlineRegular, IconCodeOutlineRegular, IconFolderOpenRegular,
+} from '@deepseek-ai/dsh-client-ui-primitives'
+import type { Context } from '../../context-types.ts'
 import type { GitLogEntry, GitWorktree, SessionScope } from '../api.ts'
 import { api } from '../api.ts'
 import { usePolling } from '../use-polling.ts'
+import { resolveSidebarPath } from '../paths.ts'
 import { t } from '../locales.ts'
-import { Notice, SectionHeader, StatusBadge } from '../ui/index.ts'
+import type { SidebarStore } from '../state.ts'
+import { IconButton, Notice, SectionHeader, StatusBadge } from '../ui/index.ts'
+import { builtinFileIcon, builtinFolderIcon } from '../file-icons.tsx'
+import { activateFilesPage } from '../sidebar-folder.ts'
 import { commitFileTone, parseDiffFiles, type CommitFile } from './round-commits.ts'
 import { EMPTY_TREE_HASH, pickRoundDiffBase } from './round-diff.ts'
-import { DiffFiles } from '../diff/DiffFiles.tsx'
+import { buildRoundDiffTree, dirPathsOf, type RoundDiffDir, type RoundDiffFile } from './round-diff-tree.ts'
+import type { LensControl } from './lens-control.ts'
+import { DiffFiles, type DiffFoldCommand } from '../diff/DiffFiles.tsx'
 import css from './changes.module.css'
 
 /** How many log commits the baseline scan sees: the recent window, not
@@ -40,6 +56,13 @@ const ROUND_DIFF_SLACK_MS = 60_000
 
 export interface RoundDiffLensProps {
   scope: SessionScope
+  /** The tab's context — the folder landing's 「文件」 page activation. */
+  ctx: Context
+  /** The plugin store — the reveal-highlight set's home (the folder landing). */
+  store: SidebarStore
+  /** Open one file in the sidebar (the tab's editor open; the path it
+   *  receives is already resolved to its worktree-absolute form). */
+  onOpenFile: (path: string) => void
   /** Only fetch while the tab is actually on screen. The lens MOUNTS only
    *  while `lens === 'rounddiff'` (the tab renders it conditionally), so
    *  `visible` alone is the whole gate — the commits lens' arrangement. */
@@ -50,19 +73,38 @@ export interface RoundDiffLensProps {
   roundStart: number
 }
 
-export function RoundDiffLens({ scope, visible, refreshTick = 0, roundStart }: RoundDiffLensProps) {
+/**
+ * The round-diff lens: the summary tree, the inline patches, and the fold
+ * handle the tab header's 「全部展开」/「全部收起」 drive (summary directories
+ * AND the per-file patch folds — one command reaches both).
+ */
+export const RoundDiffLens = forwardRef<LensControl, RoundDiffLensProps>(function RoundDiffLens(
+  { scope, ctx, store, onOpenFile, visible, refreshTick = 0, roundStart },
+  ref,
+) {
   // Granular scope fields: the scope object's identity churns, only its
   // sessionId / cwd fields gate the fetch target.
   const scopeSessionId = scope.sessionId
   const scopeCwd = scope.cwd
   /** The one-shot patch (null until the first pass) and its parsed file rows
-   *  — the summary band's M/A/D/R evidence, parsed from the SAME text. */
+   *  — the summary tree's leaves, parsed from the SAME text. */
   const [diff, setDiff] = useState<string | null>(null)
   const [files, setFiles] = useState<readonly CommitFile[]>([])
   /** False until the first fetch settled: distinguishes "loading" from "empty". */
   const [loaded, setLoaded] = useState(false)
   const [failed, setFailed] = useState(false)
   const [isRepo, setIsRepo] = useState(true)
+  /** The root the patch's repo-relative paths resolve against: the round's
+   *  worktree (the inventory's current checkout, else its first entry). */
+  const [worktreeRoot, setWorktreeRoot] = useState<string | undefined>(undefined)
+  /** The summary directories the user FOLDED (default: none — the tree starts
+   *  fully expanded). An absence-set rather than an open-set on purpose, the
+   *  session lens's own convention: a directory that first appears in a
+   *  later poll tick is not in it, so new work arrives expanded. */
+  const [collapsedDirs, setCollapsedDirs] = useState<ReadonlySet<string>>(() => new Set())
+  /** The latest open-all/close-all instruction for the patch headers (the
+   *  monotonic `seq` is what makes repeated commands replayable). */
+  const [foldCommand, setFoldCommand] = useState<DiffFoldCommand | undefined>(undefined)
   /** Bumped on scope change: a late answer of the previous scope never lands. */
   const generation = useRef(0)
 
@@ -90,6 +132,10 @@ export function RoundDiffLens({ scope, visible, refreshTick = 0, roundStart }: R
     ])
     if (stale()) return
     setIsRepo(listed.length > 0)
+    // The inventory's current checkout is the root the patch's repo-relative
+    // paths open against (GitLens's resolution order, minus the manual
+    // checkout pick this lens does not offer).
+    setWorktreeRoot(listed.length > 0 ? listed.find(entry => entry.current)?.path ?? listed[0]?.path : undefined)
     if (listed.length === 0 || !logSettled.ok) {
       setFailed(!logSettled.ok)
       setLoaded(true)
@@ -127,6 +173,9 @@ export function RoundDiffLens({ scope, visible, refreshTick = 0, roundStart }: R
     setFiles([])
     setLoaded(false)
     setFailed(false)
+    setWorktreeRoot(undefined)
+    setCollapsedDirs(new Set())
+    setFoldCommand(undefined)
   }, [scopeSessionId, scopeCwd])
 
   // Load on mount, on every visibility rise, and whenever the scope changed
@@ -159,6 +208,122 @@ export function RoundDiffLens({ scope, visible, refreshTick = 0, roundStart }: R
     void load(new AbortController().signal)
   }, [roundStart, load])
 
+  /** The summary tree over the parsed patch files (one fold per patch). */
+  const tree = useMemo(() => buildRoundDiffTree(files), [files])
+
+  /** Resolve a patch-relative path against the round's worktree root (an
+   *  absolute path passes through untouched), or the session cwd before the
+   *  inventory answered — the open actions are best-effort, never gated on
+   *  the listing having landed. */
+  const resolveAgainstRoot = useCallback((path: string): string =>
+    resolveSidebarPath(worktreeRoot ?? scopeCwd, path), [worktreeRoot, scopeCwd])
+
+  /** Open one summary file in the sidebar (the tab's editor open). */
+  const openFile = useCallback((path: string): void => {
+    onOpenFile(resolveAgainstRoot(path))
+  }, [onOpenFile, resolveAgainstRoot])
+
+  /** Land one summary directory on the 「文件」 page with the folder revealed
+   *  (the conversation folder-link landing, reused verbatim). */
+  const openDir = useCallback((path: string): void => {
+    activateFilesPage(ctx, store, scopeSessionId, resolveAgainstRoot(path))
+  }, [ctx, store, scopeSessionId, resolveAgainstRoot])
+
+  const toggleDir = useCallback((dirPath: string): void => {
+    setCollapsedDirs((current) => {
+      const next = new Set(current)
+      if (next.has(dirPath)) next.delete(dirPath)
+      else next.add(dirPath)
+      return next
+    })
+  }, [])
+
+  /** Issue one open-all/close-all instruction to BOTH fold axes: the summary
+   *  directories directly, the patch headers through the command's seq (the
+   *  header state lives inside DiffFiles). */
+  const foldPatches = useCallback((mode: DiffFoldCommand['mode']): void => {
+    setFoldCommand(previous => ({ mode, seq: (previous?.seq ?? 0) + 1 }))
+  }, [])
+
+  // The tab header's 全部展开/全部收起: recreated per render, so the handle
+  // always closes over the CURRENT tree (collapse-all needs its directory
+  // rows) and the current command counter.
+  useImperativeHandle(ref, (): LensControl => ({
+    expandAll: (): void => {
+      setCollapsedDirs(new Set())
+      foldPatches('expand')
+    },
+    collapseAll: (): void => {
+      setCollapsedDirs(new Set(dirPathsOf(tree)))
+      foldPatches('collapse')
+    },
+  }))
+
+  /** One file leaf: the status badge + the file's own name (the full path
+   *  rides the title) + the trailing 「查看原文件」 action. */
+  const renderFile = (node: RoundDiffFile): ReactNode => (
+    <div key={node.path} className={css.commitFile} data-round-file={node.path}>
+      <StatusBadge tone={commitFileTone(node.status)} title={node.path}>{node.status}</StatusBadge>
+      <span className={css.rowIcon} aria-hidden="true">{builtinFileIcon(node.path, 14)}</span>
+      <span className={css.commitFilePath} title={node.path}>{node.name}</span>
+      <IconButton
+        size="sm"
+        className={css.rowAction}
+        icon={<IconCodeOutlineRegular size={14} />}
+        label={t('changesViewOriginalFile')}
+        title={node.path}
+        onClick={(event) => {
+          event.stopPropagation()
+          openFile(node.path)
+        }}
+      />
+    </div>
+  )
+
+  /** One directory row plus its (default-expanded) subtree: the session
+   *  lens's row shape, plus the same trailing action — a directory lands on
+   *  the 「文件」 page with the folder revealed. */
+  const renderDir = (node: RoundDiffDir): ReactNode => {
+    const open = !collapsedDirs.has(node.path)
+    return (
+      <div key={`dir:${node.path}`}>
+        <div className={css.row}>
+          <button
+            type="button"
+            className={css.dirRow}
+            data-round-dir={node.path}
+            aria-expanded={open}
+            title={node.path}
+            onClick={() => { toggleDir(node.path) }}
+          >
+            <span className={css.chevron} data-open={open ? 'true' : undefined} aria-hidden="true">
+              <IconChevronRightOutlineRegular size={12} />
+            </span>
+            <span className={css.rowIcon} aria-hidden="true">{builtinFolderIcon(open, 14)}</span>
+            <span className={css.dirName}>{node.name}</span>
+            <span className={css.countPill} data-count={node.files}>{node.files}</span>
+          </button>
+          <IconButton
+            size="sm"
+            className={css.rowAction}
+            icon={<IconFolderOpenRegular size={14} />}
+            label={t('changesViewOriginalFile')}
+            title={node.path}
+            onClick={(event) => {
+              event.stopPropagation()
+              openDir(node.path)
+            }}
+          />
+        </div>
+        {open && (
+          <div className={css.treeChildren}>
+            {node.children.map(child => (child.kind === 'dir' ? renderDir(child) : renderFile(child)))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   const empty = loaded && !failed && isRepo && files.length === 0
 
   return (
@@ -172,17 +337,14 @@ export function RoundDiffLens({ scope, visible, refreshTick = 0, roundStart }: R
           <>
             <div data-section="files">
               <SectionHeader label={t('changesRoundDiffSection')} count={files.length} />
-              {files.map(file => (
-                <div key={`${file.status}:${file.path}`} className={css.commitFile} data-round-file={file.path}>
-                  <StatusBadge tone={commitFileTone(file.status)} title={file.path}>{file.status}</StatusBadge>
-                  <span className={css.commitFilePath} title={file.path}>{file.path}</span>
-                </div>
-              ))}
+              {tree.map(node => (node.kind === 'dir' ? renderDir(node) : renderFile(node)))}
             </div>
-            {diff !== null && <DiffFiles diff={diff} />}
+            {diff !== null && (
+              <DiffFiles diff={diff} onOpenFile={openFile} foldCommand={foldCommand} />
+            )}
           </>
         )}
       </div>
     </div>
   )
-}
+})

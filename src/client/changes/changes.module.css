@@ -664,6 +664,15 @@
 .commitFileCount { flex: none; font: var(--dsw-font-xxxs-11); color: var(--dsw-alias-label-tertiary); white-space: nowrap; }
 .commitFileEmpty { padding: 2px 4px; font-size: 11px; color: var(--dsw-alias-label-tertiary); }
 
+/* The round-diff summary tree reuses `.commitFile` for its file leaves and
+   gives them the git tree's hover-reveal discipline for the trailing 「查看
+   原文件」 action (directory rows get it from the `.row .rowAction` rule
+   above, their container being a `.row`). */
+.commitFile:not(:hover):not(:focus-within) .rowAction { opacity: 0; }
+@media (hover: none) {
+  .commitFile:not(:hover):not(:focus-within) .rowAction { opacity: 1; }
+}
+
 /* ── Round-diff lens (this round's changes as inline patches) ──────────── */
 
 /* Same frame as the other lenses: a fixed column with ONE outer scroll body
@@ -701,6 +710,23 @@
 .rounddiffList button[aria-expanded] + div {
   max-height: 360px;
   overflow-y: auto;
+}
+
+/* The summary TREE's directory rows carry aria-expanded too (they disclose
+   their subtree), but they are rows, not patch headers: the stick-and-cap
+   rules above key on `button[aria-expanded]` alone, so undo the sticky header
+   treatment for a row's own disclosure button — it must keep the `.row` hover
+   fill and scroll away with its subtree, exactly like the git/session trees'
+   rows. (The cap cannot reach a row: the row's next sibling is its open
+   action, never a div.) */
+.rounddiffList .row button[aria-expanded] {
+  position: static;
+  z-index: auto;
+  background: transparent;
+}
+.rounddiffList .row button[aria-expanded]:hover:not(:disabled),
+.rounddiffList .row button[aria-expanded]:focus-visible:not(:disabled) {
+  background: transparent;
 }
 
 /* ── Shared preview pane ───────────────────────────────────────────────── */

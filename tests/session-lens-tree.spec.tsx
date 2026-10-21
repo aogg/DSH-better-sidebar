@@ -8,13 +8,15 @@
  * reads as one `a/b/c` row, the file header names the file only (the full
  * path rides the title), the FOLDED header badges every distinct op kind the
  * group contains (edit→write→read, deduplicated), a preview selection
- * re-opens its own collapsed chain, and a kind filter removes emptied
- * branches whole.
+ * re-opens its own collapsed chain, a kind filter removes emptied branches
+ * whole, and the fold handle (the tab header's 全部展开/全部收起) opens every
+ * directory row, or folds every row AND every disclosed file history.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { createElement } from 'react'
+import { createElement, createRef, type Ref } from 'react'
 import { act } from 'react-dom/test-utils'
 import { SessionLens } from '../src/client/changes/SessionLens.tsx'
+import type { LensControl } from '../src/client/changes/lens-control.ts'
 import type { FileOp, FileOpKind } from '../src/client/changes/ops.ts'
 import { t } from '../src/client/locales.ts'
 import { renderRoot, setupReactAct, type RenderedRoot } from './test-utils.ts'
@@ -30,11 +32,12 @@ function op(kind: FileOpKind, path: string, time = 1_700_000_000_000): FileOp {
 }
 
 /** Render the lens over `ops` (newest first) and expose the preview spy. */
-function renderLens(ops: readonly FileOp[], selectedCallId: string | null = null): RenderedRoot & {
+function renderLens(ops: readonly FileOp[], selectedCallId: string | null = null, ref?: Ref<LensControl>): RenderedRoot & {
   onPreview: ReturnType<typeof vi.fn>
 } {
   const onPreview = vi.fn()
   const view = renderRoot(createElement(SessionLens, {
+    ref,
     ops,
     loadError: false,
     onPreview,
@@ -234,6 +237,38 @@ describe('SessionLens directory tree', () => {
       click(chip(view.container, t('changesFilterAll'))!)
       expect(dirRow(view.container, 'src')).not.toBeNull()
       expect(dirRow(view.container, 'docs')).not.toBeNull()
+    } finally {
+      view.unmount()
+    }
+  })
+
+  it('folds every directory row AND every disclosed file history from the fold handle, then reopens the rows', () => {
+    const lensRef = createRef<LensControl>()
+    const view = renderLens(
+      [op('write', 'src/a.ts'), op('read', 'docs/guide.md')],
+      null,
+      lensRef,
+    )
+    try {
+      // Disclose one file history first, so collapse-all has something to
+      // fold beyond the directory rows.
+      click(fileHead(view.container, 'src/a.ts')!)
+      expect(view.container.querySelector('button[data-op-kind]')).not.toBeNull()
+
+      // 全部收起: every directory row folds (the compressed chain
+      // contributes its own row path) and every disclosed history folds too.
+      act(() => { lensRef.current!.collapseAll() })
+      expect(dirRow(view.container, 'src')!.getAttribute('aria-expanded')).toBe('false')
+      expect(dirRow(view.container, 'docs')!.getAttribute('aria-expanded')).toBe('false')
+      expect(fileHead(view.container, 'src/a.ts')).toBeNull()
+      expect(view.container.querySelector('button[data-op-kind]')).toBeNull()
+
+      // 全部展开: every directory row is back; the op histories stay folded
+      // (that axis opens by its own header, never by the row sweep).
+      act(() => { lensRef.current!.expandAll() })
+      expect(dirRow(view.container, 'src')!.getAttribute('aria-expanded')).toBe('true')
+      expect(dirRow(view.container, 'docs')!.getAttribute('aria-expanded')).toBe('true')
+      expect(fileHead(view.container, 'src/a.ts')!.getAttribute('aria-expanded')).toBe('false')
     } finally {
       view.unmount()
     }

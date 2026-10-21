@@ -6,9 +6,10 @@
  * truth: every file the model read, wrote, or edited) and the round diff
  * (the whole round's changes as inline patches against the newest pre-round
  * commit, see {@link RoundDiffLens}). A 36px header carries the host
- * {@link SegmentedControl} and the current lens's refresh action; three
- * lenses preview their selections in a shared resizable bottom pane
- * ({@link DiffPane}) — the round diff lays its patches out inline instead —
+ * {@link SegmentedControl}, the 全部展开/全部收起 pair (driving the mounted
+ * lens's {@link LensControl} fold handle) and the current lens's refresh
+ * action; three lenses preview their selections in a shared resizable bottom
+ * pane ({@link DiffPane}) — the round diff lays its patches out inline instead —
  * and git targets expand into the dedicated diff tab docked in the
  * workbench's diff pane. The active lens and the pane height persist in the
  * tab's meta, so the tab reopens exactly where it was left.
@@ -22,7 +23,9 @@
  * the session event log (and the shared git-status store owns its own poller).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { IconRefreshOutlineRegular, SegmentedControl } from '@deepseek-ai/dsh-client-ui-primitives'
+import {
+  IconChevronsUpDownOutlineRegular, IconRefreshOutlineRegular, SegmentedControl,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarSessionEvent } from '../../context-types.ts'
 import type { TabComponentProps } from '../service.ts'
 import { t } from '../locales.ts'
@@ -37,6 +40,7 @@ import { extractFileOps, knownContentBefore, type FileOp } from './ops.ts'
 import { extractGitAdds, type GitAddRecord } from './round-commits.ts'
 import { RoundCommitsLens } from './RoundCommitsLens.tsx'
 import { RoundDiffLens } from './RoundDiffLens.tsx'
+import type { LensControl } from './lens-control.ts'
 import css from './changes.module.css'
 
 /** The default preview pane height (px) before the first drag. */
@@ -145,6 +149,15 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
   /** The header refresh action: BOTH git-backed lenses reload through this
    *  tick (each lens owns its own queue; an unmounted lens ignores it). */
   const [refreshTick, setRefreshTick] = useState(0)
+  /**
+   * The mounted lens's fold handle ({@link LensControl}): the header's
+   * 「全部展开」/「全部收起」 buttons call straight into whichever lens is on
+   * screen. Every fold axis stays INSIDE its lens — the tab only forwards the
+   * commands. React re-arms the ref on each lens switch (and detaches it when
+   * a lens unmounts), so a click at worst reads null and no-ops; it can never
+   * fold a lens that is not on screen.
+   */
+  const lensControl = useRef<LensControl | null>(null)
 
   // ── Session-event accumulation: one catch-up pull when the tab becomes
   //    visible, then a 2.5s delta poll while the SESSION lens is on screen.
@@ -368,6 +381,18 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
           label={t('changes')}
         />
         <IconButton
+          icon={<IconChevronsUpDownOutlineRegular />}
+          label={t('changesExpandAll')}
+          title={t('changesExpandAll')}
+          onClick={() => { lensControl.current?.expandAll() }}
+        />
+        <IconButton
+          icon={<IconChevronsUpDownOutlineRegular />}
+          label={t('changesCollapseAll')}
+          title={t('changesCollapseAll')}
+          onClick={() => { lensControl.current?.collapseAll() }}
+        />
+        <IconButton
           className={css.headAction}
           icon={<IconRefreshOutlineRegular />}
           label={t('refresh')}
@@ -377,6 +402,7 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
       {lens === 'git'
         ? (
           <GitLens
+            ref={lensControl}
             ctx={ctx}
             scope={scope}
             store={store}
@@ -392,6 +418,7 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
         : lens === 'commits'
           ? (
             <RoundCommitsLens
+              ref={lensControl}
               scope={scope}
               visible={visible}
               refreshTick={refreshTick}
@@ -404,14 +431,19 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
           : lens === 'rounddiff'
             ? (
               <RoundDiffLens
+                ref={lensControl}
+                ctx={ctx}
+                store={store}
                 scope={scope}
                 visible={visible}
                 refreshTick={refreshTick}
                 roundStart={roundStart}
+                onOpenFile={onOpenFile ?? (() => { /* no-op */ })}
               />
             )
             : (
               <SessionLens
+                ref={lensControl}
                 ops={ops}
                 loadError={opsError && ops.length === 0}
                 onPreview={previewOp}

@@ -162,6 +162,25 @@ export function buildSessionTree(groups: ReadonlyMap<string, readonly FileOp[]>)
 }
 
 /**
+ * Every directory row path of one finished tree, depth-first in display
+ * order — exactly the `path`s the {@link SessionDir} rows carry, so 「全部收起」
+ * can fill the collapsed-set with real row keys (a compressed chain
+ * contributes its own row path, never the intermediate ones it swallowed:
+ * those have no row to fold).
+ * @param nodes - the tree's roots (any finished subtree works too).
+ * @returns the directory paths, parents before children.
+ */
+export function dirPathsOf(nodes: readonly SessionNode[]): string[] {
+  const paths: string[] = []
+  for (const node of nodes) {
+    if (node.kind !== 'dir') continue
+    paths.push(node.path)
+    paths.push(...dirPathsOf(node.children))
+  }
+  return paths
+}
+
+/**
  * The ancestor directory paths of one file path, shallowest first, normalized
  * the same way the tree's directory rows are — so the returned strings are
  * exactly the `path`s the tree's {@link SessionDir} rows carry, and a

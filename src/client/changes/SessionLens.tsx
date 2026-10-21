@@ -20,14 +20,15 @@
  * their real error text. The ops arrive pre-folded from the tab (which owns
  * the event poll); this component is purely presentational.
  */
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useState, type ReactNode } from 'react'
 import { IconChevronRightOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import { relativeTime, t } from '../locales.ts'
 import { builtinFileIcon, builtinFolderIcon } from '../file-icons.tsx'
 import { formatBytes } from '../diff/rows.ts'
 import { Chip, Notice, StatusBadge } from '../ui/index.ts'
 import { groupByFile, type FileOp, type FileOpKind } from './ops.ts'
-import { ancestorDirs, buildSessionTree, foldedKindsOf, type SessionDir, type SessionFile } from './session-tree.ts'
+import { ancestorDirs, buildSessionTree, dirPathsOf, foldedKindsOf, type SessionDir, type SessionFile } from './session-tree.ts'
+import type { LensControl } from './lens-control.ts'
 import css from './changes.module.css'
 
 /** The op-kind filter chips: 'all' or one concrete kind. */
@@ -47,7 +48,18 @@ export interface SessionLensProps {
   selectedCallId: string | null
 }
 
-export function SessionLens({ ops, loadError, onPreview, selectedCallId }: SessionLensProps) {
+/**
+ * The session lens: presentational, plus the fold handle the tab header's
+ * 「全部展开」/「全部收起」 drives — expand clears the collapsed set (every
+ * directory row opens, exactly the born state), collapse fills it with every
+ * directory row the tree carries AND folds every disclosed file history, so
+ * nothing stays open (a compression chain contributes its own row path via
+ * {@link dirPathsOf}, never the swallowed intermediates that have no row).
+ */
+export const SessionLens = forwardRef<LensControl, SessionLensProps>(function SessionLens(
+  { ops, loadError, onPreview, selectedCallId },
+  ref,
+) {
   const [filter, setFilter] = useState<OpFilter>('all')
   /** The files whose op history is EXPANDED (default: none — every group
    *  folds to its header summary). */
@@ -123,6 +135,19 @@ export function SessionLens({ ops, loadError, onPreview, selectedCallId }: Sessi
       return next
     })
   }
+
+  // The tab header's 全部展开/全部收起: recreated per render, so the handle
+  // always closes over the CURRENT tree (collapse-all needs its directory
+  // rows, real row paths included).
+  useImperativeHandle(ref, (): LensControl => ({
+    expandAll: (): void => {
+      setCollapsedDirs(new Set())
+    },
+    collapseAll: (): void => {
+      setCollapsedDirs(new Set(dirPathsOf(tree)))
+      setExpandedFiles(new Set())
+    },
+  }))
 
   /** One file row: the disclosure chevron + the file's artwork + its own NAME
    *  (the full path rides the title) + — only while folded — the summary rung
@@ -250,4 +275,4 @@ export function SessionLens({ ops, loadError, onPreview, selectedCallId }: Sessi
       </div>
     </div>
   )
-}
+})

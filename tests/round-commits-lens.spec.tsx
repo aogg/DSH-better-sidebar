@@ -9,10 +9,11 @@
  */
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createElement } from 'react'
+import { createElement, createRef, type Ref } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
 import { RoundCommitsLens } from '../src/client/changes/RoundCommitsLens.tsx'
+import type { LensControl } from '../src/client/changes/lens-control.ts'
 import { api, type GitLogEntry, type GitWorktree } from '../src/client/api.ts'
 import type { SidebarDiffRef } from '../src/client/state.ts'
 import { extractGitAdds } from '../src/client/changes/round-commits.ts'
@@ -44,6 +45,7 @@ async function renderLens(props: {
   adds: ReturnType<typeof extractGitAdds>
   roundStart?: number
   onPreview?: (ref: SidebarDiffRef) => void
+  ref?: Ref<LensControl>
 }): Promise<{ container: HTMLElement; previews: SidebarDiffRef[]; root: Root }> {
   const previews: SidebarDiffRef[] = []
   const container = document.createElement('div')
@@ -51,6 +53,7 @@ async function renderLens(props: {
   const root: Root = createRoot(container)
   act(() => {
     root.render(createElement(RoundCommitsLens, {
+      ref: props.ref,
       scope: { sessionId: 'session', cwd: MAIN },
       visible: true,
       adds: props.adds,
@@ -235,6 +238,51 @@ describe('RoundCommitsLens', () => {
     } finally {
       act(() => { desktop.root.unmount() })
       desktop.container.remove()
+    }
+  })
+
+  it('discloses every round commit from the fold handle, then folds them all back', async () => {
+    const HASH_FIRST = 'handle1'.padEnd(40, '0')
+    const HASH_SECOND = 'handle2'.padEnd(40, '0')
+    const HASH_BEFORE = 'handle0'.padEnd(40, '0')
+    const first = logEntry({
+      hashFull: HASH_FIRST,
+      subject: 'first commit',
+      files: [{ path: 'src/a.ts', status: 'M' }],
+    })
+    const second = logEntry({
+      hashFull: HASH_SECOND,
+      subject: 'second commit',
+      files: [{ path: 'src/b.ts', status: 'A' }],
+    })
+    // A pre-round commit must stay out of the handle's reach.
+    const before = logEntry({
+      hashFull: HASH_BEFORE,
+      subject: 'before the round',
+      date: new Date(NOW - 600_000).toISOString(),
+      files: [{ path: 'src/old.ts', status: 'M' }],
+    })
+    vi.spyOn(api, 'gitLog').mockResolvedValue([before, first, second])
+    const ref = createRef<LensControl>()
+
+    const { container, root } = await renderLens({ adds: [], ref })
+    try {
+      expect(container.querySelector('[data-commit-files]')).toBeNull()
+
+      // 全部展开: every ROUND commit's file list opens (the pre-round one
+      // does not — it is not part of the round window).
+      act(() => { ref.current!.expandAll() })
+      await act(async () => { await Promise.resolve() })
+      expect(container.querySelector(`[data-commit-files="${HASH_FIRST}"]`)).not.toBeNull()
+      expect(container.querySelector(`[data-commit-files="${HASH_SECOND}"]`)).not.toBeNull()
+      expect(container.querySelector(`[data-commit-files="${HASH_BEFORE}"]`)).toBeNull()
+
+      // 全部收起: back to the all-folded default.
+      act(() => { ref.current!.collapseAll() })
+      expect(container.querySelector('[data-commit-files]')).toBeNull()
+    } finally {
+      act(() => { root.unmount() })
+      container.remove()
     }
   })
 

@@ -146,6 +146,24 @@ export function buildChangeTree(entries: readonly GitStatusEntry[]): ChangeNode[
   return finishChildren(root)
 }
 
+/**
+ * Every directory row path of one group's finished tree, depth-first in
+ * display order — exactly the `path`s the {@link ChangeDir} rows carry. The
+ * caller prefixes the group's side (`s:`/`u:`) to form the fold-set keys, so
+ * 「全部收起」 fills the collapsed-set with the very keys the rows read.
+ * @param nodes - the tree's roots (any finished subtree works too).
+ * @returns the directory paths, parents before children.
+ */
+export function dirPathsOf(nodes: readonly ChangeNode[]): string[] {
+  const paths: string[] = []
+  for (const node of nodes) {
+    if (node.kind !== 'dir') continue
+    paths.push(node.path)
+    paths.push(...dirPathsOf(node.children))
+  }
+  return paths
+}
+
 /** One group's summed line counts, plus how many rows contributed them. */
 export interface ChangeLineTotals {
   additions: number

@@ -17,7 +17,7 @@
  * them lazily recovered from its own commit diff the first time the user
  * expands it (see {@link parseDiffFiles}) — every host version works.
  */
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { IconChevronRightOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { GitLogEntry, GitWorktree, SessionScope } from '../api.ts'
 import { api } from '../api.ts'
@@ -26,6 +26,7 @@ import { relativeTime, t } from '../locales.ts'
 import type { SidebarDiffRef } from '../state.ts'
 import { Notice, SectionHeader, StatusBadge } from '../ui/index.ts'
 import { addPathInCommit, commitFileTone, normalizeAddPath, parseDiffFiles, type CommitFile, type GitAddRecord } from './round-commits.ts'
+import type { LensControl } from './lens-control.ts'
 import css from './changes.module.css'
 
 /** How many commits one fetch asks for: the recent window, not eternity. */
@@ -60,7 +61,16 @@ export interface RoundCommitsLensProps {
 /** One row of the staged-uncommitted section: a path no round commit contains. */
 interface StagedRow { path: string }
 
-export function RoundCommitsLens({ scope, visible, refreshTick = 0, adds, roundStart, onPreview, selectedRef }: RoundCommitsLensProps) {
+/**
+ * The round-commits lens: the round's add trail, plus the fold handle the tab
+ * header's 「全部展开」/「全部收起」 drives — expand discloses every round
+ * commit's touched-file list (the lazy old-host recovery rides the same set
+ * and fetches on its own), collapse clears it.
+ */
+export const RoundCommitsLens = forwardRef<LensControl, RoundCommitsLensProps>(function RoundCommitsLens(
+  { scope, visible, refreshTick = 0, adds, roundStart, onPreview, selectedRef },
+  ref,
+) {
   const scopeSessionId = scope.sessionId
   const scopeCwd = scope.cwd
   const [entries, setEntries] = useState<GitLogEntry[]>([])
@@ -238,6 +248,14 @@ export function RoundCommitsLens({ scope, visible, refreshTick = 0, adds, roundS
     onPreview({ kind: 'commit', hash: entry.hash, hashFull: entry.hashFull, subject: entry.subject })
   }, [onPreview])
 
+  // The tab header's 全部展开/全部收起: recreated per render, so the handle
+  // always closes over the CURRENT round window (expand-all enrolls every
+  // round commit, whose lazy old-host recovery then follows on its own).
+  useImperativeHandle(ref, (): LensControl => ({
+    expandAll: (): void => { setExpanded(new Set(roundCommits.map(entry => entry.hashFull))) },
+    collapseAll: (): void => { setExpanded(new Set()) },
+  }))
+
   const empty = loaded && !failed && isRepo && adds.length === 0 && roundCommits.length === 0
 
   return (
@@ -286,7 +304,7 @@ export function RoundCommitsLens({ scope, visible, refreshTick = 0, adds, roundS
       </div>
     </div>
   )
-}
+})
 
 /** The touched-file list of one commit: the log's own answer, or the lazily
  *  recovered one (old host). Undefined while the recovery is still in flight. */
