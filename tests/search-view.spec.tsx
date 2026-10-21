@@ -209,7 +209,9 @@ describe('SearchView 分组渲染与打开', () => {
     expect(query).toBe('answer')
     expect(include).toEqual([])
     expect(exclude).toEqual([])
-    expect(prefExclude).toBeUndefined()
+    // The store's DEFAULT explorerExclude preference rides along (the same
+    // probe the tree and the name search carry).
+    expect(prefExclude).toEqual(['.DS_Store', 'Thumbs.db'])
     expect(match).toEqual({ caseSensitive: false, wholeWord: false, regex: false })
     expect(signal).toBeInstanceOf(AbortSignal)
     await flushResults()
