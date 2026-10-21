@@ -52,6 +52,9 @@ export interface SessionPushFrame {
    * cwd frames carry the answer when the host resolved one: the live root,
    * same value the `session.cwd` route returns. Absent (older host / failed
    * resolution) the frame is a bare invalidation — no answer to land.
+   * `history-seed` frames carry the PROJECT root instead (identical to
+   * `history.list`'s `project.cwd` — the client string-compares it to claim
+   * the frame).
    */
   cwd?: unknown
   root?: unknown
@@ -65,12 +68,9 @@ export interface SessionPushFrame {
    */
   records?: unknown
   /**
-   * `history-seed` frames carry the project root (identical to
-   * `history.list`'s `project.cwd` — the client string-compares it to claim
-   * the frame) and the scan state (`seeding: true` started, `false`
-   * finished). Absent on every other frame kind.
+   * `history-seed` frames carry the scan state: `true` = the project's seed
+   * scan started, `false` = it finished. Absent on every other frame kind.
    */
-  cwd?: unknown
   seeding?: unknown
 }
 
