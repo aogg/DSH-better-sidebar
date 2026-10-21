@@ -38,10 +38,11 @@ vi.mock('../src/client/api.ts', () => ({
     changesOps: (...args: unknown[]) => changesOps(...args),
     mediaUrl: () => '',
     // The folder-window case renders the tree dock: park its git-badge poll
-    // and answer its level loads with an empty level (neither matters here —
-    // the folder window only has to mount without a turn subscription).
+    // and answer its level loads with an EMPTY level list (neither matters
+    // here — the folder window only has to mount without a turn
+    // subscription). `levels` is the batched array FileTree folds.
     gitStatus: () => new Promise(() => {}),
-    fsTrees: async () => ({ levels: {}, truncated: false }),
+    fsTrees: async () => ({ levels: [] }),
   },
 }))
 

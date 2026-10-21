@@ -9,8 +9,13 @@
  * unsubscribe), the frame filter (only `turn` frames of THAT session reach a
  * callback — phase/cwd/history on the same wire stay invisible) and that a
  * fresh subscription after the last one left opens a NEW connection.
+ *
+ * The hub map lives at MODULE level, so every test MUST dispose every
+ * subscription it opened (`track` + afterEach below) — a leftover subscriber
+ * would keep the session's hub alive and the next test's subscribe would
+ * silently join it instead of opening a fresh connection.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /** The connections `connectSessionPush` was asked to open, in order. */
 interface CapturedConnection {
@@ -32,9 +37,26 @@ vi.mock('../src/client/session-push.ts', () => ({
 
 import { subscribeSessionTurns } from '../src/client/turn-push.ts'
 
-/** The (only) connection open for a session, or undefined. */
+/** Every subscription a test opened, undone after the test whatever happens. */
+const disposers: Array<() => void> = []
+/** `subscribeSessionTurns` with the cleanup ledger attached. */
+function track(sessionId: string, onTurn: () => void): () => void {
+  const dispose = subscribeSessionTurns(sessionId, onTurn)
+  disposers.push(dispose)
+  return dispose
+}
+
+afterEach(() => {
+  for (const dispose of disposers.splice(0)) dispose()
+})
+
+/**
+ * The LIVE connection of a session — the LAST one captured (an earlier
+ * connection for the same id is one the hub already closed after its last
+ * subscriber left; its `onFrame` still runs but fans out to nobody).
+ */
 function connectionOf(sessionId: string): CapturedConnection | undefined {
-  return connections.find(connection => connection.sessionIds.includes(sessionId))
+  return connections.filter(connection => connection.sessionIds.includes(sessionId)).at(-1)
 }
 
 beforeEach(() => {
@@ -46,9 +68,9 @@ describe('subscribeSessionTurns', () => {
     const first = vi.fn()
     const second = vi.fn()
     const third = vi.fn()
-    const disposeA = subscribeSessionTurns('s1', first)
-    const disposeB = subscribeSessionTurns('s1', second)
-    const disposeC = subscribeSessionTurns('s1', third)
+    const disposeA = track('s1', first)
+    const disposeB = track('s1', second)
+    track('s1', third)
 
     expect(connections).toHaveLength(1)
     expect(connections[0]!.sessionIds).toEqual(['s1'])
@@ -69,13 +91,13 @@ describe('subscribeSessionTurns', () => {
     expect(first).toHaveBeenCalledTimes(1)
 
     // …and the LAST unsubscribe closes it.
-    disposeC()
+    disposers.splice(0).forEach(dispose => dispose())
     expect(connectionOf('s1')!.dispose).toHaveBeenCalledTimes(1)
   })
 
   it('the disposer is idempotent and a late second call closes nothing again', () => {
-    const disposeA = subscribeSessionTurns('s1', () => {})
-    const disposeB = subscribeSessionTurns('s1', () => {})
+    const disposeA = track('s1', () => {})
+    const disposeB = track('s1', () => {})
     disposeA()
     disposeB()
     // Both already ran; a repeat must not throw nor touch a closed hub.
@@ -85,12 +107,12 @@ describe('subscribeSessionTurns', () => {
   })
 
   it('a fresh subscription after the last one left opens a NEW connection', () => {
-    const disposeA = subscribeSessionTurns('s1', () => {})
+    const disposeA = track('s1', () => {})
     disposeA()
     expect(connectionOf('s1')!.dispose).toHaveBeenCalledTimes(1)
 
     const listener = vi.fn()
-    subscribeSessionTurns('s1', listener)
+    track('s1', listener)
     expect(connections).toHaveLength(2)
     connectionOf('s1')!.onFrame({ kind: 'turn', sessionId: 's1' })
     expect(listener).toHaveBeenCalledTimes(1)
@@ -102,8 +124,8 @@ describe('subscribeSessionTurns', () => {
   it('another session gets its own connection and hears only its own frames', () => {
     const a = vi.fn()
     const b = vi.fn()
-    subscribeSessionTurns('s1', a)
-    subscribeSessionTurns('s2', b)
+    track('s1', a)
+    track('s2', b)
 
     expect(connections).toHaveLength(2)
     connectionOf('s1')!.onFrame({ kind: 'turn', sessionId: 's2' })
@@ -116,7 +138,7 @@ describe('subscribeSessionTurns', () => {
 
   it('only `turn` frames of the watched session are distributed', () => {
     const listener = vi.fn()
-    subscribeSessionTurns('s1', listener)
+    track('s1', listener)
     const { onFrame } = connectionOf('s1')!
 
     // The wire also carries the hooks' kinds — none of them is a turn.
@@ -137,8 +159,8 @@ describe('subscribeSessionTurns', () => {
     try {
       const bad = vi.fn(() => { throw new Error('boom') })
       const good = vi.fn()
-      subscribeSessionTurns('s1', bad)
-      subscribeSessionTurns('s1', good)
+      track('s1', bad)
+      track('s1', good)
 
       // Contained (the store's notify() convention): the frame fan-out
       // survives the bad subscriber and the rest still hear the turn.

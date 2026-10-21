@@ -86,6 +86,15 @@ vi.mock('../src/client/api.ts', () => ({
   isOutsideWorkspaceMessage: () => false,
 }))
 
+// The editor's session-turn auto refresh rides a REAL push socket; these
+// scenarios are about editor chrome, not turn delivery, so the subscription
+// is inert here — a live WebSocket per mounted tab (and its reconnect
+// backoff) would only churn the scheduler the render waits below race
+// against. Turn delivery itself is tests/editor-turn-refresh.spec.tsx.
+vi.mock('../src/client/turn-push.ts', () => ({
+  subscribeSessionTurns: (): (() => void) => () => {},
+}))
+
 /** The `fs.read` answers of the load-path cases (queued per test). */
 const fsRead = vi.fn()
 

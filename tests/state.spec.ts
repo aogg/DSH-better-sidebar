@@ -1035,20 +1035,23 @@ describe('refreshingTabs (transient turn-refresh marks)', () => {
   })
 
   it('sanitizeState never restores the marks (transient, like revealed)', () => {
+    // ONE base state: makeDefaultState() mints a fresh pane id per call, so
+    // the round-trip must be compared against the same instance's copy.
+    const base = JSON.parse(JSON.stringify(state())) as SidebarState
     // A state that was mid-refresh when it got persisted must come back
     // clean: the mark only ever lives while its reload is in flight.
-    const midRefresh = { ...JSON.parse(JSON.stringify(state())), refreshingTabs: ['tab:1', 'tab:2'] }
+    const midRefresh = JSON.parse(JSON.stringify(base)) as SidebarState & { refreshingTabs: string[] }
+    midRefresh.refreshingTabs = ['tab:1', 'tab:2']
     const clean = sanitizeState(midRefresh)
     expect(clean).toBeDefined()
     expect(clean!.refreshingTabs).toEqual([])
 
     // A persisted state from an OLDER build has no field at all — same
-    // default, and the whole layout still loads.
-    const older = JSON.parse(JSON.stringify(state()))
-    delete (older as Record<string, unknown>).refreshingTabs
+    // default, and the whole layout still loads unchanged.
+    const older = JSON.parse(JSON.stringify(base)) as Record<string, unknown>
+    delete older.refreshingTabs
     const restored = sanitizeState(older)
-    expect(restored).toBeDefined()
+    expect(restored).toEqual(base)
     expect(restored!.refreshingTabs).toEqual([])
-    expect(restored).toEqual(state())
   })
 })

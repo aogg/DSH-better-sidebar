@@ -678,10 +678,16 @@ describe('session push hub: turn frames', () => {
     expect(socket.frames().filter(frame => frame.kind === 'turn')).toEqual([])
 
     emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+    // The same row is the session's first message, so the one-shot phase
+    // flip leaves immediately; the turn beat rides its own 400ms window.
+    expect(socket.frames()).toEqual([{ kind: 'phase', sessionId: 't1', blank: false }])
     vi.advanceTimersByTime(399)
-    expect(socket.frames()).toEqual([])
+    expect(socket.frames()).toEqual([{ kind: 'phase', sessionId: 't1', blank: false }])
     vi.advanceTimersByTime(1)
-    expect(socket.frames()).toEqual([{ kind: 'turn', sessionId: 't1' }])
+    expect(socket.frames()).toEqual([
+      { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'turn', sessionId: 't1' },
+    ])
     hub.dispose()
   })
 
@@ -708,15 +714,19 @@ describe('session push hub: turn frames', () => {
     watch(hub, socket, ['t1'])
 
     // A multi-step turn settles row after row; every row inside the window
-    // armed by the FIRST one joins it — one beat, not one per row.
+    // armed by the FIRST one joins it — one beat, not one per row. The
+    // first row also spends the phase flip (one frame, ever).
     for (let index = 0; index < 5; index++) {
       emit('session/event', { id: 't1' }, { type: 'assistant/message' })
       vi.advanceTimersByTime(70)
     }
     // 5 rows × 70ms = 350ms: still inside the window armed at t=0.
-    expect(socket.frames()).toEqual([])
+    expect(socket.frames()).toEqual([{ kind: 'phase', sessionId: 't1', blank: false }])
     vi.advanceTimersByTime(50)
-    expect(socket.frames()).toEqual([{ kind: 'turn', sessionId: 't1' }])
+    expect(socket.frames()).toEqual([
+      { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'turn', sessionId: 't1' },
+    ])
 
     // A window that has fired may fire again for the NEXT settled row — each
     // beat lands 400ms after ITS row, so a multi-step turn stays fresh and
@@ -724,6 +734,7 @@ describe('session push hub: turn frames', () => {
     emit('session/event', { id: 't1' }, { type: 'assistant/message' })
     vi.advanceTimersByTime(400)
     expect(socket.frames()).toEqual([
+      { kind: 'phase', sessionId: 't1', blank: false },
       { kind: 'turn', sessionId: 't1' },
       { kind: 'turn', sessionId: 't1' },
     ])
@@ -740,9 +751,9 @@ describe('session push hub: turn frames', () => {
 
     emit('session/event', { id: 't1' }, { type: 'assistant/message' })
     vi.advanceTimersByTime(400)
-    const beat = { kind: 'turn', sessionId: 't1' }
-    expect(a.frames()).toEqual([beat])
-    expect(b.frames()).toEqual([beat])
+    const beat = [{ kind: 'phase', sessionId: 't1', blank: false }, { kind: 'turn', sessionId: 't1' }]
+    expect(a.frames()).toEqual(beat)
+    expect(b.frames()).toEqual(beat)
     hub.dispose()
   })
 
@@ -764,10 +775,13 @@ describe('session push hub: turn frames', () => {
     const socket = new FakeSocket()
     watch(hub, socket, ['t1'])
 
-    // A settled row, its beat delivered…
+    // A settled row, its beat delivered (and the phase flip with it)…
     emit('session/event', { id: 't1' }, { type: 'assistant/message' })
     vi.advanceTimersByTime(400)
-    expect(socket.frames()).toEqual([{ kind: 'turn', sessionId: 't1' }])
+    expect(socket.frames()).toEqual([
+      { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'turn', sessionId: 't1' },
+    ])
 
     // …then the client re-subscribes (a reconnect re-sends the whole watch
     // set on a fresh socket). Un-watch + re-watch must not conjure a "just
@@ -775,7 +789,10 @@ describe('session push hub: turn frames', () => {
     socket.receive({ op: 'watch', sessionIds: [] })
     socket.receive({ op: 'watch', sessionIds: ['t1'] })
     vi.advanceTimersByTime(1_000)
-    expect(socket.frames()).toEqual([{ kind: 'turn', sessionId: 't1' }])
+    expect(socket.frames()).toEqual([
+      { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'turn', sessionId: 't1' },
+    ])
     hub.dispose()
   })
 
@@ -785,15 +802,23 @@ describe('session push hub: turn frames', () => {
     const socket = new FakeSocket()
     watch(hub, socket, ['t1', 't2'])
     emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+    // t1's first row also flips the phase; the TURN beat it scheduled…
+    expect(socket.frames()).toEqual([{ kind: 'phase', sessionId: 't1', blank: false }])
 
     socket.receive({ op: 'watch', sessionIds: ['t2'] })
     vi.advanceTimersByTime(1_000)
-    expect(socket.frames()).toEqual([])
+    // …is gone with the watch entry (the phase frame above is all t1 left).
+    expect(socket.frames()).toEqual([{ kind: 'phase', sessionId: 't1', blank: false }])
 
-    // The dropped window does not poison the next one: t2's own row beats.
+    // The dropped window does not poison the next one: t2's own row beats
+    // (and flips t2's phase — its first message).
     emit('session/event', { id: 't2' }, { type: 'assistant/message' })
     vi.advanceTimersByTime(400)
-    expect(socket.frames()).toEqual([{ kind: 'turn', sessionId: 't2' }])
+    expect(socket.frames()).toEqual([
+      { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'phase', sessionId: 't2', blank: false },
+      { kind: 'turn', sessionId: 't2' },
+    ])
     hub.dispose()
   })
 
@@ -803,13 +828,15 @@ describe('session push hub: turn frames', () => {
     const socket = new FakeSocket()
     watch(hub, socket, ['t1'])
     emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+    // The flip left synchronously; the turn beat is still pending…
+    expect(socket.frames()).toEqual([{ kind: 'phase', sessionId: 't1', blank: false }])
 
-    // A closed socket drops its pending window…
+    // …and a closed socket drops it.
     socket.fire('error')
     vi.advanceTimersByTime(1_000)
-    expect(socket.frames()).toEqual([])
+    expect(socket.frames()).toEqual([{ kind: 'phase', sessionId: 't1', blank: false }])
 
-    // …and dispose tears down the feed: no listener left, no frame, no throw.
+    // Dispose tears down the feed: no listener left, no frame, no throw.
     const second = new FakeSocket()
     watch(hub, second, ['t1'])
     hub.dispose()
@@ -825,13 +852,19 @@ describe('session push hub: turn frames', () => {
     watch(hub, socket, ['t1'])
 
     // Both schedules arm for the same session — separate timer maps, so the
-    // cwd beat at 250ms and the turn beat at 400ms BOTH land.
+    // cwd beat at 250ms and the turn beat at 400ms BOTH land. The
+    // assistant/message row also flips the phase on arrival.
     emit('session/event', { id: 't1' }, { type: 'tool/call' })
     emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+    expect(socket.frames()).toEqual([{ kind: 'phase', sessionId: 't1', blank: false }])
     vi.advanceTimersByTime(250)
-    expect(socket.frames()).toEqual([{ kind: 'cwd', sessionId: 't1' }])
+    expect(socket.frames()).toEqual([
+      { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'cwd', sessionId: 't1' },
+    ])
     vi.advanceTimersByTime(150)
     expect(socket.frames()).toEqual([
+      { kind: 'phase', sessionId: 't1', blank: false },
       { kind: 'cwd', sessionId: 't1' },
       { kind: 'turn', sessionId: 't1' },
     ])
