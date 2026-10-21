@@ -25,14 +25,25 @@ beforeAll(() => {
 })
 afterEach(() => { scrollIntoView.mockClear() })
 
+/** Per-test fsTrees override (the lazy-load timing test swaps it in); null
+ *  answers the static listing below. Referenced lazily — the mock factory
+ *  runs before this module body, only the CALLS may touch the binding. */
+type FsTreesMock = (scope: unknown, paths: readonly string[]) => Promise<{
+  levels: Array<{ path: string; entries: Array<{ name: string; path: string; isDir: boolean }>; truncated: boolean }>
+}>
+let mockFsTrees: FsTreesMock | null = null
+
 vi.mock('../src/client/api.ts', () => ({
   api: {
-    fsTrees: async (_scope: unknown, paths: readonly string[]) => ({
-      levels: paths.map(path => ({ path, entries: [
-        { name: 'src', path: '/tmp/src', isDir: true },
-        { name: 'a.ts', path: '/tmp/a.ts', isDir: false },
-      ], truncated: false })),
-    }),
+    fsTrees: (scope: unknown, paths: readonly string[]) =>
+      mockFsTrees !== null
+        ? mockFsTrees(scope, paths)
+        : Promise.resolve({
+            levels: paths.map(path => ({ path, entries: [
+              { name: 'src', path: '/tmp/src', isDir: true },
+              { name: 'a.ts', path: '/tmp/a.ts', isDir: false },
+            ], truncated: false })),
+          }),
     // The tree reads the shared git-status store; a non-repo answer keeps
     // every row plain (this spec is about the reveal scroll).
     gitStatus: async () => ({ isRepo: false, entries: [] }),
@@ -42,7 +53,7 @@ vi.mock('../src/client/api.ts', () => ({
 
 interface TreeHarness {
   /** Re-render with new props; the refresh tick reloads the level cache. */
-  rerender: (revealed: string[], refreshTick: number, hidden?: boolean) => Promise<void>
+  rerender: (revealed: string[], refreshTick: number, hidden?: boolean, expanded?: string[]) => Promise<void>
   body: HTMLElement
   /** Pin one row's geometry (jsdom has no layout). */
   layoutRow: (top: number, height: number) => void
@@ -54,11 +65,11 @@ async function mountTree(bodyScroll: { top: number; client: number; height: numb
   const container = document.createElement('div')
   document.body.append(container)
   const root: Root = createRoot(container)
-  const render = (revealed: string[], refreshTick: number, hidden?: boolean): void => {
+  const render = (revealed: string[], refreshTick: number, hidden?: boolean, expanded: string[] = []): void => {
     root.render(createElement(FileTree, {
       sessionId: 's1',
       cwd: '/tmp',
-      expanded: [],
+      expanded,
       revealed,
       onToggle: () => {},
       onOpenFile: () => {},
@@ -78,7 +89,7 @@ async function mountTree(bodyScroll: { top: number; client: number; height: numb
   Object.defineProperty(body, 'scrollHeight', { value: bodyScroll.height })
   Object.defineProperty(body, 'scrollTop', { value: bodyScroll.top, writable: true })
   return {
-    rerender: async (revealed, refreshTick, hidden) => { await act(async () => { render(revealed, refreshTick, hidden) }) },
+    rerender: async (revealed, refreshTick, hidden, expanded) => { await act(async () => { render(revealed, refreshTick, hidden, expanded) }) },
     body,
     layoutRow: (top, height) => {
       const row = body.querySelector('[data-dsh-revealed]')
@@ -90,7 +101,10 @@ async function mountTree(bodyScroll: { top: number; client: number; height: numb
   }
 }
 
-afterEach(() => { document.body.innerHTML = '' })
+afterEach(() => {
+  mockFsTrees = null
+  document.body.innerHTML = ''
+})
 
 describe('FileTree reveal scrolling (show in folder)', () => {
   it('centers the revealed row in the tree body only', async () => {
@@ -119,6 +133,57 @@ describe('FileTree reveal scrolling (show in folder)', () => {
     const tree = await mountTree({ top: 0, client: 300, height: 1000 })
     await tree.rerender([], 1)
     expect(tree.scrollTo).not.toHaveBeenCalled()
+    tree.unmount()
+  })
+
+  it('a folder-link reveal scrolls once the lazily loaded level lands (no extra render)', async () => {
+    // The lazy-load timing a folder link hits on a closed tree: the reveal
+    // lands (revealed set + ancestors AND the folder itself in `expanded`)
+    // while the level listing that carries the revealed row is still in
+    // flight — the scroll effect's first pass finds no row — and the DATA
+    // ARRIVAL alone must re-run it ([revealed, data] deps) and scroll. No
+    // rAF retry, no extra render: the lazy level is the only wait.
+    const rootEntries = [
+      { name: 'src', path: '/tmp/src', isDir: true },
+      { name: 'a.ts', path: '/tmp/a.ts', isDir: false },
+    ]
+    const deeperEntries = [{ name: 'sub', path: '/tmp/src/sub', isDir: true }]
+    let holdDeeper = true
+    let held: Array<() => void> = []
+    const answer = (paths: readonly string[]) => ({
+      levels: paths.map(path => ({
+        path,
+        // Only /tmp/src lists `sub`; the folder's own level lists nothing
+        // (a self-containing listing would recurse the row walk forever).
+        entries: path === '/tmp' ? rootEntries : path === '/tmp/src' ? deeperEntries : [],
+        truncated: false,
+      })),
+    })
+    mockFsTrees = async (_scope: unknown, paths: readonly string[]) => {
+      // The root level answers at once (the tree renders its rows); every
+      // deeper listing waits for the test to release it.
+      if (!holdDeeper || paths.every(path => path === '/tmp')) return answer(paths)
+      return new Promise(resolve => { held.push(() => resolve(answer(paths))) })
+    }
+    const tree = await mountTree({ top: 0, client: 300, height: 1000 })
+    // The reveal round: the expanded set is what `revealPaths(…,
+    // { expandTarget: true })` produced for the folder link `src/sub`.
+    await tree.rerender(['/tmp/src/sub'], 0, undefined, ['/tmp/src', '/tmp/src/sub'])
+    // The listing is still in flight: no revealed row rendered, no scroll.
+    expect(tree.body.querySelector('[data-dsh-revealed]')).toBeNull()
+    expect(tree.scrollTo).not.toHaveBeenCalled()
+    // The listings land — the tree re-renders, the row appears, and the
+    // data-triggered effect pass scrolls it into view by itself.
+    await act(async () => {
+      holdDeeper = false
+      const pending = held
+      held = []
+      for (const release of pending) release()
+      await Promise.resolve()
+    })
+    expect(tree.body.querySelector('[data-dsh-revealed]')).not.toBeNull()
+    expect(tree.scrollTo.mock.calls.length).toBeGreaterThan(0)
+    expect(tree.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' })
     tree.unmount()
   })
 })

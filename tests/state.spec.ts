@@ -799,15 +799,22 @@ describe('revealPaths (show in folder)', () => {
     expect(revealPaths(base, '/w', [])).toBe(base)
   })
 
-  it('a DIRECTORY target expands its parent chain, never the directory itself', () => {
-    // A conversation folder link reveals the folder ROW: the ancestors make
-    // the row reachable in the lazy tree, and the folder stays collapsed (its
-    // children are the reader's to open).
+  it('a DIRECTORY target default: parent chain only; `expandTarget` opens the folder itself', () => {
+    // DEFAULT (file reveals, "Show in folder"): the ancestors make the row
+    // reachable in the lazy tree, and the directory stays collapsed — a file
+    // target has nothing of its own to expand either.
     const base = makeDefaultState()
     const next = revealPaths(base, '/w/src', ['/w/src/sub/deep'])
     expect(next.revealed).toEqual(['/w/src/sub/deep'])
     expect(next.expanded).toContain('/w/src/sub')
     expect(next.expanded).not.toContain('/w/src/sub/deep')
+    // FOLDER-LINK option (`expandTarget`, activateFilesPage): the reader
+    // asked the folder OPEN, so the directory joins `expanded` too and its
+    // children load under the highlighted row.
+    const opened = revealPaths(makeDefaultState(), '/w/src', ['/w/src/sub/deep'], { expandTarget: true })
+    expect(opened.revealed).toEqual(['/w/src/sub/deep'])
+    expect(opened.expanded).toContain('/w/src/sub')
+    expect(opened.expanded).toContain('/w/src/sub/deep')
   })
 })
 

@@ -617,6 +617,21 @@ export function pathWithinCwd(cwd: string | undefined, path: string): boolean {
 }
 
 /**
+ * Options for {@link revealPaths}.
+ */
+export interface RevealOptions {
+  /**
+   * Expand the target paths THEMSELVES, not just their ancestors. The
+   * folder-link reveals ("open this folder") pass it: the reader asked the
+   * folder OPEN, so its children load under the highlighted row. File
+   * reveals leave it off — a file has nothing to expand, and the option
+   * assumes in-tree directory targets (the caller guards with
+   * {@link pathWithinCwd}, exactly like the ancestor expansion does).
+   */
+  expandTarget?: boolean
+}
+
+/**
  * Reveal files in the explorer: expand every ancestor directory between the
  * explorer root and each file (so the lazy tree actually shows the row) and
  * record the paths for highlighting. The reveal set is transient —
@@ -624,13 +639,16 @@ export function pathWithinCwd(cwd: string | undefined, path: string): boolean {
  * @param state - current sidebar state.
  * @param cwd - the explorer's root (session working directory).
  * @param files - absolute paths to highlight (parent dirs are expanded).
+ * @param options - `expandTarget` also expands the targets themselves (the
+ *   folder-link reveals); the default touches ancestors only.
  * @returns the next state, or the same reference when nothing is revealed.
  */
-export function revealPaths(state: SidebarState, cwd: string | undefined, files: readonly string[]): SidebarState {
+export function revealPaths(state: SidebarState, cwd: string | undefined, files: readonly string[], options?: RevealOptions): SidebarState {
   const revealed = files.filter(file => typeof file === 'string' && file !== '')
   if (revealed.length === 0) return state
   const expanded = new Set(state.expanded)
   for (const dir of ancestorDirs(cwd, revealed)) expanded.add(dir)
+  if (options?.expandTarget === true) for (const file of revealed) expanded.add(file)
   return { ...state, expanded: [...expanded], revealed: [...revealed] }
 }
 

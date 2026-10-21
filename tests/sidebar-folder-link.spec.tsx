@@ -6,9 +6,9 @@
  *      turns it into the `files`-kind page open (single instance: the host
  *      keeps ONE page per kind and re-focuses it on a repeat open), and
  *   2. reveal the folder in the store's session state (`revealPaths`):
- *      ancestors expand, the folder row is highlighted and the tree's
- *      reveal-scroll centers it. A directory reveal never expands the
- *      directory itself — only its parent chain.
+ *      ancestors expand, the FOLDER ITSELF expands (the link asked the
+ *      folder open — its children load under the row), the folder row is
+ *      highlighted and the tree's reveal-scroll centers it.
  *
  * The previous behavior opened a folder WINDOW (an editor tab with
  * `meta.dir: true` rooted at the folder); that capability stays for manual
@@ -199,7 +199,7 @@ afterEach(() => {
 })
 
 describe('agent-opens folder link → the files page + reveal', () => {
-  it('activates the files page and reveals the folder row (ancestors only)', () => {
+  it('activates the files page and reveals the folder row (opened, not just pointed at)', () => {
     const sidebar = mountSidebar()
     const socket = agentOpensSocket()
     // The feed subscribed for THIS session.
@@ -215,12 +215,12 @@ describe('agent-opens folder link → the files page + reveal', () => {
       params: {},
       revealIfOpened: true,
     }])
-    // The reveal: the folder row is marked, its PARENT chain expanded, the
-    // folder itself never expanded (its children stay folded).
+    // The reveal: the folder row is marked, its PARENT chain expanded AND
+    // the folder itself (its children load below the highlight).
     const state = sidebar.store.getSnapshot().state!
     expect(state.revealed).toEqual(['/tmp/src/sub'])
     expect(state.expanded).toContain('/tmp/src')
-    expect(state.expanded).not.toContain('/tmp/src/sub')
+    expect(state.expanded).toContain('/tmp/src/sub')
   })
 
   it('re-points the SAME single-instance page on a second folder link', () => {

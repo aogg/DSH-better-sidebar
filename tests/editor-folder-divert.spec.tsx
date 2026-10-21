@@ -117,12 +117,16 @@ function setup(): Harness {
   return { store, service, opens, closes, ctx }
 }
 
-/** Mount one editor tab in the recorded session's scope. */
-function mount(harness: Harness, tab: SidebarTab): ReturnType<typeof renderRoot> {
+/** Mount one editor tab in the recorded session's scope. `scopeCwd` omits
+ *  the scope's `cwd` entirely — a resource tab (a conversation-body link's
+ *  open) carries ONLY the session id, which is exactly the shape that used
+ *  to drop the folder-link reveal (the caller-side resolution had no cwd to
+ *  resolve against). */
+function mount(harness: Harness, tab: SidebarTab, scopeCwd: string | undefined = CWD): ReturnType<typeof renderRoot> {
   return renderRoot(createElement(EditorHost, {
     ctx: harness.ctx,
     store: harness.store,
-    scope: { sessionId: SESSION, cwd: CWD },
+    scope: scopeCwd === undefined ? { sessionId: SESSION } : { sessionId: SESSION, cwd: scopeCwd },
     tab,
     expanded: [],
     revealed: [],
@@ -162,12 +166,13 @@ describe('a directory in the file-viewer lane diverts to the files page', () => 
       }])
       // The dead tab goes away.
       expect(harness.closes).toEqual([{ sessionId: SESSION, tabId: 'tab1' }])
-      // The reveal: the folder row marked, its PARENT chain expanded, the
-      // folder itself never expanded.
+      // The reveal: the folder row marked, its PARENT chain expanded AND the
+      // folder itself (the link asked the folder OPEN — its children load
+      // under the highlight).
       const state = harness.store.getSnapshot().state!
       expect(state.revealed).toEqual(['/tmp/src/sub'])
       expect(state.expanded).toContain('/tmp/src')
-      expect(state.expanded).not.toContain('/tmp/src/sub')
+      expect(state.expanded).toContain('/tmp/src/sub')
       // No error row ever rendered.
       expect(container.querySelector(`.${css.editorError}`)).toBeNull()
     } finally {
@@ -186,6 +191,31 @@ describe('a directory in the file-viewer lane diverts to the files page', () => 
       expect(harness.closes).toEqual([{ sessionId: SESSION, tabId: 'tab1' }])
       const state = harness.store.getSnapshot().state!
       expect(state.revealed).toEqual(['/tmp/src/sub'])
+      expect(container.querySelector(`.${css.editorError}`)).toBeNull()
+    } finally {
+      unmount()
+    }
+  })
+
+  it('resolves the relative path even when the tab scope has NO cwd (the resource-lane shape)', async () => {
+    // The user-reported gap: a resource tab's scope holds ONLY the session
+    // id, so the OLD caller-side `resolveSidebarPath(scope.cwd, …)` passed
+    // `src/sub` through unsaved and `pathWithinCwd(cwd, 'src/sub')` refused
+    // it — the page opened but nothing revealed, highlighted, or scrolled.
+    // The resolution now lives in activateFilesPage (the session cwd comes
+    // from ctx.sessions), so the same mount reveals fully.
+    const harness = setup()
+    fsRead.mockRejectedValue(directoryError('/tmp/src/sub'))
+    const { container, unmount } = mount(harness, folderTab('src/sub'), undefined)
+    try {
+      await act(async () => { await Promise.resolve() })
+      expect(harness.opens).toEqual([expect.objectContaining({ kind: 'files' })])
+      expect(harness.closes).toEqual([{ sessionId: SESSION, tabId: 'tab1' }])
+      const state = harness.store.getSnapshot().state!
+      expect(state.revealed).toEqual(['/tmp/src/sub'])
+      // Ancestors AND the folder itself expand (the folder-link semantic).
+      expect(state.expanded).toContain('/tmp/src')
+      expect(state.expanded).toContain('/tmp/src/sub')
       expect(container.querySelector(`.${css.editorError}`)).toBeNull()
     } finally {
       unmount()

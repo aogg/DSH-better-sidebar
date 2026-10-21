@@ -16,17 +16,17 @@
  * manual capability (EditorHost's own folder windows).
  */
 import type { Context } from '../context-types.ts'
+import { resolveSidebarPath } from './paths.ts'
 import { pathWithinCwd, revealPaths, type SidebarStore } from './state.ts'
 
 /**
  * Activate the plugin's 「文件」page for a conversation FOLDER link, then
  * reveal the folder in its tree: the ancestors between the session cwd and
- * the folder expand (the lazy tree can render the row) and the folder lands
- * in the store's `revealed` set, so the page highlights the row and its
- * reveal-scroll centers it — the same locator a "Show in folder" paints,
- * only aimed at a directory. A directory reveal expands the PARENT CHAIN
- * only (`ancestorDirs` never lists the path itself): the folder row stays
- * collapsed, its children untouched.
+ * the folder expand (the lazy tree can render the row), the FOLDER ITSELF
+ * expands too (the reader asked the folder OPEN — its children load under the
+ * row), and the folder lands in the store's `revealed` set, so the page
+ * highlights the row and its reveal-scroll centers it — the same locator a
+ * "Show in folder" paints, aimed at a directory and opened up.
  *
  * The page is the PATH-LESS editor seed: `service.openTab`'s editor branch
  * turns it into the native `files`-kind page open, which the host keeps ONE
@@ -43,16 +43,29 @@ import { pathWithinCwd, revealPaths, type SidebarStore } from './state.ts'
  * page still activates — the reader asked for the folder, the tree just has
  * no row to point at.
  *
+ * The SESSION cwd is read here, not in the callers: a resource-lane tab's
+ * scope carries no `cwd` at all (a conversation-body markdown link mints an
+ * editor tab whose scope holds only the session id), so a caller-side
+ * `resolveSidebarPath(scope.cwd, …)` would pass the relative spelling
+ * through unsaved and the guard would refuse a path the tree could have
+ * rendered. Resolving against `ctx.sessions`' cwd covers every lane that
+ * lands here; absolute paths pass through `resolveSidebarPath` untouched.
+ *
  * @param ctx - the client context (`ctx.betterSidebar` + `ctx.sessions`).
  * @param store - the plugin store (the reveal set lives in the session state).
  * @param sessionId - the session the open belongs to (the reveal's session).
- * @param folder - the absolute folder path the link named.
+ * @param folder - the folder path the link named (absolute, or
+ *   workspace-relative resolved against the session cwd).
  */
 export function activateFilesPage(ctx: Context, store: SidebarStore, sessionId: string, folder: string): void {
   ctx.get('betterSidebar')?.openTab({ type: 'editor' }, { sessionId })
   const cwd = ctx.sessions.list.getSnapshot().byId[sessionId]?.cwd
-  if (!pathWithinCwd(cwd, folder)) return
-  store.reduce(state => revealPaths(state, cwd, [folder]))
+  const target = resolveSidebarPath(cwd, folder)
+  if (!pathWithinCwd(cwd, target)) return
+  // `expandTarget`: the folder-link semantic — the folder row OPENS (its
+  // children load below the highlight), unlike the file reveals that leave
+  // the target's own expansion alone.
+  store.reduce(state => revealPaths(state, cwd, [target], { expandTarget: true }))
 }
 
 /**

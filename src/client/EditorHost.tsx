@@ -288,11 +288,13 @@ export function EditorHost(props: {
    * never take this path.
    */
   const divertDirectoryOpen = (): void => {
-    // Resolve the address's path against the session cwd FIRST (a
-    // session-scoped address carries the workspace-relative spelling), so
-    // the reveal anchors at the same absolute folder the route just failed
-    // to read.
-    activateFilesPage(ctx, store, scope.sessionId, resolveSidebarPath(scope.cwd, path))
+    // The address's path is handed over AS SPELLED: a session-scoped address
+    // carries the workspace-relative spelling, and THIS tab's scope has no
+    // `cwd` to resolve it against (a resource tab holds only the session
+    // id) — `activateFilesPage` reads the session cwd from `ctx.sessions`
+    // and resolves there, the one resolution point every landing lane
+    // shares.
+    activateFilesPage(ctx, store, scope.sessionId, path)
     ctx.get('betterSidebar')?.closeTab(tab.id, scope)
   }
 
