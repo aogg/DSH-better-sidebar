@@ -6,8 +6,10 @@
  * 会话的瞬时抽取；persistence 整个缺席 503），以及注解库的磁盘往返（新根
  * `prompt-history/annotations.json`、旧文件一次性搬入、损坏归空 + warn、
  * 原子写无孤儿、op 校验）。末段直测 prompt-history-live 的实时记录与水位
- * 续扫。持久层用假句柄模拟（seq 与数组下标对齐），磁盘落点经 DSH_HOME 指向
- * 临时目录。
+ * 续扫，以及扫描期的 ws 出站契约：每次 append 的新账经 onRecords 推出（客
+ * 户端免轮询的根）、扫描开始/结束各发一次 onSeed（失败路径也收尾）、byKey
+ * 挡下的重复账不再出站（fresh-only，杜绝重复上屏）。持久层用假句柄模拟
+ * （seq 与数组下标对齐），磁盘落点经 DSH_HOME 指向临时目录。
  */
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
@@ -371,6 +373,118 @@ describe('prompt-history live（实时记录与水位续扫）', () => {
     const entry = await store.loadProject(key)
     expect(entry.records.map(record => record.text)).toEqual(['项目一问'])
     expect(persistence.open).toHaveBeenCalledTimes(1)
+    live.dispose()
+  })
+})
+
+describe('prompt-history live（扫描期 ws 推送与 seeding 状态帧）', () => {
+  /** 带事件源的 ctx（同上一段的 eventCtx；扫描期推送测试的公共底座）。 */
+  function eventCtx(options: {
+    persistence?: unknown
+    liveSessions?: Record<string, { header?: { cwd?: string }; snapshotEvents?: () => readonly unknown[] }>
+  }): { ctx: Context; emit: (session: unknown, event: unknown) => void } {
+    const listeners = new Map<string, Set<(...args: unknown[]) => void>>()
+    const base = makeCtx(options.persistence, options.liveSessions)
+    const ctx = {
+      ...base,
+      on: (event: string, listener: (...args: unknown[]) => void) => {
+        let set = listeners.get(event)
+        if (set === undefined) listeners.set(event, set = new Set())
+        set.add(listener)
+        return () => { set.delete(listener) }
+      },
+    } as unknown as Context
+    return {
+      ctx,
+      emit: (session, event) => {
+        for (const listener of [...(listeners.get('session/event') ?? [])]) listener(session, event)
+      },
+    }
+  }
+
+  it('扫描期每次 append 的新账都经 onRecords 推出（客户端免轮询的根）', async () => {
+    const root = join(home, 'plugins', 'DSH-better-sidebar', 'seed-push')
+    const { persistence } = fakePersistence({
+      headers: [{ header: { id: 's1', cwd: '/work/alpha' } }],
+      events: { s1: [userMessage(0, '扫出一问'), filler(1), userMessage(2, '扫出二问')] },
+    })
+    const ctx = makeCtx(persistence)
+    const store = new PromptHistoryStore({ root })
+    const live = createPromptHistoryLive(ctx, store, { logger: ctx.logger })
+    const pushed: { sessionId: string; texts: string[] }[] = []
+    live.onRecords((sessionId, records) => { pushed.push({ sessionId, texts: records.map(record => record.text) }) })
+    live.kick(projectKeyOf('/work/alpha'), '/work/alpha', 's1')
+    await vi.waitFor(() => { expect(pushed.map(batch => batch.texts).flat()).toEqual(['扫出一问', '扫出二问']) })
+    expect(pushed.every(batch => batch.sessionId === 's1')).toBe(true)
+    live.dispose()
+  })
+
+  it('扫描开始/结束各发一次 onSeed（项目根同 history.list 的 project.cwd）；失败路径也收尾', async () => {
+    const root = join(home, 'plugins', 'DSH-better-sidebar', 'seed-state')
+    const { persistence } = fakePersistence({
+      headers: [{ header: { id: 's1', cwd: '/work/alpha' } }],
+      events: { s1: [userMessage(0, '一问')] },
+    })
+    const ctx = makeCtx(persistence)
+    const store = new PromptHistoryStore({ root })
+    const live = createPromptHistoryLive(ctx, store, { logger: ctx.logger })
+    const states: { cwd: string; seeding: boolean }[] = []
+    live.onSeed((cwd, seeding) => { states.push({ cwd, seeding }) })
+    const key = projectKeyOf('/work/alpha')
+    live.kick(key, '/work/alpha', 's1')
+    await vi.waitFor(() => { expect(live.isSeeding(key)).toBe(false) })
+    expect(states).toEqual([
+      { cwd: '/work/alpha', seeding: true },
+      { cwd: '/work/alpha', seeding: false },
+    ])
+    // open 失败的会话逐会话跳过，但收尾帧照样发（失败路径也必须熄客户端的提示条）。
+    const failing = fakePersistence({
+      headers: [{ header: { id: 'bad', cwd: '/work/alpha' } }],
+      openErrorFor: { bad: new Error('boom') },
+    })
+    const ctx2 = makeCtx(failing.persistence)
+    const live2 = createPromptHistoryLive(ctx2, new PromptHistoryStore({ root }), { logger: ctx2.logger })
+    const states2: boolean[] = []
+    live2.onSeed((_cwd, seeding) => { states2.push(seeding) })
+    live2.kick(key, '/work/alpha', 'bad')
+    await vi.waitFor(() => { expect(live2.isSeeding(key)).toBe(false) })
+    expect(states2).toEqual([true, false])
+    live.dispose()
+    live2.dispose()
+  })
+
+  it('扫描已记账的消息再走实时事件：byKey 挡下后 ws 不再推（fresh-only，杜绝重复出站）', async () => {
+    const root = join(home, 'plugins', 'DSH-better-sidebar', 'seed-fresh-only')
+    const { persistence } = fakePersistence({
+      headers: [{ header: { id: 's1', cwd: '/work/alpha' } }],
+      events: { s1: [userMessage(0, '已在账的一问')] },
+    })
+    const ctx = makeCtx(persistence, { s1: { header: { cwd: '/work/alpha' } } })
+    const listeners = new Map<string, Set<(...args: unknown[]) => void>>()
+    const eventCtxValue = {
+      ...ctx,
+      on: (event: string, listener: (...args: unknown[]) => void) => {
+        let set = listeners.get(event)
+        if (set === undefined) listeners.set(event, set = new Set())
+        set.add(listener)
+        return () => { set.delete(listener) }
+      },
+    } as unknown as Context
+    const store = new PromptHistoryStore({ root })
+    const live = createPromptHistoryLive(eventCtxValue, store, { logger: ctx.logger })
+    const pushed: string[] = []
+    live.onRecords((_sessionId, records) => { pushed.push(...records.map(record => record.text)) })
+    // 先扫描记账。
+    live.kick(projectKeyOf('/work/alpha'), '/work/alpha', 's1')
+    await vi.waitFor(() => { expect(live.isSeeding(projectKeyOf('/work/alpha'))).toBe(false) })
+    pushed.length = 0
+    // 同一条消息再从实时事件到达（seq 相同 → key 相同）：存储幂等挡下后，ws 也必须沉默。
+    for (const listener of [...(listeners.get('session/event') ?? [])]) {
+      listener({ id: 's1' }, userMessage(0, '已在账的一问'))
+    }
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(pushed).toEqual([])
+    expect((await store.loadProject(projectKeyOf('/work/alpha'))).records).toHaveLength(1)
     live.dispose()
   })
 })

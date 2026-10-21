@@ -261,9 +261,11 @@ export function builtinTabs(ctx: Context): readonly TabDescriptor[] {
       // 「历史发送」(the start page's prompt-history door): the hero pill's
       // openTab({ type: 'history' }) lands here — one shared page listing
       // the prompts the user has sent across sessions, grouped by session.
-      // Records are read fresh from the session logs by the history.list
-      // route (never persisted by the plugin); comments, tags and related
-      // groups persist server-side (see src/prompt-history-routes.ts).
+      // Records come from the history.list route backed by the plugin's
+      // persistent per-project store; live appends and the seed-scan state
+      // arrive over the session-push socket (no polling). Comments, tags and
+      // related groups persist server-side too (see
+      // src/prompt-history-routes.ts).
       id: 'history',
       title: () => t('historySent'),
       description: () => t('guideDescHistory'),

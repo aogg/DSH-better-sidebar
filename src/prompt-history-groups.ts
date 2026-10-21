@@ -8,6 +8,8 @@
  *   最近一条记录的时间倒序；
  * - {@link filterHistoryRecords}：顶部文本搜索（大小写不敏感的子串）与
  *   标签过滤（任一命中即保留）都作用在平面上，先过滤再分组，空组不出现；
+ * - {@link mergeHistoryRecords}：多路径合并的幂等兜底（按 key 去重并入），
+ *   首页/翻页/ws 实时帧共同喂同一张平面表时防重复上屏；
  * - {@link collectHistoryTags}：全库标签聚合（过滤条的 chips 来源，按名字
  *   去重排序）。
  *
@@ -57,6 +59,28 @@ export function groupRecordsBySession(records: readonly HistorySendRecord[]): Hi
     })
   }
   return groups.sort((a, b) => b.lastTime - a.lastTime)
+}
+
+/**
+ * 幂等合并：以记录 key（`${sessionId}:${seq}`）为锚把 incoming 并入 existing。
+ * 已存在于 existing 的 key 不重复并入，incoming 批次内部同 key 也只留第一条
+ * ——列表合并的第二道幂等（第一道在入队侧的 seen 剪枝），保证同一条记录无论
+ * 从首页/翻页/ws 哪条路径到达、到达几次，都只上屏一次。返回新数组，不改入参。
+ */
+export function mergeHistoryRecords(
+  existing: readonly HistorySendRecord[],
+  incoming: readonly HistorySendRecord[],
+): HistorySendRecord[] {
+  const seen = new Set<string>()
+  for (const record of existing) seen.add(record.key)
+  const merged = [...existing]
+  for (const record of incoming) {
+    if (record === null || typeof record !== 'object') continue
+    if (seen.has(record.key)) continue
+    seen.add(record.key)
+    merged.push(record)
+  }
+  return merged
 }
 
 /** 过滤条件（两个维度都给时取交集；只给一维按单维过滤）。 */

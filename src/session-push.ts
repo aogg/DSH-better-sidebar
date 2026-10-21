@@ -37,7 +37,19 @@
  *   `notifyHistory` whenever the prompt-history recorder appends real-time
  *   records for a session (index.ts wires the recorder's sink to it). Event
  *   level, no one-shot/coalescing: each new record batch goes out to every
- *   socket watching that session as-is.
+ *   socket watching that session as-is. Only FRESH appends ride this frame —
+ *   the recorder's append path dedupes by record key first, so a record the
+ *   seed scan already stored is never pushed twice.
+ * - `history-seed`: `{kind:'history-seed', cwd, seeding}` broadcast by
+ *   `notifyHistorySeed` when a project's seed scan STARTS (`seeding:true`) and
+ *   FINISHES (`seeding:false`) — the prompt-history tab's seeding strip and
+ *   its one-shot "refetch the first page when indexing completes" are driven
+ *   by this frame instead of polling `history.list`. Project-scoped (not
+ *   session-scoped), so it goes to every attached socket unfiltered; `cwd` is
+ *   the same project root `history.list` answers with (`project.cwd`), which
+ *   is how a client claims the frame. Clients that don't know the kind drop
+ *   it in their existing unknown-kind filter — no shape change to the frames
+ *   they do read.
  *
  * Two frame kinds, two schedules: the blank flip is one-shot, so each socket
  * pushes at most one `blank:false` phase frame per session, ever (a burst of
@@ -66,6 +78,12 @@ export type SessionPushFrame =
   | { kind: 'cwd'; sessionId: string; cwd: string; root: string; parent: string | null }
   /** Freshly recorded prompt-history send records (event level, no coalescing). */
   | { kind: 'history'; sessionId: string; records: HistorySendRecord[] }
+  /**
+   * A project's seed scan started (`seeding:true`) or finished (`seeding:false`);
+   * `cwd` is the project root exactly as `history.list`'s `project.cwd` names it.
+   * Broadcast to every attached socket (project-scoped, no watch filter).
+   */
+  | { kind: 'history-seed'; cwd: string; seeding: boolean }
 
 /** One resolved cwd answer, shaped like the `session.cwd` route's return value. */
 export interface SessionCwdAnswer {
@@ -113,6 +131,12 @@ export interface SessionPushHub {
    * watching `sessionId` (event level: no one-shot set, no coalescing window).
    */
   notifyHistory(sessionId: string, records: readonly HistorySendRecord[]): void
+  /**
+   * Broadcast a project seed-scan state change to every attached socket (the
+   * prompt-history tab's seeding strip / one-shot completion refetch key off
+   * this frame; project-scoped, so no watch filter applies).
+   */
+  notifyHistorySeed(projectRoot: string, seeding: boolean): void
   /** Release the event feed (socket teardown stays with the server). */
   dispose(): void
 }
@@ -130,7 +154,7 @@ export function createSessionPushHub(ctx: Context, options?: SessionPushHubOptio
   if (typeof ctx.on !== 'function') {
     // Test doubles without the event API still accept sockets, which then
     // simply never hear anything.
-    return { attach: () => {}, notifyHistory: () => {}, dispose: () => {} }
+    return { attach: () => {}, notifyHistory: () => {}, notifyHistorySeed: () => {}, dispose: () => {} }
   }
   const offEvent = ctx.on('session/event', (session, event) => {
     const sessionId = (session as { id?: unknown } | null)?.id
@@ -163,6 +187,12 @@ export function createSessionPushHub(ctx: Context, options?: SessionPushHubOptio
       // every socket watching the session (unwatched sockets stay silent).
       if (records.length === 0) return
       for (const socket of sockets) socket.notifyHistory(sessionId, records)
+    },
+    notifyHistorySeed: (projectRoot, seeding) => {
+      // Project-scoped: broadcast, no watch filter (the seeding tab may not
+      // watch every session the scan covers yet — that is exactly the gap the
+      // completion frame's client-side refetch closes).
+      for (const socket of sockets) socket.notifyHistorySeed(projectRoot, seeding)
     },
     dispose: () => {
       offEvent()
@@ -267,6 +297,19 @@ class SessionSocket {
   notifyHistory(sessionId: string, records: readonly HistorySendRecord[]): void {
     if (this.closed || !this.watched.has(sessionId)) return
     this.send({ kind: 'history', sessionId, records: [...records] })
+  }
+
+  /**
+   * Broadcast a project seed-scan state change. Not watch-gated: the scan's
+   * scope routinely covers sessions the client has never listed, and the
+   * completion frame is what tells the tab to refetch and discover them.
+   * @param projectRoot - the project root, identical to `history.list`'s
+   *   `project.cwd` (same resolution, so the client can string-compare).
+   * @param seeding - true = scan started, false = scan finished.
+   */
+  notifyHistorySeed(projectRoot: string, seeding: boolean): void {
+    if (this.closed) return
+    this.send({ kind: 'history-seed', cwd: projectRoot, seeding })
   }
 
   /**

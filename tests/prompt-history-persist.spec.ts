@@ -191,8 +191,11 @@ describe('prompt-history persist（发送记录 JSONL）', () => {
   it('appendRecords 落 JSONL + meta 水位；同 key 幂等；新实例重载同内容', async () => {
     const store = new PromptHistoryStore({ root })
     const key = projectKeyOf('/work/alpha')
-    await store.appendRecords(key, [record('a', 1, 1000), record('a', 2, 2000)], { a: 2 })
-    await store.appendRecords(key, [record('a', 2, 2000), record('b', 0, 3000)], { a: 5, b: 0 })
+    const first = await store.appendRecords(key, [record('a', 1, 1000), record('a', 2, 2000)], { a: 2 })
+    // 返回值 = 本次真正新收的 fresh（ws 推送只发这批，重复账不出站）。
+    expect(first.map(item => item.key)).toEqual(['a:1', 'a:2'])
+    const second = await store.appendRecords(key, [record('a', 2, 2000), record('b', 0, 3000)], { a: 5, b: 0 })
+    expect(second.map(item => item.key)).toEqual(['b:0'])
     const entry = await store.loadProject(key)
     expect(entry.records.map(item => [item.sessionId, item.seq])).toEqual([['a', 1], ['a', 2], ['b', 0]])
     expect(entry.watermarks).toEqual({ a: 5, b: 0 })
@@ -205,6 +208,9 @@ describe('prompt-history persist（发送记录 JSONL）', () => {
     const reloaded = await new PromptHistoryStore({ root }).loadProject(key)
     expect(reloaded.records.map(item => item.key)).toEqual(entry.records.map(item => item.key))
     expect(reloaded.watermarks).toEqual({ a: 5, b: 0 })
+    // 全重复（且水位无推进）→ 空返回、零落盘。
+    const repeat = await store.appendRecords(key, [record('a', 1, 1000), record('a', 2, 2000), record('b', 0, 3000)])
+    expect(repeat).toEqual([])
   })
 
   it('损坏行跳过不抛；乱序记录在索引里保持 time/seq 升序', async () => {
@@ -261,7 +267,7 @@ describe('prompt-history persist（发送记录 JSONL）', () => {
     // 把 records 路径占成文件，mkdir/appendFile 必败。
     await mkdir(join(root, 'prompt-history'), { recursive: true })
     await writeFile(join(root, 'prompt-history', 'records'), 'not a dir', 'utf8')
-    await expect(store.appendRecords(key, [record('a', 1, 1000)])).resolves.toBeUndefined()
+    await expect(store.appendRecords(key, [record('a', 1, 1000)])).resolves.toEqual([record('a', 1, 1000)])
     expect(warn).toHaveBeenCalled()
     expect((await store.loadProject(key)).records.map(item => item.seq)).toEqual([1])
   })

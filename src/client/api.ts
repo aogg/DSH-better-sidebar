@@ -35,7 +35,9 @@ import type { HistoryAnnotationOpInput, HistoryAnnotations } from '../prompt-his
  * sessions (the chat-style tab re-groups it client-side); `nextCursor` is
  * opaque — pass it straight back as `historyList({ cursor })` for the next
  * page. While the host is still indexing (`seeding: true`) the first page
- * grows under repeated cursor-less calls — the client polls until it flips.
+ * keeps growing — the tab learns the flip through the session-push socket's
+ * `history-seed` frame (v0.28.15+) and refetches the first page ONCE; it
+ * never polls.
  */
 export interface HistoryListResult {
   available: true
@@ -45,8 +47,8 @@ export interface HistoryListResult {
   nextCursor?: string
   /** Whether another page exists behind `nextCursor`. */
   hasMore: boolean
-  /** The host's index is still being seeded: cursor-less calls keep
-   *  returning new records, so the client polls the first page until false. */
+  /** The host's index is still being seeded; the flip arrives as a
+   *  `history-seed` frame on the session-push socket (`seeding: false`). */
   seeding: boolean
   /** The project scope the listing is bound to (its workspace root). */
   project?: { cwd: string }
@@ -758,9 +760,9 @@ export const api = {
     }),
   /**
    * 「历史发送」：当前项目的跨会话用户发送记录，新→旧平铺分页（`cursor`
-   * 翻页透传 {@link HistoryListResult.nextCursor}；`seeding` 期间不带
-   * cursor 重拉首页会合并出新记录）。宿主没有 persistence 服务时抛 503
-   * `history-error`（页签内联降级提示）。
+   * 翻页透传 {@link HistoryListResult.nextCursor}；`seeding` 翻转由 ws 的
+   * `history-seed` 帧告知，客户端只在收尾后一次性补拉首页，不轮询）。宿主
+   * 没有 persistence 服务时抛 503 `history-error`（页签内联降级提示）。
    */
   historyList: (payload: { sessionId?: string; cursor?: string; limit?: number } = {}) =>
     call<HistoryListResult>('history.list', payload),

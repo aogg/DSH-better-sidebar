@@ -3,9 +3,15 @@
  *
  * 数据面（契约，v0.28.0+）：
  * - `history.list` 每次回一页当前项目的记录：新→旧的跨会话复合平铺序，
- *   `nextCursor` 翻页游标（「加载更多」透传），`seeding` 标记宿主索引还在
- *   建设中（此时不带 cursor 重拉首页会不断合并出新记录，本页每 ~1s 轮询到
- *   它翻 false 为止）；`degraded` 表示只降级到当前会话；
+ *   `nextCursor` 翻页游标（「加载更多」透传）；`seeding` 标记宿主索引还在
+ *   建设中；`degraded` 表示只降级到当前会话。本页对 history.list 只有三种
+ *   一次性调用：首开拉首页、用户点「加载更多」、以及 ws 报告扫描收尾后的
+ *   一次性补拉——没有任何定时轮询（v0.28.15 起轮询移除）；
+ * - 实时通道只有 ws（`connectSessionPush`）：`kind:'history'` 帧推新记录
+ *   （服务端种子扫描期每次 append 的新账也推，扫描期无需客户端补拉），
+ *   `kind:'history-seed'` 帧推某项目扫描开始/结束（cwd 与 history.list 的
+ *   `project.cwd` 同源）；老宿主不发 seed 帧，页签退化为「提示条常亮到手动
+ *   刷新为止」，功能不受损；
  * - 记录 key 恒为 `${sessionId}:${seq}`，是评论/标签/关联组成员的稳定锚；
  * - 评论/标签/关联组来自 `history.annotationsGet`，写操作走
  *   `history.annotationsUpdate`（单个 op 归并，返回写后的全量注解库——本页
@@ -14,10 +20,15 @@
  * 交互流（渐进显示，绝不阻塞式 loading）：
  * 1. 首开立即渲染空列表 + 顶部细加载条，随后异步拉首页；
  * 2. 每页到达后新记录进入发送队列，按 ~40ms 一条的微节奏逐条上屏；
- * 3. `seeding` 期间轮询首页合并新记录；`connectSessionPush` 的
- *    `kind:'history'` 帧（sessionId 在已加载记录的会话集合内）同样走该
- *    队列实时逐条追加；
- * 4. 「加载更多」按 `hasMore`/`nextCursor` 拉下一页，追加走同一队列。
+ * 3. ws `kind:'history'` 帧的记录走同一队列实时逐条追加；合并按 key 双层
+ *    幂等（入队侧 seen 剪枝 + 上屏侧 mergeHistoryRecords），同一条记录无论
+ *    从首页/翻页/实时哪条路径到达几次，都只上屏一次；
+ * 4. `kind:'history-seed'`（seeding:true）亮「索引建设中」提示条；
+ *    （seeding:false）熄条并补拉一次首页——把 watch 建立前错过的会话记录
+ *    补齐；用户已翻页时跳过补拉（翻页游标语义优先，绝不回卷）；
+ * 5. 「加载更多」按 `hasMore`/`nextCursor` 拉下一页，追加走同一队列。游标
+ *    是复合键（`${time}:${sessionId}:${seq}`），实时新账都落在游标之前
+ *    （更新端），不破坏下一页语义。
  *
  * 展示：按会话（=一场对话）分组保留，组内时间正序（旧→新的聊天顺序），
  * 组间按最近一条消息新→旧；组头 = 会话标识 + 最近时间 + 条数；行文本默认
@@ -26,23 +37,20 @@
  *
  * 降级路径（绝不抛未捕获异常）：`history.list` 失败（宿主 persistence 缺席
  * 的 503 `history-error`、网络失败等）→ 页签内联降级提示 + 重试按钮；翻页
- * 失败 → 工具条下的内联错误行（可关闭）；ws 断连/轮询失败静默（现有列表
- * 继续可用，重连后自动恢复追加）；注解写失败 → 同一内联错误行；空库 →
- * 空态文案。
+ * 失败 → 工具条下的内联错误行（可关闭）；ws 断连静默（现有列表继续可用，
+ * 重连后自动恢复追加）；注解写失败 → 同一内联错误行；空库 → 空态文案。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, SidebarApiError, type HistoryListResult } from './api.ts'
-import { connectSessionPush } from './session-push.ts'
+import { connectSessionPush, type SessionPushFrame } from './session-push.ts'
 import { formatStamp, formatStampFull, t } from './locales.ts'
-import { collectHistoryTags, filterHistoryRecords, groupRecordsBySession, type HistorySessionGroup } from '../prompt-history-groups.ts'
+import { collectHistoryTags, filterHistoryRecords, groupRecordsBySession, mergeHistoryRecords, type HistorySessionGroup } from '../prompt-history-groups.ts'
 import { annotationOfRecord, emptyAnnotations, type HistoryAnnotationOpInput, type HistoryAnnotations, type HistoryComment } from '../prompt-history-store.ts'
 import type { HistorySendRecord } from '../prompt-history-extract.ts'
 import css from './HistoryView.module.css'
 
 /** 逐条上屏的微节奏（一条接一条的间隔；太短看不出渐进，太长拖泥带水）。 */
 const DRIP_INTERVAL_MS = 40
-/** seeding 轮询首页的节奏。 */
-const SEED_POLL_MS = 1000
 /** 实时新记录提示条的停留时长。 */
 const LIVE_NOTICE_MS = 4000
 /** ws watch 集上限（当前会话 + 已加载记录出现过的会话，去重后截断）。 */
@@ -280,7 +288,7 @@ export function HistoryView(props: { visible?: boolean; sessionId?: string }): R
   const [loadingMore, setLoadingMore] = useState(false)
   const [loadError, setLoadError] = useState<string | undefined>(undefined)
   const [actionError, setActionError] = useState<string | undefined>(undefined)
-  // 实时（轮询/ws）合并进来的新记录数（提示条展示几秒后自动清零）。
+  // 实时（ws）合并进来的新记录数（提示条展示几秒后自动清零）。
   const [liveCount, setLiveCount] = useState(0)
   // ws watch 集（当前会话 + 已加载记录出现过的会话；仅集合内容变化才更新，
   // 避免 drip 每条都重连 socket）。
@@ -303,6 +311,16 @@ export function HistoryView(props: { visible?: boolean; sessionId?: string }): R
   const liveTimerRef = useRef<number | undefined>(undefined)
   const watchRef = useRef<readonly string[]>([])
   const metaRef = useRef<HistoryMeta>(HISTORY_META_EMPTY)
+  // seeding 状态镜像（ws 回调读 ref，不依赖渲染快照）+ 已收尾项目的 cwd 集
+  // （history-seed 结束帧先于 history.list 响应落地时，响应不得把 seeding
+  // 标回去）。
+  const seedingRef = useRef(false)
+  const seedDoneRef = useRef<Set<string>>(new Set())
+  // 用户是否已翻页（越过首页）：扫描收尾的一次性补拉只在未翻页时执行，
+  // 翻页游标语义优先，绝不回卷。
+  const pagedRef = useRef(false)
+  // 扫描收尾补拉的在途闸（同一收尾只补拉一次）。
+  const seedRefetchRef = useRef(false)
 
   const pumpRef = useRef<() => void>(() => {
     const next = queueRef.current.shift()
@@ -310,7 +328,9 @@ export function HistoryView(props: { visible?: boolean; sessionId?: string }): R
       dripTimerRef.current = undefined
       return
     }
-    setRecords(previous => [...previous, next])
+    // 上屏合并的幂等兜底：key 已在屏上的记录直接丢弃——入队侧 seen 剪枝
+    // 失守（多路径/状态重置竞态）也绝不让同一条记录二次上屏。
+    setRecords(previous => mergeHistoryRecords(previous, [next]))
     dripTimerRef.current = window.setTimeout(() => { pumpRef.current() }, DRIP_INTERVAL_MS)
   })
   const enqueue = useCallback((incoming: readonly HistorySendRecord[]): number => {
@@ -356,13 +376,42 @@ export function HistoryView(props: { visible?: boolean; sessionId?: string }): R
     if (liveTimerRef.current !== undefined) window.clearTimeout(liveTimerRef.current)
   }, [])
 
-  /** 一页响应落地：更新元数据 + 新记录入队（去重）。 */
+  /**
+   * 扫描收尾后的一次性补拉首页（非定时器）：把 watch 建立前错过的会话记录
+   * 补齐。只合并新账，绝不回卷翻页游标（已翻页时直接跳过）；在途闸保证同
+   * 一收尾只补拉一次。
+   */
+  const refetchFirstPageOnce = useCallback((): void => {
+    if (pagedRef.current || seedRefetchRef.current) return
+    seedRefetchRef.current = true
+    void (async (): Promise<void> => {
+      try {
+        const list = await api.historyList(listPayload(props.sessionId))
+        const added = enqueue(list.records)
+        refreshWatch()
+        if (added > 0) flashLive(added)
+      } catch {
+        // 补拉失败静默：已收到的记录仍可用，手动刷新兜底。
+      } finally {
+        seedRefetchRef.current = false
+      }
+    })()
+  }, [enqueue, flashLive, props.sessionId, refreshWatch])
+
+  /** 一页响应落地：更新元数据 + 新记录入队（去重）。seeding 以 ws 的收尾帧
+   *  为准：结束帧先于本响应落地（响应生成晚于扫描收尾的竞态）时不再标回，
+   *  并同样触发一次性补拉（响应快照可能落后于扫描收尾）。 */
   const applyListResult = useCallback((list: HistoryListResult): number => {
     const next = metaOf(list)
+    if (next.seeding === true && next.projectCwd !== undefined && seedDoneRef.current.has(next.projectCwd)) {
+      next.seeding = false
+      refetchFirstPageOnce()
+    }
+    seedingRef.current = next.seeding
     metaRef.current = next
     setMeta(next)
     return enqueue(list.records)
-  }, [enqueue])
+  }, [enqueue, refetchFirstPageOnce])
 
   /** 首屏/刷新：清空队列后重拉首页（annotations 失败静默降级为空库）。 */
   const load = useCallback(async (): Promise<void> => {
@@ -379,6 +428,8 @@ export function HistoryView(props: { visible?: boolean; sessionId?: string }): R
     setRecords([])
     setLiveCount(0)
     metaRef.current = HISTORY_META_EMPTY
+    seedingRef.current = false
+    pagedRef.current = false
     setMeta(HISTORY_META_EMPTY)
     try {
       const [list, notes] = await Promise.all([
@@ -398,7 +449,8 @@ export function HistoryView(props: { visible?: boolean; sessionId?: string }): R
   }, [applyListResult, props.sessionId, refreshWatch])
   useEffect(() => { void load() }, [load])
 
-  /** 翻页：透传 nextCursor 拉下一页，新记录走同一渐进队列；失败内联提示。 */
+  /** 翻页：透传 nextCursor 拉下一页，新记录走同一渐进队列；失败内联提示。
+   *  成功即标记已翻页——扫描收尾的一次性补拉不再执行（游标语义优先）。 */
   const loadMore = useCallback(async (): Promise<void> => {
     const cursor = metaRef.current.nextCursor
     if (loadingMore || metaRef.current.hasMore !== true || cursor === undefined || cursor === '') return
@@ -410,6 +462,7 @@ export function HistoryView(props: { visible?: boolean; sessionId?: string }): R
       refreshWatch()
       // 翻页是用户主动行为，不为它闪「实时新记录」提示。
       void added
+      pagedRef.current = true
     } catch (error) {
       setActionError(error instanceof SidebarApiError ? `${error.code}: ${error.message}` : String(error))
     } finally {
@@ -417,37 +470,41 @@ export function HistoryView(props: { visible?: boolean; sessionId?: string }): R
     }
   }, [applyListResult, loadingMore, props.sessionId, refreshWatch])
 
-  const seeding = meta.seeding
-  // seeding 轮询：每 ~1s 不带 cursor 重拉首页，合并新记录；seeding 翻 false
-  // 停止。轮询失败静默（下一跳继续），绝不打断现有列表。
-  useEffect(() => {
-    if (seeding !== true) return undefined
-    let cancelled = false
-    const timer = window.setInterval(() => {
-      void api.historyList(listPayload(props.sessionId))
-        .then(list => {
-          if (cancelled) return
-          const added = applyListResult(list)
-          refreshWatch()
-          if (added > 0) flashLive(added)
-        })
-        .catch(() => { /* 轮询失败静默降级：现有列表仍可用 */ })
-    }, SEED_POLL_MS)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
+  /**
+   * ws `history-seed` 帧：某项目种子扫描开始/结束。cwd 与 `project.cwd`
+   * 同源字符串，认领后才动作（别的项目的扫描与本页无关）。开始 → 亮提示条；
+   * 结束 → 熄条 + 一次性补拉首页（见 refetchFirstPageOnce）。
+   */
+  const handleSeedFrame = useCallback((frame: SessionPushFrame): void => {
+    const cwd = typeof frame.cwd === 'string' ? frame.cwd : ''
+    if (cwd === '' || cwd !== metaRef.current.projectCwd) return
+    if (frame.seeding === true) {
+      seedDoneRef.current.delete(cwd)
+      seedingRef.current = true
+      setMeta(previous => ({ ...previous, seeding: true }))
+      return
     }
-  }, [applyListResult, flashLive, props.sessionId, refreshWatch, seeding])
+    seedDoneRef.current.add(cwd)
+    if (seedingRef.current !== true) return
+    seedingRef.current = false
+    setMeta(previous => ({ ...previous, seeding: false }))
+    refetchFirstPageOnce()
+  }, [refetchFirstPageOnce])
 
   // ws 实时追加：watch 集变化才（重）连；帧过滤 = kind:'history' 且
   // sessionId 在当前 watch 集内；新记录去重后走同一渐进队列。
+  // kind:'history-seed' 帧驱动 seeding 提示条与收尾补拉（见 handleSeedFrame）。
   useEffect(() => {
     if (watchSessions.length === 0) return undefined
     try {
       return connectSessionPush(watchSessions, frame => {
         try {
+          if (frame.kind === 'history-seed') {
+            handleSeedFrame(frame)
+            return
+          }
           if (frame.kind !== 'history') return
-          if (!watchRef.current.includes(frame.sessionId)) return
+          if (!watchRef.current.includes(frame.sessionId ?? '')) return
           const incoming = historyRecordsOf(frame.records)
           const added = enqueue(incoming)
           refreshWatch()
@@ -458,7 +515,7 @@ export function HistoryView(props: { visible?: boolean; sessionId?: string }): R
       // ws 不可用（构造即抛等极端环境）：页签仍可用，只是没有实时追加。
       return undefined
     }
-  }, [enqueue, flashLive, refreshWatch, watchSessions])
+  }, [enqueue, flashLive, handleSeedFrame, refreshWatch, watchSessions])
 
   const mutate = useCallback(async (op: HistoryAnnotationOpInput): Promise<boolean> => {
     setActionError(undefined)
@@ -502,6 +559,9 @@ export function HistoryView(props: { visible?: boolean; sessionId?: string }): R
   const allTags = useMemo(() => collectHistoryTags(annotations), [annotations])
   const recordIndex = useMemo(() => new Map(flat.map(record => [record.key, record])), [flat])
   const projectCwd = meta.projectCwd
+  // seeding 提示条：首页响应的 seeding + ws history-seed 帧共同驱动（帧翻转
+  // 走 setMeta，这里只是读取）。
+  const seeding = meta.seeding
 
   const createGroup = async (): Promise<void> => {
     const name = groupName.trim()

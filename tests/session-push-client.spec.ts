@@ -8,7 +8,9 @@
  * with their blank answer intact (`blank:true` = watch-time "still waiting",
  * `blank:false` = the flip), whose `history` frames (freshly indexed
  * user-prompt records, the prompt-history tab's live feed) pass through with
- * their records payload intact, whose open/close transitions reach the
+ * their records payload intact, whose project-scoped `history-seed` frames
+ * (a seed scan's start/finish, no sessionId on the wire) pass through with
+ * their cwd/seeding payload intact, whose open/close transitions reach the
  * optional `onState` signal (observability only — the session hooks stay
  * connected either way), and whose reconnects back off 1s → 15s until
  * disposed (then nothing re-opens).
@@ -227,6 +229,27 @@ describe('connectSessionPush', () => {
       expect(onFrame).toHaveBeenCalledTimes(2)
       expect(onFrame).toHaveBeenNthCalledWith(1, { kind: 'history', sessionId: 't1', records })
       expect(onFrame).toHaveBeenNthCalledWith(2, { kind: 'history', sessionId: 't9', records: [] })
+    } finally {
+      dispose()
+    }
+  })
+
+  it('passes history-seed frames through — project-scoped, no sessionId on the wire', () => {
+    const onFrame = vi.fn()
+    const dispose = connectSessionPush(['t1'], onFrame)
+    try {
+      const socket = socketAt(0)
+      socket.open()
+      // The seed frame carries ONLY the project root + the scan state; the
+      // connector still validates it (unknown kinds are dropped) and hands it
+      // over untouched — claiming it by cwd stays the tab's business.
+      socket.frame({ kind: 'history-seed', cwd: '/work/alpha', seeding: true })
+      socket.frame({ kind: 'history-seed', cwd: '/work/alpha', seeding: false })
+      // A seed frame without a cwd is malformed: dropped.
+      socket.frame({ kind: 'history-seed', seeding: true })
+      expect(onFrame).toHaveBeenCalledTimes(2)
+      expect(onFrame).toHaveBeenNthCalledWith(1, { kind: 'history-seed', cwd: '/work/alpha', seeding: true })
+      expect(onFrame).toHaveBeenNthCalledWith(2, { kind: 'history-seed', cwd: '/work/alpha', seeding: false })
     } finally {
       dispose()
     }

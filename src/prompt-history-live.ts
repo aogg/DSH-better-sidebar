@@ -15,9 +15,15 @@
  * - 实时记录：挂载时订阅 `ctx.on('session/event')`，`user/message` 事件经
  *   extractSendRecords（注入消息已被它过滤）抽取后归属项目并 append；ctx.on
  *   缺席（测试替身）静默跳过。扫描与实时的竞态靠记录 key 幂等（谁先到谁记账，
- *   后到的被 byKey 挡住）。卸载由调用方（index.ts 的 ctx.effect）触发 dispose。
+ *   后到的被 byKey 挡住），且推送出口与存储幂等同源——appendRecords 只回本次
+ *   真正新收的 fresh，emitRecords 只发 fresh，重复账绝不二次出站。
  * - 推送出口：新记录经 `onRecords` 注册的 sink 交给 ws hub（session-push 的
- *   `notifyHistory`），sink 异常不回流事件源。
+ *   `notifyHistory`），sink 异常不回流事件源。种子扫描期间每次 append 的新账
+ *   同样走 onRecords——扫描期不再依赖客户端轮询补账，watch 中的会话实时收到。
+ * - seeding 状态：kick 标记扫描开始、扫描收尾（含降级/失败）置 false，翻转经
+ *   `onSeed` 注册的 sink 交给 ws hub（`notifyHistorySeed` 广播）——客户端的
+ *   seeding 提示条与扫描完成后的「补拉一次首页」由该帧驱动，无需轮询。
+ *   卸载由调用方（index.ts 的 ctx.effect）触发 dispose。
  *
  * 当前会话的项目根解析（{@link resolveProjectRootOf}）：活会话 header.cwd
  * 优先（容错 `.session.header.cwd` 形态），持久 header 兜底（session.cwd 路
@@ -49,8 +55,14 @@ export interface PromptHistoryLive {
   isSeeding(projectKey: string): boolean
   /** 该项目上一次扫描是否降级（list 能力缺席）；从未扫描过为 undefined。 */
   degradedOf(projectKey: string): boolean | undefined
-  /** 新记录 sink（ws 推送挂载点）；返回退订函数。 */
+  /** 新记录 sink（ws 推送挂点）；返回退订函数。扫描期与实时路径都走这里。 */
   onRecords(sink: (sessionId: string, records: readonly HistorySendRecord[]) => void): () => void
+  /**
+   * seeding 状态 sink（ws 广播挂点）；返回退订函数。`seeding:true` = 该项目
+   * 种子扫描开始，`false` = 扫描收尾（成功/降级/失败都发）。projectRoot 与
+   * history.list 的 `project.cwd` 同源（同一解析路径），客户端按它认领。
+   */
+  onSeed(sink: (projectRoot: string, seeding: boolean) => void): () => void
   /** 退订事件源并清空 sink（幂等）。 */
   dispose(): void
 }
@@ -99,16 +111,28 @@ export function createPromptHistoryLive(ctx: Context, store: PromptHistoryStore,
     options?.logger?.warn?.(message, error)
   }
   const sinks = new Set<(sessionId: string, records: readonly HistorySendRecord[]) => void>()
+  const seedSinks = new Set<(projectRoot: string, seeding: boolean) => void>()
   const scanning = new Set<string>()
   const degradedByProject = new Map<string, boolean>()
 
   const emitRecords = (sessionId: string, records: readonly HistorySendRecord[]): void => {
+    if (records.length === 0) return
     for (const sink of sinks) {
       try {
         sink(sessionId, records)
       } catch (error) {
         // 一个坏 sink 不能把事件源（进而把宿主会话）拖挂。
         warn('dsh-better-sidebar: prompt-history push sink failed', error)
+      }
+    }
+  }
+
+  const emitSeed = (projectRoot: string, seeding: boolean): void => {
+    for (const sink of seedSinks) {
+      try {
+        sink(projectRoot, seeding)
+      } catch (error) {
+        warn('dsh-better-sidebar: prompt-history seed-state sink failed', error)
       }
     }
   }
@@ -137,7 +161,9 @@ export function createPromptHistoryLive(ctx: Context, store: PromptHistoryStore,
     return { ids: currentSessionId !== undefined ? [currentSessionId] : [], degraded: true }
   }
 
-  /** 扫一个会话：水位续扫持久日志（窗口防御），无持久层时退化为活快照一次抽。 */
+  /** 扫一个会话：水位续扫持久日志（窗口防御），无持久层时退化为活快照一次抽。
+   *  每窗 append 的新账即时 emitRecords——扫描期 watch 该会话的客户端实时收账，
+   *  不再靠轮询。 */
   const scanSession = async (projectKey: string, sessionId: string): Promise<void> => {
     const persistence = persistenceOf()
     if (persistence === undefined) {
@@ -147,11 +173,12 @@ export function createPromptHistoryLive(ctx: Context, store: PromptHistoryStore,
       const extracted = extractSendRecords(sessionId, events as readonly HistorySourceEvent[]).records
       if (extracted.length === 0) return
       const lastSeq = (events as readonly { seq?: unknown }[]).at(-1)?.seq
-      await store.appendRecords(
+      const fresh = await store.appendRecords(
         projectKey,
         extracted,
         typeof lastSeq === 'number' && Number.isSafeInteger(lastSeq) ? { [sessionId]: lastSeq } : undefined,
       )
+      emitRecords(sessionId, fresh)
       return
     }
     const entry = await store.loadProject(projectKey)
@@ -170,10 +197,10 @@ export function createPromptHistoryLive(ctx: Context, store: PromptHistoryStore,
         const lastSeq = (events as readonly { seq?: unknown }[]).at(-1)?.seq
         if (typeof lastSeq !== 'number' || !Number.isSafeInteger(lastSeq)) {
           // 窗口读满却拿不到最后 seq（异常信封）：无法推进水位，按截断收尾。
-          await store.appendRecords(projectKey, windowRecords)
+          emitRecords(sessionId, await store.appendRecords(projectKey, windowRecords))
           break
         }
-        await store.appendRecords(projectKey, windowRecords, { [sessionId]: lastSeq })
+        emitRecords(sessionId, await store.appendRecords(projectKey, windowRecords, { [sessionId]: lastSeq }))
         if (events.length < HISTORY_READ_WINDOW) break
         offset = lastSeq + 1
       }
@@ -204,10 +231,16 @@ export function createPromptHistoryLive(ctx: Context, store: PromptHistoryStore,
       degradedByProject.set(projectKey, degraded)
       scanning.delete(projectKey)
       store.markSeeding(projectKey, false)
+      // 扫描收尾（成功/降级/失败都发）：客户端据此熄掉 seeding 提示条并补拉
+      // 一次首页，把扫描期没 watch 到的会话记录补齐（那些会话的实时帧在
+      // watch 建立前已被 hub 过滤，补拉是唯一兜底）。
+      emitSeed(projectRoot, false)
     }
   }
 
-  /** 实时事件 → 记录 → 归属项目 → append + 推送（注入消息已被 extract 过滤）。 */
+  /** 实时事件 → 记录 → 归属项目 → append + 推送（注入消息已被 extract 过滤）。
+   *  只推 appendRecords 认下的 fresh：扫描已记过的账被 byKey 挡下后不再出站，
+   *  ws 推送与存储幂等同源（同一条记录绝不二次推送）。 */
   const recordLiveEvent = async (sessionId: string, event: SidebarSessionEvent): Promise<void> => {
     const records = extractSendRecords(sessionId, [event as HistorySourceEvent]).records
     if (records.length === 0) return
@@ -217,8 +250,8 @@ export function createPromptHistoryLive(ctx: Context, store: PromptHistoryStore,
       // 扫描自然会补账。
       return
     }
-    await store.appendRecords(projectKeyOf(root), records, { [sessionId]: event.seq })
-    emitRecords(sessionId, records)
+    const fresh = await store.appendRecords(projectKeyOf(root), records, { [sessionId]: event.seq })
+    emitRecords(sessionId, fresh)
   }
 
   const onSessionEvent = (session: unknown, event: SidebarSessionEvent): void => {
@@ -243,6 +276,9 @@ export function createPromptHistoryLive(ctx: Context, store: PromptHistoryStore,
       const entry = store.peekProject(projectKey)
       if (entry !== undefined && (entry.loaded || entry.seeding)) return
       store.markSeeding(projectKey, true)
+      // 扫描开始即广播：已开着的页签（还没从 history.list 读到 seeding:true 的）
+      // 也能立刻亮提示条；结束时同样广播（ensureProject 的 finally）。
+      emitSeed(projectRoot, true)
       void ensureProject(projectKey, projectRoot, currentSessionId)
     },
     isSeeding: projectKey => store.peekProject(projectKey)?.seeding === true,
@@ -251,9 +287,14 @@ export function createPromptHistoryLive(ctx: Context, store: PromptHistoryStore,
       sinks.add(sink)
       return () => { sinks.delete(sink) }
     },
+    onSeed: sink => {
+      seedSinks.add(sink)
+      return () => { seedSinks.delete(sink) }
+    },
     dispose: () => {
       offEvent?.()
       sinks.clear()
+      seedSinks.clear()
       scanning.clear()
       degradedByProject.clear()
     },

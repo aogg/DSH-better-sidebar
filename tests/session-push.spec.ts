@@ -13,7 +13,10 @@
  * degraded to the bare cwd frame when that resolution fails or lands after
  * the session left the watch set, while a failing phase resolution stays
  * silent (no bare form) and a late phase answer never regresses a settled
- * flip.
+ * flip. `history` frames push fresh record batches to watched sockets only
+ * (event level); `history-seed` frames broadcast a project seed scan's
+ * start/finish to EVERY attached socket (project-scoped, no watch filter) —
+ * both stay no-ops after dispose and without the event API.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSessionPushHub, type SessionCwdAnswer } from '../src/session-push.ts'
@@ -606,6 +609,46 @@ describe('session push hub: history frames', () => {
 
     const bare = createSessionPushHub({} as unknown as Context)
     expect(() => { bare.notifyHistory('t1', [historyRecord]) }).not.toThrow()
+    bare.dispose()
+  })
+
+  it('broadcasts history-seed frames to every attached socket, unwatched ones included', () => {
+    const { ctx } = fakeCtx()
+    const hub = createSessionPushHub(ctx)
+    const watched = new FakeSocket()
+    const other = new FakeSocket()
+    const idle = new FakeSocket()
+    watch(hub, watched, ['t1'])
+    watch(hub, other, ['t2'])
+    hub.attach(idle.asWebSocket()) // 一个没 watch 任何会话的 socket
+
+    hub.notifyHistorySeed('/work/alpha', true)
+    const start = { kind: 'history-seed', cwd: '/work/alpha', seeding: true }
+    expect(watched.frames()).toEqual([start])
+    expect(other.frames()).toEqual([start])
+    expect(idle.frames()).toEqual([start])
+
+    hub.notifyHistorySeed('/work/alpha', false)
+    const end = { kind: 'history-seed', cwd: '/work/alpha', seeding: false }
+    expect(watched.frames()).toEqual([start, end])
+
+    // 别的项目的扫描同样原样广播（客户端按 cwd 认领）。
+    hub.notifyHistorySeed('/work/beta', true)
+    expect(watched.frames().at(-1)).toEqual({ kind: 'history-seed', cwd: '/work/beta', seeding: true })
+    hub.dispose()
+  })
+
+  it('stays a no-op for history-seed after dispose and without the event API', () => {
+    const { ctx } = fakeCtx()
+    const hub = createSessionPushHub(ctx)
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+    hub.dispose()
+    expect(() => { hub.notifyHistorySeed('/work/alpha', false) }).not.toThrow()
+    expect(socket.frames()).toEqual([])
+
+    const bare = createSessionPushHub({} as unknown as Context)
+    expect(() => { bare.notifyHistorySeed('/work/alpha', true) }).not.toThrow()
     bare.dispose()
   })
 })

@@ -2179,6 +2179,13 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
     () => historyLive.onRecords((sessionId, records) => { sessionPush.notifyHistory(sessionId, records) }),
     'dsh-better-sidebar: prompt-history push sink',
   )
+  // Same order problem, second sink: the seed scan's START/FINISH broadcast
+  // (`history-seed` frames) — the tab's seeding strip and its one-shot
+  // completion refetch ride this instead of polling `history.list`.
+  ctx.effect(
+    () => historyLive.onSeed((projectRoot, seeding) => { sessionPush.notifyHistorySeed(projectRoot, seeding) }),
+    'dsh-better-sidebar: prompt-history seed-state sink',
+  )
   ctx.effect(() => ctx.webServer.registerUpgrade({
     path: '/sidebar/ws/session',
     handler: (req, socket, head) => {

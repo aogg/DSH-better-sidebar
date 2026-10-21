@@ -505,13 +505,16 @@ export class PromptHistoryStore {
    * 追加记录（幂等）：key 已存在的跳过（种子扫描与实时事件竞态安全），水位随
    * 扫描推进；内存先收账，磁盘 best-effort（失败 warn 不抛，内存态仍然完整）。
    * 记录数超限时丢最旧并在本次写时整文件重写（压实）。
+   * @returns 本次真正新收进的记录（key 不在仓里的那些）。重复到达的记录被
+   *   byKey 挡下、不出现在返回值里——调用方的 ws 推送只发这批 fresh，重复
+   *   账绝不二次上屏（推送出口的幂等与存储幂等同源）。
    */
   async appendRecords(
     projectKey: string,
     records: readonly HistorySendRecord[],
     watermarks?: Record<string, number>,
-  ): Promise<void> {
-    const queued = this.enqueueWrite(projectKey, async () => {
+  ): Promise<HistorySendRecord[]> {
+    const queued = this.enqueueWrite(projectKey, async (): Promise<HistorySendRecord[]> => {
       const entry = await this.loadProject(projectKey)
       const fresh: HistorySendRecord[] = []
       for (const candidate of records) {
@@ -528,7 +531,7 @@ export class PromptHistoryStore {
           advanced = true
         }
       }
-      if (fresh.length === 0 && !advanced) return
+      if (fresh.length === 0 && !advanced) return fresh
       if (entry.records.length > HISTORY_PROJECT_RECORDS_MAX) {
         const excess = entry.records.splice(0, entry.records.length - HISTORY_PROJECT_RECORDS_MAX)
         for (const record of excess) entry.byKey.delete(record.key)
@@ -558,8 +561,9 @@ export class PromptHistoryStore {
         // 磁盘写失败只丢持久性，内存索引仍然完整（下次操作再试）。
         this.warn(`dsh-better-sidebar: cannot persist prompt-history records for project ${projectKey}`, error)
       }
+      return fresh
     })
-    await queued
+    return queued
   }
 
   /** 内存索引上出「新→旧」一页（纯计算；未载入/为空返回空页）。 */
@@ -569,8 +573,9 @@ export class PromptHistoryStore {
     return historyPageOf(entry.records, cursor, normalizeHistoryLimit(limit))
   }
 
-  /** 每项目写串行链：append 与压实重写不交错；前一个失败不阻断后一个。 */
-  private enqueueWrite(projectKey: string, task: () => Promise<void>): Promise<void> {
+  /** 每项目写串行链：append 与压实重写不交错；前一个失败不阻断后一个。
+   *  泛型透传任务的返回值（appendRecords 要把 fresh 记录交给调用方）。 */
+  private enqueueWrite<T>(projectKey: string, task: () => Promise<T>): Promise<T> {
     const previous = this.writeChains.get(projectKey) ?? Promise.resolve()
     const next = previous.then(task, task)
     this.writeChains.set(projectKey, next.catch(() => undefined))

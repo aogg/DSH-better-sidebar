@@ -13,7 +13,13 @@
  * re-resolves and re-pushes over the same socket. A third frame,
  * `{kind:'history', sessionId, records}` (v0.28.0+), rides the same channel:
  * it tells the prompt-history tab that fresh user-prompt records of a watched
- * session were just indexed.
+ * session were just indexed. A fourth, `{kind:'history-seed', cwd, seeding}`
+ * (v0.28.15+), tells it that a project's seed scan started/finished — the
+ * tab's seeding strip and its one-shot "refetch the first page when indexing
+ * completes" are driven by this frame instead of polling `history.list`.
+ * Older clients drop the kind in their existing unknown-kind filter (no
+ * crash, no shape change); an older host simply never sends it and the newer
+ * client keeps working (it just never hears the scan-finish signal).
  *
  * This socket is the session hooks' ONLY data channel — there is no HTTP
  * polling beside it. A dropped socket is answered with reconnects that back
@@ -29,8 +35,12 @@ import { hostWebSocketUrl } from './host-route-url.ts'
 
 /** One host frame: which watched session changed, which fact — and maybe the answer. */
 export interface SessionPushFrame {
-  kind: 'phase' | 'cwd' | 'history'
-  sessionId: string
+  kind: 'phase' | 'cwd' | 'history' | 'history-seed'
+  /**
+   * The session the frame is about. Every kind carries one EXCEPT
+   * `history-seed` (project-scoped, no session on the wire).
+   */
+  sessionId?: string
   /**
    * phase frames carry the answer: `blank: false` is the one-shot flip, and a
    * watch (re)subscription resolves the CURRENT phase first — `blank: true`
@@ -54,6 +64,14 @@ export interface SessionPushFrame {
    * watches stays the caller's filter.
    */
   records?: unknown
+  /**
+   * `history-seed` frames carry the project root (identical to
+   * `history.list`'s `project.cwd` — the client string-compares it to claim
+   * the frame) and the scan state (`seeding: true` started, `false`
+   * finished). Absent on every other frame kind.
+   */
+  cwd?: unknown
+  seeding?: unknown
 }
 
 /** How long to wait before re-opening a dropped socket; failures back off to the cap. */
@@ -104,10 +122,12 @@ export function connectSessionPush(
       }
       if (frame === null || typeof frame !== 'object') return
       // A malformed or foreign frame is a late/dirty notice, not an invalidation.
-      if (
-        (frame.kind !== 'phase' && frame.kind !== 'cwd' && frame.kind !== 'history')
-        || typeof frame.sessionId !== 'string'
-      ) return
+      if (frame.kind !== 'phase' && frame.kind !== 'cwd' && frame.kind !== 'history' && frame.kind !== 'history-seed') return
+      // history-seed is project-scoped: no sessionId on the wire — its claim
+      // token is the project root, so a cwd-less seed frame is malformed.
+      if (frame.kind === 'history-seed') {
+        if (typeof frame.cwd !== 'string' || frame.cwd === '') return
+      } else if (typeof frame.sessionId !== 'string') return
       onFrame(frame)
     }
     socket.onclose = () => {
