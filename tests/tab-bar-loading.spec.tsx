@@ -136,6 +136,7 @@ describe('Workbench sessionId forwarding', () => {
       nextBrowser: 1,
       expanded: [],
       revealed: [],
+      refreshingTabs: [],
       unread: [],
       bottomOpen: true,
       bottomHeight: 220,
