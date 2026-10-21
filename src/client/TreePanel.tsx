@@ -63,6 +63,9 @@ export function TreePanel(props: {
   cwd: string | undefined
   expanded: string[]
   revealed: string[]
+  /** A click on a revealed row dismisses its highlight (passed through to
+   *  FileTree; absent → the tree keeps highlights on click). */
+  onRevealDismiss?: (paths: readonly string[]) => void
   onToggle: (path: string) => void
   onOpenFile: (path: string) => void
   /** File context-menu "open in a new tab" (passed through to FileTree). */
@@ -124,7 +127,7 @@ export function TreePanel(props: {
   service?: BetterSidebarService
 }) {
   const {
-    sessionId, cwd, expanded, revealed, onToggle, onOpenFile, onOpenFileNewTab, onOpenFileSide, onOpenTerminalAt,
+    sessionId, cwd, expanded, revealed, onRevealDismiss, onToggle, onOpenFile, onOpenFileNewTab, onOpenFileSide, onOpenTerminalAt,
     onOpenGitHistory,
     openInApp, openWithTargets, openWithPinned, openWithSsh, onOpenWith, onToggleOpenWithPin,
     openWithShowPluginTargets, gitBadges, exclude,
@@ -409,6 +412,7 @@ export function TreePanel(props: {
         cwd={cwd}
         expanded={expanded}
         revealed={revealed}
+        onRevealDismiss={onRevealDismiss}
         onToggle={onToggle}
         onOpenFile={onOpenFile}
         onOpenFileNewTab={onOpenFileNewTab}

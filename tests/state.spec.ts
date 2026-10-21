@@ -4,7 +4,7 @@ import {
   insertLeafAt, makeDefaultState, moveTab, moveTabToEdge, openDiffTab,
   openTabInBottomPane, patchTab, resizeSplit,
   resizeSplitIn, revealPaths, sanitizeState, setBottomHeight,
-  pathWithinCwd,
+  pathWithinCwd, unrevealPaths,
   splitPane, tabOpenIn, toggleBottomPanel, toggleExpanded,
   type SidebarState, type SidebarTab, type SplitNode,
 } from '../src/client/state.ts'
@@ -797,6 +797,31 @@ describe('revealPaths (show in folder)', () => {
   it('resolves nothing to the same reference (no churn)', () => {
     const base = makeDefaultState()
     expect(revealPaths(base, '/w', [])).toBe(base)
+  })
+
+  it('a DIRECTORY target expands its parent chain, never the directory itself', () => {
+    // A conversation folder link reveals the folder ROW: the ancestors make
+    // the row reachable in the lazy tree, and the folder stays collapsed (its
+    // children are the reader's to open).
+    const base = makeDefaultState()
+    const next = revealPaths(base, '/w/src', ['/w/src/sub/deep'])
+    expect(next.revealed).toEqual(['/w/src/sub/deep'])
+    expect(next.expanded).toContain('/w/src/sub')
+    expect(next.expanded).not.toContain('/w/src/sub/deep')
+  })
+})
+
+describe('unrevealPaths (clicking a highlighted row dismisses it)', () => {
+  it('drops only the given paths and keeps the rest', () => {
+    const base = { ...makeDefaultState(), revealed: ['/w/a.ts', '/w/b.ts', '/w/sub'] }
+    const next = unrevealPaths(base, ['/w/b.ts'])
+    expect(next.revealed).toEqual(['/w/a.ts', '/w/sub'])
+  })
+
+  it('answers the SAME reference when nothing named is revealed (no churn)', () => {
+    const base = { ...makeDefaultState(), revealed: ['/w/a.ts'] }
+    expect(unrevealPaths(base, ['/w/other.ts'])).toBe(base)
+    expect(unrevealPaths(base, [])).toBe(base)
   })
 })
 

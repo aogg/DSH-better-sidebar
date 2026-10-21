@@ -48,7 +48,7 @@ import { relativeTo } from './paths.ts'
 import { resolveSidebarPath } from './paths.ts'
 import { clearRetargetedPath, closePathTabs, consumeRetargetedPath, pathTabKey, retargetPathTabs } from './tree-mutations.ts'
 import type { EditorToolbarControls, EditorToolbarState, FileViewerDescriptor } from './service.ts'
-import { firstLeaf, allLeaves, insertLeafAt, leafWithTab, mintTabId, pathWithinCwd, revealPaths, type SidebarStore, type SidebarTab } from './state.ts'
+import { firstLeaf, allLeaves, insertLeafAt, leafWithTab, mintTabId, pathWithinCwd, revealPaths, unrevealPaths, type SidebarStore, type SidebarTab } from './state.ts'
 import css from './sidebar.module.css'
 
 type EditorLoad =
@@ -695,6 +695,15 @@ export function EditorHost(props: {
     }
     patchMeta(ctx, tab, scope.sessionId, { treeOpen: !treeOpen })
   }
+  /**
+   * A plain click on a highlighted row dismisses its reveal (the reader
+   * closed the locator — a "show in folder" mark or a conversation folder
+   * link's landing highlight). Only the clicked row leaves the set; paths
+   * the set does not hold return the SAME state (no churn, no re-render).
+   */
+  const dismissReveal = (paths: readonly string[]): void => {
+    store.reduce(state => unrevealPaths(state, paths))
+  }
   const saveLabel = toolbar === null ? ''
     : toolbar.saveState === 'saving' ? t('loading')
       : toolbar.saveState === 'saved' ? t('saved')
@@ -715,6 +724,7 @@ export function EditorHost(props: {
           cwd={folderRoot ?? scope.cwd}
           expanded={expanded}
           revealed={revealed}
+          onRevealDismiss={dismissReveal}
           onToggle={onToggleDir}
           onOpenFile={openFile}
           onOpenFileNewTab={openFileNewTab}
@@ -857,6 +867,7 @@ export function EditorHost(props: {
               cwd={scope.cwd}
               expanded={expanded}
               revealed={revealed}
+              onRevealDismiss={dismissReveal}
               onToggle={onToggleDir}
               onOpenFile={openFile}
               onOpenFileNewTab={openFileNewTab}

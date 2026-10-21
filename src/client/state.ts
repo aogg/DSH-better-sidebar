@@ -634,6 +634,23 @@ export function revealPaths(state: SidebarState, cwd: string | undefined, files:
   return { ...state, expanded: [...expanded], revealed: [...revealed] }
 }
 
+/**
+ * Drop paths from the reveal-highlight set: clicking the highlighted row is
+ * the reader dismissing the locator (both file and folder rows). Paths not in
+ * the set change nothing — the SAME state reference returns, so an untouched
+ * click stays invisible to the memoized consumers (the reveal effects key on
+ * the array identity).
+ * @param state - current sidebar state.
+ * @param paths - absolute paths to un-highlight (unknown ones are ignored).
+ * @returns the next state, or the same reference when nothing was revealed.
+ */
+export function unrevealPaths(state: SidebarState, paths: readonly string[]): SidebarState {
+  const drop = new Set(paths)
+  if (drop.size === 0) return state
+  const revealed = state.revealed.filter(path => !drop.has(path))
+  return revealed.length === state.revealed.length ? state : { ...state, revealed }
+}
+
 /** Adjust one split divider: `i` is the left/top child index, delta in fractions. */
 export function resizeSplit(node: SplitNode, splitId: string, index: number, delta: number): SplitNode {
   if (node.kind === 'leaf') return node

@@ -689,6 +689,12 @@ export function FileTree(props: {
   expanded: string[]
   /** Files highlighted by a "Show in folder" reveal (absolute paths). */
   revealed: string[]
+  /**
+   * Dismiss the reveal highlight of the row the reader clicked (the paths to
+   * drop from the set). A folded row reports whichever chain links carry the
+   * mark. Absent → a click keeps the highlight (older callers unchanged).
+   */
+  onRevealDismiss?: (paths: readonly string[]) => void
   onToggle: (path: string) => void
   onOpenFile: (path: string) => void
   /** Context-menu "open in a new tab" (file rows; absent → no entry). */
@@ -1636,6 +1642,17 @@ export function FileTree(props: {
     }
     // Plain click: the original semantics, plus dropping any selection.
     clearSelection()
+    // Clicking a highlighted row dismisses its reveal — the mark is a
+    // transient "here it is" locator (a "show in folder", a conversation
+    // folder link), and the plain click on the found row is the reader
+    // closing it. Only the clicked ROW's paths leave the set: a folded row
+    // renders one line for its whole chain, so whichever link carries the
+    // mark goes; a plain row its single path. Modifier clicks are selection
+    // gestures and returned above, so they never clear a highlight.
+    const rowPaths = chain !== undefined && chain.length > 0 ? chain.map(link => link.path) : [path]
+    const marked = propsRef.current.revealed
+    const dismissed = marked.filter(item => rowPaths.includes(item))
+    if (dismissed.length > 0) propsRef.current.onRevealDismiss?.(dismissed)
     if (!isDir) {
       propsRef.current.onOpenFile(path)
       return

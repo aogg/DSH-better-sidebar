@@ -14,10 +14,10 @@
  *   record + `navigation.params` and kept live across navigations, so a
  *   component that retitles itself (`updateTab`) or rewrites its path (the
  *   editor's in-place file switch) keeps working;
- * - the explorer's expansion/reveal sets: EXPANSION lives in the per-session
- *   state the workbench already uses (one set per session, shared by every
- *   native tab of that session — a closed tab cannot drop it), while the
- *   transient "show in folder" reveal stays per tab;
+ * - the explorer's expansion/reveal sets: BOTH live in the per-session state
+ *   the workbench already uses (one set per session, shared by every native
+ *   tab of that session — a closed tab cannot drop it), projected into the
+ *   records so the trees can read them;
  * - the per-kind instance counter behind titles like "Terminal 2".
  *
  * Nothing here is a singleton: the registry is created once per client
@@ -100,7 +100,16 @@ interface View {
    * each render would re-run the tree's load effect for nothing.
    */
   expanded: string[]
-  /** The transient "show in folder" highlight: per tab by design. */
+  /**
+   * A PROJECTION of the session's reveal set (the "show in folder" highlight,
+   * also what a conversation folder link lands as): mirrored like
+   * {@link expanded} so every native tab of one session highlights alike and
+   * the transient set survives closing and reopening a tab. Compared by
+   * IDENTITY, not contents — `revealPaths` hands out a fresh array on every
+   * reveal round even for an unchanged set, and that identity change is the
+   * tree's replay trigger (flash + reveal-scroll), the same array the
+   * workbench lane reads straight from the state.
+   */
   revealed: string[]
   /** Bumped on every mutation; the components subscribe to it. */
   version: number
@@ -209,7 +218,7 @@ export interface NativeTabRecords {
   nextInstance(kind: string): number
   /** A per-record version for `useSyncExternalStore`. */
   versionOf(sessionId: string, id: string): number
-  /** Subscribe to record changes (title/path/meta/expanded). */
+  /** Subscribe to record changes (title/path/meta/expanded/revealed). */
   subscribe(listener: () => void): () => void
 }
 
@@ -217,6 +226,14 @@ export interface NativeTabRecords {
 function samePaths(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((path, index) => path === right[index])
 }
+
+/**
+ * The stable empty set for an ABSENT session state (or no bound store yet):
+ * a fresh `[]` per read would read as churn to the identity comparisons —
+ * the reveal projection keys on the array identity, and the store-driven
+ * sync would bump the views on every pass.
+ */
+const NO_EXPLORER_SET: string[] = []
 
 /** Create the record registry for one client activation. */
 export function createNativeTabRecords(): NativeTabRecords {
@@ -245,22 +262,29 @@ export function createNativeTabRecords(): NativeTabRecords {
   let store: SidebarStore | undefined
   /** The session's expansion set (absent session = nothing expanded yet). */
   const expandedOf = (sessionId: string): string[] =>
-    store?.getSessionStates().get(sessionId)?.expanded ?? []
+    store?.getSessionStates().get(sessionId)?.expanded ?? NO_EXPLORER_SET
+  /** The session's reveal set (absent session = nothing highlighted yet). */
+  const revealedOf = (sessionId: string): string[] =>
+    store?.getSessionStates().get(sessionId)?.revealed ?? NO_EXPLORER_SET
   /**
-   * Re-read every view's expansion projection from the session state. Views
+   * Re-read every view's explorer projection from the session state. Views
    * that changed get a version bump (which is what re-renders their bodies);
    * identical sets keep their array identity so the tree's `expanded` prop —
-   * and therefore its load effect — stays stable.
+   * and therefore its load effect — stays stable (`revealed` keys on the
+   * array IDENTITY: a fresh array is a fresh reveal round, the flash/scroll
+   * replay trigger).
    */
-  const syncExpanded = (): void => {
+  const syncExplorerState = (): void => {
     if (store === undefined) return
     // One map copy for the whole pass (getSessionStates copies by contract).
     const states = store.getSessionStates()
     let changed = false
     for (const [id, entry] of views) {
-      const next = states.get(entry.scope.sessionId)?.expanded ?? []
-      if (samePaths(entry.expanded, next)) continue
-      views.set(id, { ...entry, expanded: next, version: entry.version + 1 })
+      const next = states.get(entry.scope.sessionId)
+      const expanded = next?.expanded ?? NO_EXPLORER_SET
+      const revealed = next?.revealed ?? NO_EXPLORER_SET
+      if (samePaths(entry.expanded, expanded) && entry.revealed === revealed) continue
+      views.set(id, { ...entry, expanded, revealed, version: entry.version + 1 })
       changed = true
     }
     if (changed) notify()
@@ -271,8 +295,8 @@ export function createNativeTabRecords(): NativeTabRecords {
       store = next
       // One listener for the whole registry: the store lives as long as this
       // activation, so the returned disposer is not kept.
-      next.subscribe(syncExpanded)
-      syncExpanded()
+      next.subscribe(syncExplorerState)
+      syncExplorerState()
     },
     ensure({ sessionId, id, kind, title, params, scope, revision, mint }) {
       const key = viewKey(sessionId, id)
@@ -297,7 +321,7 @@ export function createNativeTabRecords(): NativeTabRecords {
           scope,
           seat: sessionId,
           expanded: expandedOf(scope.sessionId),
-          revealed: [],
+          revealed: revealedOf(scope.sessionId),
           version: 0,
         }
         views.set(key, minted)
@@ -339,11 +363,13 @@ export function createNativeTabRecords(): NativeTabRecords {
       // keeps its identity.
       if (params?.line !== existing.tab.line) patch.line = params?.line
       if (params?.diff !== undefined) patch.diff = params.diff
-      // The expansion set always mirrors the CURRENT session state (a record
-      // reused for another session must not keep the previous one's set).
+      // The expansion/reveal sets always mirror the CURRENT session state (a
+      // record reused for another session must not keep the previous one's
+      // sets). `revealed` keys on the array identity — see {@link View}.
       const expanded = expandedOf(scope.sessionId)
-      if (existing.scope.sessionId !== scope.sessionId || !samePaths(existing.expanded, expanded)) {
-        views.set(key, { ...existing, scope, expanded, tab: { ...existing.tab, ...patch } })
+      const revealed = revealedOf(scope.sessionId)
+      if (existing.scope.sessionId !== scope.sessionId || !samePaths(existing.expanded, expanded) || existing.revealed !== revealed) {
+        views.set(key, { ...existing, scope, expanded, revealed, tab: { ...existing.tab, ...patch } })
         return views.get(key)!
       }
       if (existing.scope.cwd !== scope.cwd) {
@@ -413,7 +439,7 @@ export function createNativeTabRecords(): NativeTabRecords {
         return
       }
       store.reduceFor(scopeSessionId, state => toggleExpanded(state, path))
-      syncExpanded()
+      syncExplorerState()
     },
     retain(sessions) {
       let dropped = false
