@@ -122,22 +122,19 @@ function jumpButton(key: string): HTMLButtonElement {
   return node
 }
 
-/** act 内等待（冲掉 drip 定时器 / promise 微任务的 React 提交）。 */
-async function flush(ms = 120): Promise<void> {
-  await act(async () => {
-    await new Promise(resolve => { setTimeout(resolve, ms) })
-  })
+/** 真定时器等待（act 作用域会扣住定时器调度的 React 提交——drip 的逐条
+ *  上屏在 act 内轮询永远看不到，这里刻意在 act 外等待；act 警告是噪音）。 */
+async function sleep(ms: number): Promise<void> {
+  await new Promise(resolve => { setTimeout(resolve, ms) })
 }
 
-/** 轮询等文本上屏（act 内真定时器步进；drip 一条 ~40ms，几十步足够）。 */
+/** 轮询等文本上屏（drip 一条 ~40ms，几十步足够）。 */
 async function waitForText(text: string): Promise<void> {
-  await act(async () => {
-    for (let step = 0; step < 60; step++) {
-      if (document.body.textContent?.includes(text) === true) return
-      await new Promise(resolve => { setTimeout(resolve, 50) })
-    }
-    expect(document.body.textContent).toContain(text)
-  })
+  for (let step = 0; step < 60; step++) {
+    if (document.body.textContent?.includes(text) === true) return
+    await sleep(50)
+  }
+  expect(document.body.textContent).toContain(text)
 }
 
 describe('history view 顶 tab（当前会话 / 总发送历史）', () => {
@@ -216,19 +213,16 @@ describe('history view 记录跳转', () => {
     const { face, view } = mountView({ jumpLocateOptions: { timeoutMs: 500, highlightMs: 40 } })
     await waitForText('cur 的第一条提问')
     click(jumpButton('cur:0'))
-    // 立即定位路径：命中后滚动 + 高亮标记（等待渲染/定位的微任务冲刷）。
-    await act(async () => {
-      for (let step = 0; step < 20; step++) {
-        if (scrollTo.mock.calls.length > 0) break
-        await new Promise(resolve => { setTimeout(resolve, 50) })
-      }
-      expect(scrollTo.mock.calls.length).toBeGreaterThan(0)
-    })
+    // 立即定位路径：命中后滚动 + 高亮标记（等待渲染/定位的定时器步进）。
+    for (let step = 0; step < 20 && scrollTo.mock.calls.length === 0; step++) {
+      await sleep(50)
+    }
+    expect(scrollTo.mock.calls.length).toBeGreaterThan(0)
     expect(face.openSession).not.toHaveBeenCalled()
     expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'smooth' }))
     expect(row.dataset.dshHistoryHighlight).toBe('1')
-    // 高亮到点复原。
-    await flush(140)
+    // 高亮到点复原（直接 DOM 定时器写回，不经 React）。
+    await sleep(140)
     expect(row.dataset.dshHistoryHighlight).toBeUndefined()
     view.unmount()
   })
@@ -241,13 +235,11 @@ describe('history view 记录跳转', () => {
     click(jumpButton('s2:5'))
     expect(face.openSession).toHaveBeenCalledWith('s2')
     // 主视图里没有那条消息（也没造 DOM）：等定位超时 → 降级说明上 title。
-    await act(async () => {
-      for (let step = 0; step < 40; step++) {
-        if (jumpButton('s2:5').title.includes('Session opened')) break
-        await new Promise(resolve => { setTimeout(resolve, 50) })
-      }
-      expect(jumpButton('s2:5').title).toContain('Session opened')
-    })
+    for (let step = 0; step < 40; step++) {
+      if (jumpButton('s2:5').title.includes('Session opened')) break
+      await sleep(50)
+    }
+    expect(jumpButton('s2:5').title).toContain('Session opened')
     view.unmount()
   })
 
@@ -257,7 +249,7 @@ describe('history view 记录跳转', () => {
     click(tabButton('All Sends'))
     await waitForText('s2 要跳转的一条')
     expect(() => { click(jumpButton('s2:5')) }).not.toThrow()
-    await flush(250)
+    await sleep(250)
     expect(jumpButton('s2:5').title).toContain('Jump to this prompt')
     expect(jumpButton('s2:5').title).not.toContain('Session opened')
     view.unmount()
