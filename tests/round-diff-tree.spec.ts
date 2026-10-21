@@ -47,6 +47,7 @@ describe('buildRoundDiffTree', () => {
     expect(asFile(src.children[0]!)).toMatchObject({ kind: 'file', path: 'src/alpha.ts', status: 'M' })
     expect(asFile(asDir(tree[0]!).children[0]!)).toMatchObject({ kind: 'file', path: 'docs/guide.md', status: 'A' })
   })
+
   it('compresses a single-child chain into one a/b/c row that carries the leaf count', () => {
     const tree = buildRoundDiffTree([file('a/b/c/deep.ts')])
     expect(tree).toHaveLength(1)
