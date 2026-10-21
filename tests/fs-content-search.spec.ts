@@ -139,8 +139,12 @@ describe('resolveMatchOptions + createLineMatcher (the ONE matcher)', () => {
       { start: 4, length: 2 },
       { start: 19, length: 1 },
     ])
-    // `a*` matches empty at every position: the scan must advance.
-    expect(createLineMatcher('a*', resolveMatchOptions({ regex: true }))('aaa')).toHaveLength(4)
+    // `a*` past the full match answers one EMPTY range at the tail: the scan
+    // advances (a bare exec loop would spin) — no infinite loop, no extra hits.
+    expect(createLineMatcher('a*', resolveMatchOptions({ regex: true }))('aaa')).toEqual([
+      { start: 0, length: 3 },
+      { start: 3, length: 0 },
+    ])
     // An uncompilable pattern throws HERE — the route's compile-once check
     // is what turns it into a clean bad-request (pinned in smoke.spec.ts).
     expect(() => createLineMatcher('(', resolveMatchOptions({ regex: true }))).toThrow()
