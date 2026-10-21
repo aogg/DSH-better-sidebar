@@ -17,7 +17,7 @@
  * them lazily recovered from its own commit diff the first time the user
  * expands it (see {@link parseDiffFiles}) — every host version works.
  */
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { IconChevronRightOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { GitLogEntry, GitWorktree, SessionScope } from '../api.ts'
 import { api } from '../api.ts'

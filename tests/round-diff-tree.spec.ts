@@ -8,12 +8,24 @@
  * its own row path only).
  */
 import { describe, expect, it } from 'vitest'
-import { buildRoundDiffTree, dirPathsOf } from '../src/client/changes/round-diff-tree.ts'
+import { buildRoundDiffTree, dirPathsOf, type RoundDiffDir, type RoundDiffFile, type RoundDiffNode } from '../src/client/changes/round-diff-tree.ts'
 import type { CommitFile } from '../src/client/changes/round-commits.ts'
 
 /** One parsed patch row. */
 function file(path: string, status = 'M'): CommitFile {
   return { path, status }
+}
+
+/** Narrow one node to a directory row (a leaf here is a bug worth naming). */
+function asDir(node: RoundDiffNode): RoundDiffDir {
+  if (node.kind !== 'dir') throw new Error(`expected a directory row, got a ${node.kind}`)
+  return node
+}
+
+/** Narrow one node to a file leaf. */
+function asFile(node: RoundDiffNode): RoundDiffFile {
+  if (node.kind !== 'file') throw new Error(`expected a file leaf, got a ${node.kind}`)
+  return node
 }
 
 describe('buildRoundDiffTree', () => {
@@ -26,22 +38,20 @@ describe('buildRoundDiffTree', () => {
     // Two roots, directories first, then by name.
     expect(tree.map(node => node.kind)).toEqual(['dir', 'dir'])
     expect(tree.map(node => node.name)).toEqual(['docs', 'src'])
-    const src = tree[1]!
+    const src = asDir(tree[1]!)
     expect(src.path).toBe('src')
     expect(src.files).toBe(2)
     // Within a level: base-sensitivity collation, code-point tiebreak.
     expect(src.children.map(child => child.name)).toEqual(['alpha.ts', 'Beta.ts'])
-    const leaf = src.children[0]!
-    expect(leaf).toMatchObject({ kind: 'file', path: 'src/alpha.ts', status: 'M' })
-    // The leaf keeps the patch's own status letter.
-    expect(tree[0]!.children[0]).toMatchObject({ kind: 'file', path: 'docs/guide.md', status: 'A' })
+    // The leaves keep the patch's own spelling and status letter.
+    expect(asFile(src.children[0]!)).toMatchObject({ kind: 'file', path: 'src/alpha.ts', status: 'M' })
+    expect(asFile(tree[0]!.children[0]!)).toMatchObject({ kind: 'file', path: 'docs/guide.md', status: 'A' })
   })
 
   it('compresses a single-child chain into one a/b/c row that carries the leaf count', () => {
     const tree = buildRoundDiffTree([file('a/b/c/deep.ts')])
     expect(tree).toHaveLength(1)
-    const chain = tree[0]!
-    expect(chain.kind).toBe('dir')
+    const chain = asDir(tree[0]!)
     expect(chain.name).toBe('a/b/c')
     expect(chain.path).toBe('a/b/c')
     expect(chain.files).toBe(1)
@@ -50,7 +60,7 @@ describe('buildRoundDiffTree', () => {
 
   it('keeps a directory row where a file sits beside the chain', () => {
     const tree = buildRoundDiffTree([file('a/keep.ts'), file('a/b/c/deep.ts')])
-    const a = tree[0]!
+    const a = asDir(tree[0]!)
     expect(a.name).toBe('a')
     expect(a.path).toBe('a')
     // One compressed chain row below 'a' ('b/c'), plus the file.
@@ -63,11 +73,10 @@ describe('buildRoundDiffTree', () => {
       file('src/./a.ts'),
       file('src\\nested\\b.ts'),
     ])
-    const src = tree[0]!
+    const src = asDir(tree[0]!)
     expect(src.children).toHaveLength(2)
     expect(src.children.map(child => child.name)).toEqual(['a.ts', 'nested'])
-    const nested = src.children[1]!
-    expect(nested.kind).toBe('dir')
+    const nested = asDir(src.children[1]!)
     expect(nested.path).toBe('src/nested')
   })
 
