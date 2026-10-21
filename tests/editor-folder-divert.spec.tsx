@@ -97,7 +97,7 @@ function setup(): Harness {
     openTab: (input: { sessionId: string; kind: string; params: unknown; revealIfOpened: boolean }) => {
       opens.push({ ...input })
     },
-    openResource: (input: { sessionId: string; address: string; revealIfOpened: boolean }) => {},
+    openResource: (_input: { sessionId: string; address: string; revealIfOpened: boolean }) => {},
     fileAddress: (sessionId: string, cwd: string | undefined, path: string) => `addr://${sessionId}${cwd ?? ''}${path}`,
     close: (sessionId: string, tabId: string) => {
       closes.push({ sessionId, tabId })

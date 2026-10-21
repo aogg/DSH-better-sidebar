@@ -54,7 +54,7 @@ function agentOpensSocket(): FakeWebSocket {
 }
 
 function makeSessionFeed(initial: SidebarSessionList) {
-  let snapshot = initial
+  const snapshot = initial
   const listeners = new Set<() => void>()
   return {
     getSnapshot: () => snapshot,
