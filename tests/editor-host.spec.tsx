@@ -1146,6 +1146,12 @@ describe('EditorHost add-to-search redirect', { timeout: 35_000 }, () => {
     }
   }
 
+  /** The service's opens, filtered to the redirect's own calls (the SETUP
+   *  editor open rides the same spy). */
+  function searchOpens(opens: Array<{ seed: { type: string } }>): Array<{ seed: { type: string }; scope?: { sessionId: string; cwd?: string } }> {
+    return opens.filter(open => open.seed.type === 'search') as Array<{ seed: { type: string }; scope?: { sessionId: string; cwd?: string } }>
+  }
+
   /** Mount a native tab whose docked tree lists the rows the mock serves. */
   async function mountWithTree(
     ctx: Context,
@@ -1229,7 +1235,7 @@ describe('EditorHost add-to-search redirect', { timeout: 35_000 }, () => {
       await waitForTreeRow(container, 'a.ts')
       clickAddToSearch(container, 'a.ts', 'Add to Include')
       // The redirect opened a NEW search tab with THIS scope…
-      expect(opens).toEqual([{ seed: { type: 'search' }, scope: { sessionId: 'editor-home-session', cwd: '/tmp' } }])
+      expect(searchOpens(opens)).toEqual([{ seed: { type: 'search' }, scope: { sessionId: 'editor-home-session', cwd: '/tmp' } }])
       // …whose createTab consumed the seed into the cwd-RELATIVE chip
       // ('/tmp/a.ts' projected against '/tmp').
       const minted = searchTab()
@@ -1262,7 +1268,7 @@ describe('EditorHost add-to-search redirect', { timeout: 35_000 }, () => {
       clickAddToSearch(container, 'sub', 'Add to Exclude')
       // createTab kind: every add mints a FRESH tab (no dedupe), even with
       // one already open — the store now carries both.
-      expect(opens).toHaveLength(2)
+      expect(searchOpens(opens)).toHaveLength(2)
       const tabs = allLeaves(store.getSnapshot().state!.bottomSplits).flatMap(leaf => leaf.tabs)
         .filter(tab => tab.type === 'search')
       expect(tabs).toHaveLength(2)
@@ -1347,8 +1353,10 @@ describe('EditorHost add-to-search redirect', { timeout: 35_000 }, () => {
       await waitForTreeRow(container, 'a.ts')
       clickAddToSearch(container, 'a.ts', 'Add to Include')
       // isTabEnabled('search') false → addToSearch answered false before
-      // parking the seed or opening anything.
-      expect(opens).toEqual([])
+      // parking the seed or opening anything (the setup editor open is the
+      // only call the spy saw).
+      expect(searchOpens(opens)).toEqual([])
+      expect(opens.map(open => open.seed.type)).toEqual(['editor'])
       expect(searchTab()).toBeUndefined()
       expect(consumeSearchSeed()).toBeUndefined()
     } finally {
