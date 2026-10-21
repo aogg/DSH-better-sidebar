@@ -459,6 +459,8 @@ export const ja: Record<string, string> = {
   settingsHtmlSandboxDesc: 'サンドボックスをオフにすると、プレビューされる HTML は GUI と同一オリジンで動作し、会話ファイル・ローカルストレージ・内部 API にアクセス可能。完全に信頼できるファイルのみで有効化',
   settingsEditorGitGutterTitle: 'エディターの未コミット変更マーカー',
   settingsEditorGitGutterDesc: 'コードエディターの行番号欄に未コミットの変更を色付けし、ホバーでその行の blame（作者・時刻・コミット概要）を表示します。オフにすると変更マーカーを表示しません',
+  settingsEditorMinimapTitle: 'エディターのミニマップ（文書概要）',
+  settingsEditorMinimapDesc: 'エディター右端にドキュメント全体の縮小プレビューと現在の表示位置を表示します。クリックやドラッグで素早く移動できます。オフで非表示',
   settingsBrowserSandboxTitle: 'ブラウザーサンドボックスを無効化（非安全）',
   settingsBrowserSandboxDesc: 'サンドボックスをオフにすると、訪問するあらゆるサイトが GUI と同一オリジンで動作し、会話データを読み取ったりログイン状態を偽装したりできます。完全に信頼できるサイトのみで有効化',
   settingsBrowserLoopbackTitle: '許可されたローカルアドレス',

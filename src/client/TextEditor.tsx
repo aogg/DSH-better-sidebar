@@ -28,6 +28,7 @@ import {
   useEditorGitGutter,
   type GitGutterHost,
 } from './editor-git-gutter.ts'
+import { EditorMinimap } from './EditorMinimap.tsx'
 import { api, htmlUrl, SidebarApiError } from './api.ts'
 import { hostTransportBase } from './desktop-env.ts'
 import { markdownPreviewSource } from './markdown-frontmatter.ts'
@@ -96,6 +97,11 @@ export function TextEditor(props: FileViewerProps) {
   /** The uncommitted-change gutter compartment (issue #212; reconfigured on a
    *  setting flip instead of rebuilding the view). */
   const gitCompRef = useRef<CmGitGutterCompartment | null>(null)
+  /** The minimap's sync slot (see EditorMinimap): the strip registers its
+   *  rebind+redraw here on mount, and this component calls it once a view
+   *  exists and after every document change. Null-safe — the strip is not
+   *  mounted in preview mode and while the preference is off. */
+  const minimapSyncRef = useRef<(() => void) | null>(null)
   /** The effective UI language (DSH locale id + better-locale override id).
    *  Read during render and subscribed below: the tab-cell memo only
    *  compares the DSH locale revision, so a better-locale override switch
@@ -144,6 +150,16 @@ export function TextEditor(props: FileViewerProps) {
     useCallback(() => props.store.getSnapshot().prefs.editorGitGutter !== false, [props.store]),
   )
   const gitGutterEnabled = (viewerId === 'code' || viewerId === 'jsonl') && gitGutterPref
+  /** The minimap strip (EditorMinimap): ONE boolean setting, on by default,
+   *  read through the same external-store seam as the gutter above so a flip
+   *  shows/hides the strip in place — no reopen, draft untouched. Rendered
+   *  whenever the CodeMirror surface is the visible pane (the `code` viewer
+   *  always; markdown/html/jsonl only in edit mode — `showingPreview` below). */
+  const minimapPref = useSyncExternalStore(
+    useCallback((callback: () => void) => props.store.subscribe(callback), [props.store]),
+    useCallback(() => props.store.getSnapshot().prefs.editorMinimap !== false, [props.store]),
+    useCallback(() => props.store.getSnapshot().prefs.editorMinimap !== false, [props.store]),
+  )
   /** Bumped by every save: the uncommitted diff moved while the file's git
    *  status entry (which only tracks its XY code) did not. */
   const [gitRevision, setGitRevision] = useState(0)
@@ -283,6 +299,11 @@ export function TextEditor(props: FileViewerProps) {
         CodeMirrorView.updateListener.of((update) => {
           if (update.docChanged) {
             setDirty(true)
+            // The minimap thumbnail follows the document. Direct ref call —
+            // it schedules an rAF-coalesced canvas repaint, not a re-render
+            // (the per-keystroke setState here is exactly what the draft
+            // snapshot below was built to avoid).
+            minimapSyncRef.current?.()
           }
         }),
         keymap.of([
@@ -341,6 +362,11 @@ export function TextEditor(props: FileViewerProps) {
     })
     const view = new CodeMirrorView({ state, parent: host })
     viewRef.current = view
+    // The minimap (a child) registered its sync BEFORE this parent effect ran
+    // (React flushes child effects first), so a strip that is already mounted
+    // binds here; a strip that mounts later binds through its own effect.
+    // Absent strip (preview / pref off): the slot is null and this is a no-op.
+    minimapSyncRef.current?.()
     return () => {
       view.destroy()
       viewRef.current = null
@@ -753,6 +779,10 @@ export function TextEditor(props: FileViewerProps) {
    *  the JSONL record list): the CodeMirror host stays mounted but hidden, so
    *  unsaved edits survive the round trip. */
   const showingPreview = !readOnly && mode === 'preview' && (markdown || html || jsonl)
+  /** The minimap rides the CodeMirror surface only: hidden while a rendered
+   *  preview owns the pane (VS Code semantics — no minimap over a rendered
+   *  page), never for the read-only paged preview (no editor at all). */
+  const minimapVisible = minimapPref && !showingPreview
   const saveLabel = saveState === 'saving' ? t('loading') : saveState === 'saved' ? t('saved') : saveState === 'failed' ? t('saveFailed') : ''
   // Per-feature sandbox escape hatch: the global side card setting (warned)
   // plus a per-surface temporary unlock. The unlock state starts at the
@@ -873,10 +903,18 @@ export function TextEditor(props: FileViewerProps) {
               </button>
             </div>
           )}
-          <div
-            className={clsx(css.editorCm, showingPreview && css.editorCmHidden)}
-            ref={hostRef}
-          />
+          {/* The editor pane is a flex ROW: the CodeMirror surface plus the
+              minimap strip (flex item, not an overlay — it costs layout
+              width, like VS Code's). The row carries the preview hidden
+              class: a display:none row (not just the inner editor) keeps
+              editorMain's remaining flex children (the markdown/html/jsonl
+              preview) owning the whole pane. */}
+          <div className={clsx(css.editorCmRow, showingPreview && css.editorCmHidden)}>
+            <div className={css.editorCm} ref={hostRef} />
+            {minimapVisible && (
+              <EditorMinimap viewRef={viewRef} dark={dark} syncRef={minimapSyncRef} />
+            )}
+          </div>
         </>
       )}
       {jsonl && mode === 'preview' && (

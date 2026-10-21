@@ -88,6 +88,17 @@ export interface SidebarPrefs {
    */
   editorGitGutter: boolean
   /**
+   * Whether the text editor paints a VS Code-style minimap at the right edge
+   * of the CodeMirror surface: a sampled one-bar-per-line thumbnail of the
+   * whole document plus a translucent viewport slider, click/drag/wheel
+   * driving `scrollDOM.scrollTop`. On by default; ONE switch for the whole
+   * strip (no per-part toggles). Only the CodeMirror surface carries it —
+   * rendered markdown/html/jsonl previews never do, and a pane narrower
+   * than 420px (the editor chunk's MINIMAP_MIN_EDITOR_WIDTH) hides it
+   * entirely.
+   */
+  editorMinimap: boolean
+  /**
    * Whether the file tree paints TortoiseGit-style status badges (a ~9px
    * circular overlay at the file icon's lower-right): the green ✓ of a tracked
    * clean path, the red ! of a modification, and the rest of the overlay
@@ -214,6 +225,9 @@ export const SIDEBAR_PREFS_DEFAULTS: SidebarPrefs = {
   agentOpenTools: false,
   editorExplorer: false,
   editorGitGutter: true,
+  // The editor minimap is ON by default, like the git gutter beside it: the
+  // overview strip is the feature's whole point.
+  editorMinimap: true,
   // The overlay badges are the feature's whole point — ON by default, like
   // the editor gutter they sit beside.
   explorerGitBadges: true,

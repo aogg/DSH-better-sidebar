@@ -442,6 +442,8 @@ export const pt: Record<string, string> = {
   settingsHtmlSandboxDesc: 'Com o sandbox desativado, o HTML pré-visualizado roda com a mesma origem da interface: pode ler arquivos de sessão, armazenamento local e chamar APIs internas. Ative apenas para arquivos totalmente confiáveis',
   settingsEditorGitGutterTitle: 'Marcadores de alterações não confirmadas',
   settingsEditorGitGutterDesc: 'Colore a margem dos números de linha para alterações não confirmadas e mostra o blame da linha ao passar o mouse (autor, data e resumo do commit); desativado oculta todas as marcas',
+  settingsEditorMinimapTitle: 'Minimapa do editor (visão do documento)',
+  settingsEditorMinimapDesc: 'Mostra na borda direita do editor uma miniatura de todo o documento com a área visível; clique ou arraste para navegar; desligado, a faixa fica oculta',
   settingsBrowserSandboxTitle: 'Desativar o sandbox do navegador (inseguro)',
   settingsBrowserSandboxDesc: 'Com o sandbox desativado, qualquer site visitado roda com a mesma origem da interface: pode ler dados da sessão e agir como sua sessão conectada. Ative apenas para sites totalmente confiáveis',
   settingsBrowserLoopbackTitle: 'Endereços locais permitidos',

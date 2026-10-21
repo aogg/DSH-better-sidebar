@@ -451,6 +451,8 @@ export const ko: Record<string, string> = {
   settingsHtmlSandboxDesc: '끄면 미리보기 HTML이 인터페이스와 동일 출처로 실행되어 세션 파일, 로컬 저장소를 읽고 내부 인터페이스를 호출할 수 있습니다. 완전히 신뢰하는 파일에서만 켜세요',
   settingsEditorGitGutterTitle: '편집기 미커밋 변경 표시',
   settingsEditorGitGutterDesc: '코드 편집기 줄 번호 여백에 미커밋 변경을 색으로 표시하고, 마우스를 올리면 해당 줄의 blame(작성자·시각·커밋 요약)을 보여 줍니다. 끄면 모든 표시가 사라집니다',
+  settingsEditorMinimapTitle: '에디터 미니맵(문서 개요)',
+  settingsEditorMinimapDesc: '에디터 오른쪽에 문서 전체의 축소 미리보기와 현재 뷰포트 위치를 표시합니다. 클릭이나 드래그로 빠르게 이동할 수 있으며, 끄면 표시되지 않습니다',
   settingsBrowserSandboxTitle: '브라우저 샌드박스 끄기(안전하지 않음)',
   settingsBrowserSandboxDesc: '끄면 방문하는 모든 사이트가 인터페이스와 동일 출처로 실행되어 세션 데이터를 읽고 사용자의 로그인 상태를 가장할 수 있습니다. 완전히 신뢰하는 사이트에서만 켜세요',
   settingsBrowserLoopbackTitle: '허용된 로컬 주소',

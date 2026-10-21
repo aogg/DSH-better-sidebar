@@ -459,6 +459,8 @@ export const tr: Record<string, string> = {
   settingsHtmlSandboxDesc: 'Kum kapalıyken önizlenen HTML arayüzle aynı kaynakta çalışır: oturum dosyalarını, yerel depoyu okuyabilir ve iç API’leri çağırabilir. Yalnızca tamamen güvenilen dosyalar için etkinleştirin',
   settingsEditorGitGutterTitle: 'Düzenleyicide işlenmemiş değişiklik işaretleri',
   settingsEditorGitGutterDesc: 'Kod düzenleyicisinin satır numarası kenarını işlenmemiş değişiklikler için renklendirir ve fareyle üzerine gelindiğinde o satırın blame bilgisini (yazar, zaman ve commit özeti) gösterir; kapatınca hiçbir işaret görünmez',
+  settingsEditorMinimapTitle: 'Düzenleyici mini haritası (belge önizlemesi)',
+  settingsEditorMinimapDesc: 'Düzenleyicinin sağ kenarında belgenin tamamının küçük önizlemesini ve geçerli görünüm alanını gösterir; atlamak için tıklayın veya sürükleyin; kapalıyken şerit gizlenir',
   settingsBrowserSandboxTitle: 'Tarayıcı kumunu devre dışı bırak (güvenli değil)',
   settingsBrowserSandboxDesc: 'Kum kapalıyken ziyaret edilen her site arayüzle aynı kaynakta çalışır: oturum verilerini okuyabilir ve oturum açmış halinize bürünebilir. Yalnızca tamamen güvenilen siteler için etkinleştirin',
   settingsBrowserLoopbackTitle: 'İzin verilen yerel adresler',

@@ -457,6 +457,8 @@ export const id: Record<string, string> = {
   settingsHtmlSandboxDesc: 'Dengan sandbox mati, HTML yang dipratinjau berjalan dengan asal yang sama dengan GUI: dapat membaca berkas sesi, penyimpanan lokal, dan memanggil API internal. Hanya aktifkan untuk berkas yang sepenuhnya tepercaya',
   settingsEditorGitGutterTitle: 'Penanda perubahan belum di-commit di editor',
   settingsEditorGitGutterDesc: 'Mewarnai margin nomor baris editor kode untuk perubahan yang belum di-commit dan menampilkan blame baris itu saat kursor diarahkan (penulis, waktu, ringkasan commit); nonaktif menyembunyikan semua penanda',
+  settingsEditorMinimapTitle: 'Minimap editor (ringkasan dokumen)',
+  settingsEditorMinimapDesc: 'Menampilkan pratinjau mini seluruh dokumen dan posisi area pandang di tepi kanan editor; klik atau seret untuk melompat; nonaktif menyembunyikan bilah ini',
   settingsBrowserSandboxTitle: 'Nonaktifkan sandbox browser (tidak aman)',
   settingsBrowserSandboxDesc: 'Dengan sandbox mati, situs yang dikunjungi berjalan dengan asal yang sama dengan GUI: dapat membaca data sesi dan menyamar sebagai sesi login Anda. Hanya aktifkan untuk situs yang sepenuhnya tepercaya',
   settingsBrowserLoopbackTitle: 'Alamat lokal yang diizinkan',

@@ -459,6 +459,8 @@ export const vi: Record<string, string> = {
   settingsHtmlSandboxDesc: 'Khi tắt, HTML xem trước sẽ chạy cùng nguồn với UI: có thể đọc tệp phiên, local storage và gọi API nội bộ. Chỉ bật cho tệp hoàn toàn đáng tin cậy',
   settingsEditorGitGutterTitle: 'Dấu thay đổi chưa commit trong trình soạn thảo',
   settingsEditorGitGutterDesc: 'Tô màu lề số dòng của trình soạn thảo mã cho các thay đổi chưa commit và hiện blame của dòng khi rê chuột (tác giả, thời gian và tóm tắt commit); tắt sẽ ẩn mọi dấu',
+  settingsEditorMinimapTitle: 'Bản đồ thu nhỏ của trình soạn thảo (toàn cảnh tài liệu)',
+  settingsEditorMinimapDesc: 'Hiển thị bản xem trước thu nhỏ của toàn bộ tài liệu và vị trí khung nhìn hiện tại ở cạnh phải trình soạn thảo; nhấp hoặc kéo để nhảy nhanh; tắt sẽ ẩn thanh này',
   settingsBrowserSandboxTitle: 'Tắt sandbox trình duyệt (không an toàn)',
   settingsBrowserSandboxDesc: 'Khi tắt, mọi trang truy cập sẽ chạy cùng nguồn với UI: có thể đọc dữ liệu phiên và mạo danh phiên đăng nhập. Chỉ bật cho trang hoàn toàn đáng tin cậy',
   settingsBrowserLoopbackTitle: 'Địa chỉ cục bộ được phép',

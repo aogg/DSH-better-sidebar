@@ -450,6 +450,8 @@ export const it: Record<string, string> = {
   settingsHtmlSandboxDesc: 'Con la sandbox disattivata, l’HTML in anteprima viene eseguito con la stessa origine dell’interfaccia: può leggere i file di sessione, l’archiviazione locale e chiamare le API interne. Attivi solo per file completamente attendibili',
   settingsEditorGitGutterTitle: 'Indicatori delle modifiche non committate',
   settingsEditorGitGutterDesc: 'Colora il margine dei numeri di riga per le modifiche non committate e mostra al passaggio del mouse il blame della riga (autore, data e riassunto del commit); disattivato nasconde ogni indicatore',
+  settingsEditorMinimapTitle: 'Minimappa dell\'editor (anteprima del documento)',
+  settingsEditorMinimapDesc: 'Mostra sul bordo destro dell\'editor una miniatura dell\'intero documento con l\'area visibile; clic o trascinamento per spostarsi; disattivata, la barra è nascosta',
   settingsBrowserSandboxTitle: 'Disattiva la sandbox del browser (non sicuro)',
   settingsBrowserSandboxDesc: 'Con la sandbox disattivata, ogni sito visitato viene eseguito con la stessa origine dell’interfaccia: può leggere i dati di sessione e fingersi la sua sessione di login. Attivi solo per siti completamente attendibili',
   settingsBrowserLoopbackTitle: 'Indirizzi locali consentiti',

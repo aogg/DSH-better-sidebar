@@ -452,6 +452,8 @@ export const fr: Record<string, string> = {
   settingsHtmlSandboxDesc: 'Une fois désactivé, le HTML de l’aperçu s’exécute avec la même origine que l’interface, peut lire les fichiers de session, le stockage local et appeler les interfaces internes. À activer uniquement pour des fichiers entièrement fiables',
   settingsEditorGitGutterTitle: 'Marqueurs des modifications non validées',
   settingsEditorGitGutterDesc: 'Colore la marge des numéros de ligne pour les modifications non validées et affiche le blame de la ligne au survol (auteur, date et résumé du commit) ; désactivé masque toute marque',
+  settingsEditorMinimapTitle: 'Minimap de l\'éditeur (aperçu du document)',
+  settingsEditorMinimapDesc: 'Affiche un aperçu miniature de tout le document et de la zone visible sur le bord droit de l\'éditeur ; cliquez ou faites glisser pour vous déplacer ; désactivé, la barre est masquée',
   settingsBrowserSandboxTitle: 'Désactiver le bac à sable du navigateur (non sécurisé)',
   settingsBrowserSandboxDesc: 'Une fois désactivé, tout site visité s’exécute avec la même origine que l’interface, peut lire les données de session et usurper votre état de connexion. À activer uniquement pour des sites entièrement fiables',
   settingsBrowserLoopbackTitle: 'Adresses locales autorisées',

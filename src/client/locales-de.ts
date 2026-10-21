@@ -445,6 +445,8 @@ export const de: Record<string, string> = {
   settingsHtmlSandboxDesc: 'Ohne Sandbox läuft das angezeigte HTML mit der gleichen Herkunft wie die Oberfläche: Es kann Sitzungsdateien und lokalen Speicher lesen und interne APIs aufrufen. Nur für vollständig vertrauenswürdige Dateien aktivieren',
   settingsEditorGitGutterTitle: 'Markierungen für nicht committete Änderungen',
   settingsEditorGitGutterDesc: 'Färbt den Zeilennummernbereich des Code-Editors für nicht committete Änderungen und zeigt beim Überfahren den Blame der Zeile (Autor, Zeit und Commit-Zusammenfassung); aus blendet jede Markierung aus',
+  settingsEditorMinimapTitle: 'Editor-Minimap (Dokumentübersicht)',
+  settingsEditorMinimapDesc: 'Zeigt am rechten Rand des Editors eine Miniaturübersicht des gesamten Dokuments mit dem sichtbaren Bereich; Klicken oder Ziehen springt direkt dorthin; aus blendet die Leiste aus',
   settingsBrowserSandboxTitle: 'Browser-Sandbox deaktivieren (unsicher)',
   settingsBrowserSandboxDesc: 'Ohne Sandbox läuft jede besuchte Website mit der gleichen Herkunft wie die Oberfläche: Sie kann Sitzungsdaten lesen und sich als Ihre Anmeldung ausgeben. Nur für vollständig vertrauenswürdige Websites aktivieren',
   settingsBrowserLoopbackTitle: 'Erlaubte lokale Adressen',

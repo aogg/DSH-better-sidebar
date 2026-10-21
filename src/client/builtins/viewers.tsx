@@ -70,7 +70,8 @@ export function builtinViewers(): readonly FileViewerDescriptor[] {
       fetchStrategy: 'fsRead',
       // Declarative settings: the sandbox escape hatch and the default-unsafe
       // start state render under this viewer's row in the Side card settings
-      // page (both warned on).
+      // page (both warned on). The html EDITOR (edit mode) is a text surface
+      // like the code editor, so the minimap switch rides here too.
       settings: {
         toggles: [{
           key: 'htmlViewerNoSandbox',
@@ -80,6 +81,10 @@ export function builtinViewers(): readonly FileViewerDescriptor[] {
           key: 'htmlViewerDefaultUnsafe',
           title: () => t('settingsHtmlDefaultUnsafeTitle'),
           desc: () => t('settingsHtmlDefaultUnsafeDesc'),
+        }, {
+          key: 'editorMinimap',
+          title: () => t('settingsEditorMinimapTitle'),
+          desc: () => t('settingsEditorMinimapDesc'),
         }],
       },
       component: (props) => <LazyTextEditor {...props} />,
@@ -94,13 +99,17 @@ export function builtinViewers(): readonly FileViewerDescriptor[] {
       exts: ['jsonl', 'ndjson'],
       priority: 0,
       fetchStrategy: 'fsRead',
-      // Same single gutter switch as the code viewer: the editor mode of a
-      // JSONL file is still an editable text surface.
+      // Same switches as the code viewer: the editor mode of a JSONL file is
+      // still an editable text surface.
       settings: {
         toggles: [{
           key: 'editorGitGutter',
           title: () => t('settingsEditorGitGutterTitle'),
           desc: () => t('settingsEditorGitGutterDesc'),
+        }, {
+          key: 'editorMinimap',
+          title: () => t('settingsEditorMinimapTitle'),
+          desc: () => t('settingsEditorMinimapDesc'),
         }],
       },
       component: (props) => <LazyTextEditor {...props} />,
@@ -113,13 +122,17 @@ export function builtinViewers(): readonly FileViewerDescriptor[] {
       priority: -100,
       fetchStrategy: 'fsRead',
       // Declarative settings: ONE switch for the whole uncommitted-change
-      // gutter (line tint + left bar + hover blame). Deliberately no
-      // per-part switches.
+      // gutter (line tint + left bar + hover blame), and ONE for the minimap
+      // overview strip. Deliberately no per-part switches on either.
       settings: {
         toggles: [{
           key: 'editorGitGutter',
           title: () => t('settingsEditorGitGutterTitle'),
           desc: () => t('settingsEditorGitGutterDesc'),
+        }, {
+          key: 'editorMinimap',
+          title: () => t('settingsEditorMinimapTitle'),
+          desc: () => t('settingsEditorMinimapDesc'),
         }],
       },
       component: (props) => <LazyTextEditor {...props} />,

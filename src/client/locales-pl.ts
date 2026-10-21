@@ -461,6 +461,8 @@ export const pl: Record<string, string> = {
   settingsHtmlSandboxDesc: 'Po wyłączeniu podglądany HTML działa w tym samym originie co interfejs: może czytać pliki sesji, localStorage i wywoływać wewnętrzne API. Włączaj tylko dla w pełni zaufanych plików',
   settingsEditorGitGutterTitle: 'Oznaczenia niezacommitowanych zmian',
   settingsEditorGitGutterDesc: 'Koloruje margines numerów wierszy dla niezacommitowanych zmian i pokazuje po najechaniu blame wiersza (autor, czas i podsumowanie commita); wyłączenie ukrywa wszystkie oznaczenia',
+  settingsEditorMinimapTitle: 'Minimapa edytora (podgląd dokumentu)',
+  settingsEditorMinimapDesc: 'Pokazuje przy prawej krawędzi edytora miniaturę całego dokumentu i aktualny obszar widoku; kliknięcie lub przeciągnięcie przenosi widok; wyłączenie ukrywa pasek',
   settingsBrowserSandboxTitle: 'Wyłącz piaskownicę przeglądarki (niebezpieczne)',
   settingsBrowserSandboxDesc: 'Po wyłączeniu każda odwiedzana strona działa w tym samym originie co interfejs: może czytać dane sesji i podszywać się pod Twoją sesję logowania. Włączaj tylko dla w pełni zaufanych witryn',
   settingsBrowserLoopbackTitle: 'Dozwolone adresy lokalne',

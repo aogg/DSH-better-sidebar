@@ -442,6 +442,8 @@ export const sv: Record<string, string> = {
   settingsHtmlSandboxDesc: 'Med sandlådan av körs förhandsgranskad HTML med samma ursprung som GUI: kan läsa sessionsfiler, lokal lagring och anropa interna API:er. Aktivera endast för fullt betrodda filer',
   settingsEditorGitGutterTitle: 'Markeringar för ej incheckade ändringar',
   settingsEditorGitGutterDesc: 'Färgar radnummer-marginalen för ej incheckade ändringar och visar radens blame vid hovring (författare, tid och commit-sammanfattning); av döljer alla markeringar',
+  settingsEditorMinimapTitle: 'Editor-minimap (dokumentöversikt)',
+  settingsEditorMinimapDesc: 'Visar en miniatyröversikt av hela dokumentet och det synliga området vid editorns högerkant; klicka eller dra för att hoppa; av döljer listen',
   settingsBrowserSandboxTitle: 'Avaktivera webbläsarsandlåda (osäkert)',
   settingsBrowserSandboxDesc: 'Med sandlådan av körs alla besökta sajter med samma ursprung som GUI: kan läsa sessionsdata och agera som er inloggade session. Aktivera endast för fullt betrodda sajter',
   settingsBrowserLoopbackTitle: 'Tillåtna lokala adresser',

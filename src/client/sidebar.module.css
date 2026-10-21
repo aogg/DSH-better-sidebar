@@ -1918,6 +1918,74 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
   background: transparent;
 }
 
+/* The editor pane as a flex ROW: the CodeMirror surface plus the minimap
+   strip. The row (not the inner editor) is editorMain's flex child, and it
+   carries the preview hidden class (display:none) so the remaining preview
+   surfaces keep owning the whole pane. `container-type` makes the row the
+   query container for the strip's narrow-pane hide rule below. */
+.editorCmRow {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  container-type: inline-size;
+}
+
+/* ── Editor minimap (VS Code-style document overview strip) ─────────────
+   A 60px strip at the CodeMirror surface's right edge: a canvas paints one
+   ink bar per (sampled) document line, a translucent band tracks the
+   viewport. The strip is a flex ITEM (it costs layout width), never an
+   overlay. It hides entirely below a 420px editor pane (the constant is
+   EditorMinimap.MINIMAP_MIN_EDITOR_WIDTH in src/client/EditorMinimap.tsx —
+   keep the two numbers identical). */
+
+.editorMinimap {
+  position: relative;
+  flex: none;
+  width: 60px;
+  overflow: hidden;
+  border-left: 1px solid var(--dsw-alias-border-l1);
+  touch-action: none;
+  user-select: none;
+  cursor: default;
+}
+
+/* Narrow sidebar: the pane cannot afford 60 more pixels — drop the strip
+   (420px threshold; see MINIMAP_MIN_EDITOR_WIDTH). */
+@container (max-width: 419px) {
+  .editorMinimap {
+    display: none;
+  }
+}
+
+.editorMinimapCanvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.editorMinimapBand {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.editorMinimapDark .editorMinimapBand {
+  background: rgba(255, 255, 255, 0.09);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+}
+
+.editorMinimapLight .editorMinimapBand {
+  background: rgba(0, 0, 0, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.16);
+}
+
 .editorCmHidden {
   display: none;
 }
