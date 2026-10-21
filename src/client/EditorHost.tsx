@@ -34,6 +34,7 @@ import { clearEditorDirty, setEditorDirty } from './editor-dirty.ts'
 import { baseName } from './FileTree.tsx'
 import { createFrameBatcher } from './frame-batcher.ts'
 import { openClaimedNativeFile, openSidebarFile } from './sidebar-file.ts'
+import { activateFilesPage, isDirectoryReadError } from './sidebar-folder.ts'
 import { mergeOpenWithConfigs, openWithPinScope, openWithSshActive, openWithUrl, parseOpenWithConfig, resolveOpenWithTargets } from './open-with.ts'
 import { fileOpKey, useFileOpStream } from './ops-stream.ts'
 import { updatePluginSettings, updateProjectSettings } from './plugin-settings.ts'
@@ -269,6 +270,30 @@ export function EditorHost(props: {
   /** The context menu's explicit "new tab" escape (per-path dedupe). */
   const openFileNewTab = (absolute: string): void => {
     openSidebarFile(ctx, scope.sessionId, absolute)
+  }
+
+  /**
+   * A DIRECTORY reached the file viewer — divert to the folder landing
+   * instead of rendering the read error.
+   *
+   * The conversation body's markdown links open as `dsh-resource://file/…`
+   * FILE addresses (the address grammar has no folder kind), so a folder
+   * link mints an editor resource tab whose read fails with
+   * `"…" is a directory`. The fs read that failed IS the directory probe —
+   * the route stats before reading — so no extra roundtrip is needed:
+   * activate the 「文件」page with the reveal locator ({@link activateFilesPage},
+   * the same landing the agent-opens folder push uses) and close this dead
+   * tab (the open is already past its error, so no error row ever renders).
+   * The manual folder window (`meta.dir`) never loads a viewer, so it can
+   * never take this path.
+   */
+  const divertDirectoryOpen = (): void => {
+    // Resolve the address's path against the session cwd FIRST (a
+    // session-scoped address carries the workspace-relative spelling), so
+    // the reveal anchors at the same absolute folder the route just failed
+    // to read.
+    activateFilesPage(ctx, store, scope.sessionId, resolveSidebarPath(scope.cwd, path))
+    ctx.get('betterSidebar')?.closeTab(tab.id, scope)
   }
 
   /**
@@ -608,6 +633,13 @@ export function EditorHost(props: {
             else apply(outcome)
           }).catch((error: unknown) => {
             if (cancelled) return
+            // A directory is not a file: land on the files page with the
+            // reveal locator and close this tab (see divertDirectoryOpen) —
+            // the error row never renders.
+            if (isDirectoryReadError(error)) {
+              divertDirectoryOpen()
+              return
+            }
             setLoad({ status: 'error', message: error instanceof Error ? error.message : String(error) })
           })
           return

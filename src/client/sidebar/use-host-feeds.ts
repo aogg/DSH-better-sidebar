@@ -7,12 +7,13 @@
  */
 import { useEffect, useRef } from 'react'
 import type { Context, SidebarJobView, SidebarSessionList } from '../../context-types.ts'
-import { pathWithinCwd, revealPaths, type SidebarStore } from '../state.ts'
+import type { SidebarStore } from '../state.ts'
 import { isNarrowWidth } from '../breakpoints.ts'
 import { hostWebSocketUrl } from '../host-route-url.ts'
 import { detectNewDirectSubagent } from '../subagent-detect.ts'
 import { detectNewJob } from '../subagent-jobs.ts'
 import { clientJobs, useJobsSnapshot } from '../jobs-client.ts'
+import { activateFilesPage } from '../sidebar-folder.ts'
 import { mountedSessionId } from '../native/surface.ts'
 import { t } from '../locales.ts'
 
@@ -129,42 +130,6 @@ function activateTasksPage(
     && column?.isExpanded?.() === false
   ctx.get('betterSidebar')?.openTab({ type: 'subagent', title: t('subagent') })
   if (park) column?.toggleExpanded?.()
-}
-
-/**
- * Activate the plugin's 「文件」page for a conversation FOLDER link, then
- * reveal the folder in its tree: the ancestors between the session cwd and
- * the folder expand (the lazy tree can render the row) and the folder lands
- * in the store's `revealed` set, so the page highlights the row and its
- * reveal-scroll centers it — the same locator a "Show in folder" paints,
- * only aimed at a directory. A directory reveal expands the PARENT CHAIN
- * only (`ancestorDirs` never lists the path itself): the folder row stays
- * collapsed, its children untouched.
- *
- * The page is the PATH-LESS editor seed: `service.openTab`'s editor branch
- * turns it into the native `files`-kind page open, which the host keeps ONE
- * of per pane and re-focuses on a repeat open (single-instance semantics —
- * no folder window is minted, none piles up). The click IS the reader's
- * gesture — unlike the background auto-opens the takeover gate above guards —
- * so the activation always reveals, exactly like the topology jump-back that
- * "always leaves the column as the host expanded it".
- *
- * The reveal anchors at the session cwd and lands for in-tree folders only
- * (`pathWithinCwd`, the same guard the editor tree's reveal uses): an
- * out-of-tree target would expand phantom rows the tree cannot render. The
- * page still activates — the reader asked for the folder, the tree just has
- * no row to point at.
- *
- * @param ctx - the client context (`ctx.betterSidebar` + `ctx.sessions`).
- * @param store - the plugin store (the reveal set lives in the session state).
- * @param sessionId - the session the push belongs to (the reveal's session).
- * @param folder - the absolute folder path the link named.
- */
-function activateFilesPage(ctx: Context, store: SidebarStore, sessionId: string, folder: string): void {
-  ctx.get('betterSidebar')?.openTab({ type: 'editor' }, { sessionId })
-  const cwd = ctx.sessions.list.getSnapshot().byId[sessionId]?.cwd
-  if (!pathWithinCwd(cwd, folder)) return
-  store.reduce(state => revealPaths(state, cwd, [folder]))
 }
 
 export function useHostFeeds(feeds: {
