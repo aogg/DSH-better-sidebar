@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   activateTab, allLeaves, ancestorDirs, BOTTOM_DEFAULT, BOTTOM_MIN, closeTab, CONVERSATION_MIN, createSidebarStore,
-  insertLeafAt, makeDefaultState, moveTab, moveTabToEdge, openDiffTab,
+  insertLeafAt, isTabRefreshing, makeDefaultState, markTabRefreshing, moveTab, moveTabToEdge, openDiffTab,
   openTabInBottomPane, patchTab, resizeSplit,
-  resizeSplitIn, revealPaths, sanitizeState, setBottomHeight,
+  resizeSplitIn, revealPaths, sanitizeState, setBottomHeight, unmarkTabRefreshing,
   pathWithinCwd, unrevealPaths,
   splitPane, tabOpenIn, toggleBottomPanel, toggleExpanded,
   type SidebarState, type SidebarTab, type SplitNode,
@@ -1000,5 +1000,55 @@ describe('store listener isolation', () => {
     store.reduce(toggleBottomPanel)
     expect(healthyCalls).toBe(afterFirst + 1)
     errorSpy.mockRestore()
+  })
+})
+
+describe('refreshingTabs (transient turn-refresh marks)', () => {
+  const state = (): SidebarState => makeDefaultState()
+
+  it('marks and unmarks tab ids, returning the SAME reference when nothing moves', () => {
+    let next = markTabRefreshing(state(), 'tab:1')
+    expect(next.refreshingTabs).toEqual(['tab:1'])
+    // A repeat mark is a no-op — no churn, no store rewrite.
+    expect(markTabRefreshing(next, 'tab:1')).toBe(next)
+
+    next = markTabRefreshing(next, 'tab:2')
+    expect(next.refreshingTabs).toEqual(['tab:1', 'tab:2'])
+
+    // Unmarking drops exactly the named id…
+    next = unmarkTabRefreshing(next, 'tab:1')
+    expect(next.refreshingTabs).toEqual(['tab:2'])
+    // …and an id the set does not hold changes nothing (no churn on a
+    // repeat clear — the clear effect and the unmount cleanup may both run).
+    expect(unmarkTabRefreshing(next, 'tab:1')).toBe(next)
+    expect(unmarkTabRefreshing(next, 'tab:2').refreshingTabs).toEqual([])
+  })
+
+  it('isTabRefreshing answers for the marked ids only', () => {
+    const marked = markTabRefreshing(state(), 'tab:7')
+    expect(isTabRefreshing(marked, 'tab:7')).toBe(true)
+    expect(isTabRefreshing(marked, 'tab:8')).toBe(false)
+    expect(isTabRefreshing(undefined, 'tab:7')).toBe(false)
+    // A tab id the caller does not have (a native chip before its record
+    // exists) is simply not refreshing.
+    expect(isTabRefreshing(marked, undefined)).toBe(false)
+  })
+
+  it('sanitizeState never restores the marks (transient, like revealed)', () => {
+    // A state that was mid-refresh when it got persisted must come back
+    // clean: the mark only ever lives while its reload is in flight.
+    const midRefresh = { ...JSON.parse(JSON.stringify(state())), refreshingTabs: ['tab:1', 'tab:2'] }
+    const clean = sanitizeState(midRefresh)
+    expect(clean).toBeDefined()
+    expect(clean!.refreshingTabs).toEqual([])
+
+    // A persisted state from an OLDER build has no field at all — same
+    // default, and the whole layout still loads.
+    const older = JSON.parse(JSON.stringify(state()))
+    delete (older as Record<string, unknown>).refreshingTabs
+    const restored = sanitizeState(older)
+    expect(restored).toBeDefined()
+    expect(restored!.refreshingTabs).toEqual([])
+    expect(restored).toEqual(state())
   })
 })

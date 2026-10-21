@@ -2,6 +2,15 @@
 
 > 本文档收录 dsh-better-sidebar 的完整发布历史（最新版摘要见 [README](README.md)；同步发布于 [GitHub Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)）。
 
+### v0.28.17
+
+- 🔁 **会话完成时，侧边栏打开的文件页自动异步重读，重读期间标签转圈——全程 WS 推送，零轮询**：`/sidebar/ws/session` 新增 `turn` 帧——会话日志落定一条 durable `assistant/message`（一条即回复的一个步骤；流式帧不进日志，`assistant/attempt` 是失败尝试不推）就安排一拍，400ms 合并（首拍定时为准），多步回复每步各一拍、最后一拍即"说完了"；订阅/重新订阅绝不推（重连不得伪造完成信号），`user/message` 与 `tool/*` 不推。三处一起收：
+  - **宿主**（`src/session-push.ts`）：`SessionPushFrame` 增加 `{kind:'turn', sessionId}`；`SessionSocket.notifyTurn` 用独立的每会话定时器表（与 cwd 的 250ms 窗口分开，互不驱逐；unwatch/dispose/close 一并清理）。
+  - **客户端**：新增 `src/client/turn-push.ts` 的 `subscribeSessionTurns`——每会话引用计数共享一条 `connectSessionPush` 连接（原生右栏 keepMounted 会让 N 个编辑器页签同活，per-tab 连接会翻倍；ops-stream「每会话一个 leader」的 WS 版，但零轮询），只分发本会话的 `turn` 帧、抛错订阅者被隔离不拖累其余。`src/client/session-push.ts` 的 kind 联合加 `'turn'`：旧宿主不发、旧客户端按既有 unknown-kind 过滤丢弃，双向兼容。
+  - **编辑器**（`EditorHost.tsx`）：有真实文件的页签订阅本会话回合（与 `visible` 无关——后台驻留页签也要能在会话完成后跟上；连接每会话共享，多页签零额外成本）。收到帧先过 #855 同款护栏（`dirty` 草稿或 `edit` 模式绝不重载，ref 镜像读最新工具栏防重订阅抖动），通过后置临时 `refreshingTabs` 标记并走与手动刷新同一条加载路径重读；标记随 load 离开 `loading` 清除，路径/会话切换与卸载都不残留（对非活动会话走 `reduceFor` 定向写，不污染当前快照——原生页签 id 按会话重新计数，跨会话同号会撞）。**状态面**：`SidebarState.refreshingTabs` 为 transient 字段（对齐 `revealed`：sanitize 不持久化，重载即清）；底部工作台 `tabIconOf` 与原生栏 `NativeTabTitle` 照 unread 的 `useSyncExternalStore` 模式读同一字段，刷新期间把文件图标换成 14px 转圈圆环（槽位固定零位移，`prefers-reduced-motion` 降级为静态圆环，`role="img"` + 既有 `t('loading')`，不新增 locale key）。
+  - **版本**：`SIDEBAR_SERVICE_VERSION` 与 package.json / dsh.plugin.json 一起升到 **0.28.17**。
+  - 🧪 测试：`tests/session-push.spec.ts` 新增 `turn frames` 一组 9 例（400ms 后推帧、burst 合并且首拍定时为准、可再触发、每 socket 各一拍、watch 过滤、订阅/重订阅不推、unwatch 中途取消、close/dispose 清理、cwd 与 turn 两套定时器互不驱逐；既有两处 assistant/message 断言同步补上 turn 帧）；新增 `tests/turn-push.spec.ts` 6 例（N 订阅者一条连接、最后一个退订关闭、disposer 幂等、退订后重开新连接、按会话隔离、只分发本会话 turn 帧、抛错订阅者被隔离）；新增 `tests/editor-turn-refresh.spec.tsx` 8 例（一帧恰一次重读且无时钟轮询、parked 页签也刷新、dirty/edit 不重载且不打标记、重载期间标记在 store 结束后清除、中途关页签不残留标记、目录页与无 path 页从不订阅、卸载退订重挂重订）；`tests/state.spec.ts` 新增 `refreshingTabs` 一组 3 例（引用不变式、isTabRefreshing、sanitize 不持久化且旧布局照常加载）。
+
 ### v0.28.3
 
 - 💬 **原生右栏的侧边对话页签真正多开：每次打开都铸造独立新页签，重开已打开线程聚焦既有页签而不是再切一遍**（9521db7 把「每次打开都新建线程」做进了底部工作台，原生栏却纹丝不动——根因是原生 tab 类型注册处漏传宿主 `SidebarRightTabDefinition.multiple` 契约（「有 `multiple` 则每次按 kind 打开都铸造独立内容；缺省则每 pane 每 kind 一页」），宿主于是把 sidechat 当单页类型：每次打开只是对同一页重发导航参数（切线程），页签永远只有一个）。三处一起收：

@@ -17,6 +17,11 @@
  * (v0.28.15+), tells it that a project's seed scan started/finished — the
  * tab's seeding strip and its one-shot "refetch the first page when indexing
  * completes" are driven by this frame instead of polling `history.list`.
+ * A fifth, `{kind:'turn', sessionId}`, says one durable `assistant/message`
+ * row settled for the session (400ms coalesced) — the turn's last row IS the
+ * reply's completion, and open editor tabs ride it to re-read a file the
+ * reply may have rewritten (see turn-push.ts). No answer rides it: the
+ * refresh IS the reaction, fetched through the editor's own load path.
  * Older clients drop the kind in their existing unknown-kind filter (no
  * crash, no shape change); an older host simply never sends it and the newer
  * client keeps working (it just never hears the scan-finish signal).
@@ -35,7 +40,12 @@ import { hostWebSocketUrl } from './host-route-url.ts'
 
 /** One host frame: which watched session changed, which fact — and maybe the answer. */
 export interface SessionPushFrame {
-  kind: 'phase' | 'cwd' | 'history' | 'history-seed'
+  /**
+   * `turn` frames (newer hosts only) name a settled reply step; an older host
+   * never sends them and an older client drops them in its unknown-kind
+   * filter — the union grows, neither side breaks.
+   */
+  kind: 'phase' | 'cwd' | 'history' | 'history-seed' | 'turn'
   /**
    * The session the frame is about. Every kind carries one EXCEPT
    * `history-seed` (project-scoped, no session on the wire).
@@ -122,7 +132,7 @@ export function connectSessionPush(
       }
       if (frame === null || typeof frame !== 'object') return
       // A malformed or foreign frame is a late/dirty notice, not an invalidation.
-      if (frame.kind !== 'phase' && frame.kind !== 'cwd' && frame.kind !== 'history' && frame.kind !== 'history-seed') return
+      if (frame.kind !== 'phase' && frame.kind !== 'cwd' && frame.kind !== 'history' && frame.kind !== 'history-seed' && frame.kind !== 'turn') return
       // history-seed is project-scoped: no sessionId on the wire — its claim
       // token is the project root, so a cwd-less seed frame is malformed.
       if (frame.kind === 'history-seed') {

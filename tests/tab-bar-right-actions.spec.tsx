@@ -188,6 +188,7 @@ describe('Workbench right-actions forwarding', () => {
       nextBrowser: 1,
       expanded: [],
       revealed: [],
+      refreshingTabs: [],
       unread: [],
       bottomOpen: true,
       bottomHeight: 220,

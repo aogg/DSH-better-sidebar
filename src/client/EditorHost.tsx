@@ -38,6 +38,7 @@ import { openClaimedNativeFile, openSidebarFile } from './sidebar-file.ts'
 import { activateFilesPage, isDirectoryReadError } from './sidebar-folder.ts'
 import { mergeOpenWithConfigs, openWithPinScope, openWithSshActive, openWithUrl, parseOpenWithConfig, resolveOpenWithTargets } from './open-with.ts'
 import { fileOpKey, useFileOpStream } from './ops-stream.ts'
+import { subscribeSessionTurns } from './turn-push.ts'
 import { updatePluginSettings, updateProjectSettings } from './plugin-settings.ts'
 import { PROJECT_SETTINGS_KEY } from '../prefs-shared.ts'
 import { createOpenInApp } from './open-in-app.ts'
@@ -50,7 +51,7 @@ import { relativeTo } from './paths.ts'
 import { resolveSidebarPath } from './paths.ts'
 import { clearRetargetedPath, closePathTabs, consumeRetargetedPath, pathTabKey, retargetPathTabs } from './tree-mutations.ts'
 import type { EditorToolbarControls, EditorToolbarState, FileViewerDescriptor } from './service.ts'
-import { firstLeaf, allLeaves, insertLeafAt, leafWithTab, mintTabId, pathWithinCwd, revealPaths, unrevealPaths, type SidebarStore, type SidebarTab } from './state.ts'
+import { firstLeaf, allLeaves, insertLeafAt, leafWithTab, markTabRefreshing, mintTabId, pathWithinCwd, revealPaths, unmarkTabRefreshing, unrevealPaths, type SidebarState, type SidebarStore, type SidebarTab } from './state.ts'
 import css from './sidebar.module.css'
 
 type EditorLoad =
@@ -723,6 +724,70 @@ export function EditorHost(props: {
     // Granular deps: the scope object's identity churns, so only its
     // sessionId / cwd fields gate this decision.
   }, [ops, path, scope.sessionId, scope.cwd, toolbar?.dirty, toolbar?.mode])
+
+  // Session-turn auto refresh (WS `turn` frames, zero polling): a durable
+  // `assistant/message` row settled — one row per reply step, the LAST one of
+  // a turn is exactly "the reply finished", and that is the moment a file may
+  // have changed underneath this tab. The host pushes the coalesced frame
+  // over /sidebar/ws/session; this tab hears it through ONE shared per-session
+  // subscription (turn-push.ts — the WS-side analogue of the ops stream's
+  // leader rule), and reloads through the very same load path the header's
+  // refresh button uses. Deliberately independent of `visible`: the native
+  // right sidebar keeps every visited tab body mounted, and since the
+  // connection is one per SESSION a parked tab costs nothing extra while
+  // still catching up the moment the reply settles.
+  //
+  // The dirty/edit guard is #855's priority restated: a draft lives only in
+  // the editor instance and a reload remounts it — the user's unsaved input
+  // (or an open edit session's caret) is never overwritten by an automatic
+  // refresh. The values ride a ref mirror so the callback reads the CURRENT
+  // toolbar without the subscription churning on every toolbar report.
+  const toolbarRef = useRef(toolbar)
+  toolbarRef.current = toolbar
+  const turnRefreshingRef = useRef(false)
+  /**
+   * Reduce THIS tab's own session state. `store.reduce` publishes through the
+   * ACTIVE snapshot, and a native tab body stays mounted while another
+   * conversation is on screen — writing the transient mark there would stamp
+   * another session's state (whose native tab ids restart per seat and could
+   * even collide). Same split the store's own clearUnread makes: the on-screen
+   * session takes the publishing path, an off-screen one the targeted write.
+   */
+  const reduceTabSession = useCallback((reducer: (state: SidebarState) => SidebarState): void => {
+    if (store.getSnapshot().sessionId === scope.sessionId) store.reduce(reducer)
+    else store.reduceFor(scope.sessionId, reducer)
+  }, [store, scope.sessionId])
+  const onTurn = useCallback(() => {
+    const current = toolbarRef.current
+    if (current?.dirty === true || current?.mode === 'edit') return
+    // The spinner mark first, then the reload: the tab strip (bottom workbench
+    // and native chip alike) reads the store, so the ring is up before the
+    // load's own placeholder row is.
+    turnRefreshingRef.current = true
+    reduceTabSession(state => markTabRefreshing(state, tab.id))
+    setReloadSeq(sequence => sequence + 1)
+  }, [reduceTabSession, tab.id])
+  useEffect(() => {
+    // A path-less window (the files home) and folder windows have no file to
+    // re-read — they never subscribe, so they never hear a turn.
+    if (showEmpty || isDir || scope.sessionId === '') return
+    return subscribeSessionTurns(scope.sessionId, onTurn)
+  }, [showEmpty, isDir, scope.sessionId, onTurn])
+  // The spinner's lifecycle: set when a turn schedules the reload, cleared the
+  // moment the load leaves `loading` (ready, error, binary — whatever the
+  // outcome). A path/session switch re-enters `loading` and clears on the way
+  // out; the unmount cleanup below keeps a tab closed MID-refresh from leaving
+  // the mark behind in its session's state.
+  useEffect(() => {
+    if (load.status === 'loading' || !turnRefreshingRef.current) return
+    turnRefreshingRef.current = false
+    reduceTabSession(state => unmarkTabRefreshing(state, tab.id))
+  }, [load.status, reduceTabSession, tab.id])
+  useEffect(() => () => {
+    if (!turnRefreshingRef.current) return
+    turnRefreshingRef.current = false
+    reduceTabSession(state => unmarkTabRefreshing(state, tab.id))
+  }, [reduceTabSession, tab.id])
 
   const treeOpen = treeOpenOf(tab)
   /**

@@ -33,7 +33,7 @@ import { referenceInChat as referenceInChatShared } from './reference-in-chat.ts
 import { DockFallback } from './sidebar/dock-fallback.tsx'
 import {
   BOTTOM_MIN, CONVERSATION_MIN,
-  isUnread,
+  isTabRefreshing, isUnread,
   leafWithTab, moveTab, moveTabToEdge, openDiffTab, resizeSplitIn,
   setBottomHeight, toggleBottomPanel, toggleExpanded,
   type DropZone, type SidebarStore, type SidebarTab,
@@ -593,8 +593,24 @@ export function Sidebar(props: { ctx: Context; store: SidebarStore }) {
    * which keep the folder glyph) shows the same file icon the tree row shows
    * (`fileIcon`, feature `fileIcons`); every other tab uses its tab-type
    * descriptor icon.
+   *
+   * While the tab's body is re-reading its file (a session-turn push
+   * scheduled the auto refresh), the icon is REPLACED by the refresh ring —
+   * the same 14px slot, so the strip never shifts while it spins. The native
+   * chip swaps its glyph the same way (tab-adapter.tsx reads the same store
+   * field), so both carriers read as the same thing.
    */
   const tabIconOf = (tab: SidebarTab): ReactNode => {
+    if (tab.type === 'editor' && isTabRefreshing(state, tab.id)) {
+      return (
+        <span
+          className={css.tabRefreshSpin}
+          role="img"
+          aria-label={t('loading')}
+          title={t('loading')}
+        />
+      )
+    }
     if (tab.type === 'editor' && tab.path !== undefined && (tab.meta as { dir?: boolean } | undefined)?.dir !== true) {
       return ctx.get('betterSidebar')?.fileIcon(tab.path, 14) ?? null
     }

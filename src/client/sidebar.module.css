@@ -532,6 +532,41 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
   }
 }
 
+/* "This tab is re-reading its file because the session's reply just settled"
+   (the session-turn WS push → the editor's auto refresh): a spinning ring
+   REPLACES the tab's file icon inside a fixed 14px slot, so spinning never
+   shifts the strip's or the chip's layout. Same ring on the native chip's
+   glyph slot. The element carries the state itself (role="img" + the existing
+   `loading` copy — the UnreadDot convention), so it is never aria-hidden. */
+@keyframes dsh-tab-refresh-spin {
+  to { transform: rotate(360deg); }
+}
+
+.tabRefreshSpin,
+.chipRefreshSpin {
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border: 2px solid var(--dsw-alias-border-l2);
+  border-top-color: var(--dsw-alias-label-secondary);
+  border-radius: 50%;
+  animation: dsh-tab-refresh-spin 0.8s linear infinite;
+}
+
+.chipRefreshSpin {
+  vertical-align: middle;
+}
+
+/* Reduced motion: the ring stands still — it is still the busy signal, just
+   without the motion (the mark only lives as long as the reload runs). */
+@media (prefers-reduced-motion: reduce) {
+  .tabRefreshSpin,
+  .chipRefreshSpin {
+    animation: none;
+  }
+}
+
 /* One tab's mounted content; inactive tabs stay mounted but hidden so
    switching never tears down terminals/editors (state survives). */
 .paneTab {

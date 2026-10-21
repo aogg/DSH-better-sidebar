@@ -33,7 +33,7 @@ import { referenceInChat } from '../reference-in-chat.ts'
 import { useSessionRoot } from '../use-session-root.ts'
 import type { BetterSidebarService, NativePathTab } from '../service.ts'
 import { t } from '../locales.ts'
-import { isUnread, toggleExpanded } from '../state.ts'
+import { isTabRefreshing, isUnread, toggleExpanded } from '../state.ts'
 import type { SidebarStore, SidebarTab, TabType } from '../state.ts'
 import css from '../sidebar.module.css'
 
@@ -635,7 +635,10 @@ export interface NativeTitleInjected {
  * with a path shows that file's icon (the same glyph the tree row shows), and
  * every other tab shows its descriptor's icon. Both ride
  * `descriptor.icon`, so the workbench strip, the guide capsules and the chip
- * cannot drift apart.
+ * cannot drift apart. While the turn-triggered auto reload re-reads the
+ * file, the glyph slot swaps to the refresh ring (the same slot, no layout
+ * shift) — the bottom strip's `tabIconOf` swaps the same store mark, so the
+ * two carriers read as one thing.
  */
 export function NativeTabTitle(props: NativeTitleInjected & NativeBodyFrameworkProps): ReactNode {
   const { records, service, descriptorId, sessionId, paramsOf, useTabInfo } = props
@@ -672,6 +675,18 @@ export function NativeTabTitle(props: NativeTitleInjected & NativeBodyFrameworkP
     listener => service.subscribeState(listener),
     () => isUnread(service.getSnapshot().state, record?.tab.type ?? descriptorId),
   )
+  // "This tab is re-reading its file right now": a session-turn push
+  // scheduled the editor body's auto refresh, and the body stamped the
+  // transient mark into the store under ITS tab id (the record's id). Same
+  // snapshot subscription as the unread mark, so the chip re-renders when
+  // the mark appears and when the load settles it away — and only an editor
+  // chip with a file swaps its glyph for the refresh ring (the bottom strip's
+  // tabIconOf reads the same store field, so both carriers agree).
+  const refreshing = useSyncExternalStore(
+    listener => service.subscribeState(listener),
+    () => isTabRefreshing(service.getSnapshot().state, record?.tab.id),
+  )
+  const showRefresh = refreshing && descriptorId === EDITOR_KIND && path !== undefined && path !== ''
   // …and the chip is also what RETIRES the mark: this tab being visible means
   // the reader is looking at its page now. Guarded on BOTH flags, so an
   // inactive chip (the host draws every expanded tab's title) clears nothing
@@ -681,13 +696,22 @@ export function NativeTabTitle(props: NativeTitleInjected & NativeBodyFrameworkP
   useEffect(() => {
     if (visible && unread) service.clearUnread(type, sessionId)
   }, [visible, unread, type, sessionId, service])
-  if (glyph === undefined || glyph === null) {
+  // The chip's leading slot: the refresh ring REPLACES the glyph while the
+  // auto reload runs (the same 14px slot, no layout shift); otherwise the
+  // glyph as before. The ring carries the state itself (role="img" + the
+  // existing `loading` copy — the UnreadDot convention), the decorative glyph
+  // stays aria-hidden.
+  const leading = showRefresh ? (
+    <span className={css.chipRefreshSpin} role="img" aria-label={t('loading')} title={t('loading')} />
+  ) : glyph === undefined || glyph === null ? null : (
+    <span className={css.chipIcon} aria-hidden="true">{glyph}</span>
+  )
+  if (leading === null) {
     return unread ? <>{title}<UnreadDot /></> : title
   }
   return (
     <>
-      {/* Decorative: the chip's accessible name stays the title. */}
-      <span className={css.chipIcon} aria-hidden="true">{glyph}</span>
+      {leading}
       {title}
       {unread ? <UnreadDot /> : null}
     </>

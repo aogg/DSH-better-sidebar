@@ -79,6 +79,15 @@ export interface SidebarState {
    */
   revealed: string[]
   /**
+   * Editor tabs whose body is re-reading the file right now because the
+   * session's reply settled (`turn` frames → EditorHost's auto refresh): tab
+   * ids, drawn as a spinner on the tab (bottom strip + native chip) while
+   * the reload is in flight. Transient by design, like `revealed` — the mark
+   * only exists between the reload trigger and its load settling, so
+   * sanitizeState never restores it and a reload starts clean.
+   */
+  refreshingTabs: string[]
+  /**
    * Tab types whose page the reader has not looked at yet: written when a
    * background activation opens its page WITHOUT taking the column over
    * (src/client/sidebar/use-host-feeds.ts) and cleared the moment that page
@@ -164,6 +173,7 @@ export function makeDefaultState(): SidebarState {
     nextBrowser: 1,
     expanded: [],
     revealed: [],
+    refreshingTabs: [],
     unread: [],
     bottomOpen: false,
     bottomHeight: BOTTOM_DEFAULT,
@@ -378,6 +388,32 @@ export function clearUnread(state: SidebarState, type: TabType): SidebarState {
 /** Whether one tab type is currently marked unread. */
 export function isUnread(state: SidebarState | undefined, type: TabType): boolean {
   return state !== undefined && state.unread.includes(type)
+}
+
+/**
+ * Mark one tab's body as re-reading its file (the tab's spinner): written
+ * when a session-turn push schedules the auto reload, cleared when the load
+ * leaves its loading state. Identity-preserving when already marked (no
+ * store churn, no re-render of the tab carriers). NOT persisted —
+ * sanitizeState never restores `refreshingTabs`, so a reload starts clean.
+ */
+export function markTabRefreshing(state: SidebarState, tabId: string): SidebarState {
+  return state.refreshingTabs.includes(tabId) ? state : { ...state, refreshingTabs: [...state.refreshingTabs, tabId] }
+}
+
+/**
+ * Clear one tab's refreshing mark (its reload just settled, or the tab
+ * closed mid-refresh). Paths not in the set change nothing — the SAME state
+ * reference returns, so a repeat clear never churns the store.
+ */
+export function unmarkTabRefreshing(state: SidebarState, tabId: string): SidebarState {
+  if (!state.refreshingTabs.includes(tabId)) return state
+  return { ...state, refreshingTabs: state.refreshingTabs.filter(id => id !== tabId) }
+}
+
+/** Whether one tab is currently re-reading its file (the spinner's read). */
+export function isTabRefreshing(state: SidebarState | undefined, tabId: string | undefined): boolean {
+  return state !== undefined && tabId !== undefined && state.refreshingTabs.includes(tabId)
 }
 
 /** Update the display fields of one open tab (title / path / meta) without
@@ -825,6 +861,9 @@ export function sanitizeState(parsed: unknown): SidebarState | undefined {
     nextBrowser,
     expanded: record.expanded as string[],
     revealed: [],
+    // Transient, like `revealed`: a refresh mark only lives while its reload
+    // is in flight, so a restored layout starts with every tab settled.
+    refreshingTabs: [],
     // Restored, unlike `revealed`: an unread page is still unread after a
     // reload, and this list is what draws its dot.
     unread: unread,

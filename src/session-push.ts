@@ -51,6 +51,19 @@
  *   it in their existing unknown-kind filter — no shape change to the frames
  *   they do read.
  *
+ * - `turn`: `{kind:'turn', sessionId}` pushed when a durable
+ *   `assistant/message` row settles — one row per settled reply step, and the
+ *   LAST one of a turn is exactly "the session's reply finished". The frame
+ *   is what open editor tabs ride to re-read a file the reply may have
+ *   rewritten (zero HTTP: the reload is scheduled by the push itself). Every
+ *   row schedules its own 400ms coalescing window per socket per session
+ *   (first-window-wins, the cwd schedule), so a multi-step turn pushes one
+ *   beat per step — the intermediate beats are harmless freshness pushes, the
+ *   final one is the completion signal. A watch (re)subscription pushes NO
+ *   turn frame (a reconnect must not fake a "just finished" signal), and
+ *   `user/message` / `tool/*` rows push none either — only a settled reply
+ *   step does.
+ *
  * Two frame kinds, two schedules: the blank flip is one-shot, so each socket
  * pushes at most one `blank:false` phase frame per session, ever (a burst of
  * message events must not spam the client's entry flip). A `tool/call` only
@@ -65,6 +78,8 @@ import type { HistorySendRecord } from './prompt-history-extract.ts'
 
 /** Coalescing window for `tool/call` (cwd) notices. */
 const CWD_DEBOUNCE_MS = 250
+/** Coalescing window for settled `assistant/message` (turn) notices. */
+const TURN_COALESCE_MS = 400
 /** Session ids one socket may watch (a resource guard, not a policy). */
 const MAX_WATCHED = 64
 
@@ -84,6 +99,14 @@ export type SessionPushFrame =
    * Broadcast to every attached socket (project-scoped, no watch filter).
    */
   | { kind: 'history-seed'; cwd: string; seeding: boolean }
+  /**
+   * One settled reply step of a watched session: a durable `assistant/message`
+   * row landed (the turn's LAST row is the reply's completion). The bare
+   * session id is the whole payload — the client knows what to do with the
+   * fact (re-read open files), and the 400ms window keeps a burst of steps
+   * from spamming it.
+   */
+  | { kind: 'turn'; sessionId: string }
 
 /** One resolved cwd answer, shaped like the `session.cwd` route's return value. */
 export interface SessionCwdAnswer {
@@ -163,6 +186,13 @@ export function createSessionPushHub(ctx: Context, options?: SessionPushHubOptio
     // message is the flip out of blank.
     if (event.type === 'user/message' || event.type === 'assistant/message') {
       for (const socket of sockets) socket.notifyPhase(sessionId)
+      // A durable `assistant/message` row is one SETTLED reply step (stream
+      // frames never reach the log) — each row schedules its own coalesced
+      // turn beat, so the turn's last row pushes the completion frame. A
+      // `user/message` is the ask, not an answer: no turn frame for it.
+      if (event.type === 'assistant/message') {
+        for (const socket of sockets) socket.notifyTurn(sessionId)
+      }
       return
     }
     // A tool call only HINTS that the active root may have moved; the 250ms
@@ -202,7 +232,7 @@ export function createSessionPushHub(ctx: Context, options?: SessionPushHubOptio
   }
 }
 
-/** One attached socket's watch set, phase one-shots and cwd coalescing timers. */
+/** One attached socket's watch set, phase one-shots and cwd/turn coalescing timers. */
 class SessionSocket {
   private readonly socket: WebSocket
   private readonly onClosed: () => void
@@ -211,7 +241,12 @@ class SessionSocket {
   private readonly watched = new Set<string>()
   /** Sessions this socket already heard the blank flip for (one frame, ever). */
   private readonly phased = new Set<string>()
+  /** Pending cwd windows, keyed by session id. */
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Pending turn windows, keyed by session id (deliberately NOT the cwd map:
+   *  both key on session id, and sharing one map would let a cwd window and a
+   *  turn window evict each other mid-flight). */
+  private readonly turnTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private closed = false
 
   /**
@@ -260,6 +295,13 @@ class SessionSocket {
       if (this.watched.has(id)) continue
       clearTimeout(timer)
       this.timers.delete(id)
+    }
+    // The turn windows drop with their watch entries the same way (a separate
+    // map, the same rule: an unwatched session may not fire a scheduled beat).
+    for (const [id, timer] of this.turnTimers) {
+      if (this.watched.has(id)) continue
+      clearTimeout(timer)
+      this.turnTimers.delete(id)
     }
     // A NEWLY watched session hears its CURRENT answers right away: a client
     // re-subscribing (every reconnect re-sends the whole watch set on a fresh
@@ -310,6 +352,25 @@ class SessionSocket {
   notifyHistorySeed(projectRoot: string, seeding: boolean): void {
     if (this.closed) return
     this.send({ kind: 'history-seed', cwd: projectRoot, seeding })
+  }
+
+  /**
+   * Coalesce one turn notice for a session: a durable `assistant/message` row
+   * just settled. The FIRST trigger's window wins (the cwd schedule), so each
+   * settled step of a multi-step turn lands its own beat 400ms after IT
+   * arrived — mid-turn beats are harmless freshness pushes, the turn's last
+   * step pushes the frame the client means ("the reply finished, re-read what
+   * it wrote"). (Re)subscriptions push nothing here: a reconnecting client
+   * must not hear a fabricated "just finished" — the signal only exists when
+   * a row actually settles while the socket watches.
+   * @param sessionId - the session whose reply step just settled.
+   */
+  notifyTurn(sessionId: string): void {
+    if (this.closed || !this.watched.has(sessionId) || this.turnTimers.has(sessionId)) return
+    this.turnTimers.set(sessionId, setTimeout(() => {
+      this.turnTimers.delete(sessionId)
+      this.send({ kind: 'turn', sessionId })
+    }, TURN_COALESCE_MS))
   }
 
   /**
@@ -415,6 +476,8 @@ class SessionSocket {
     this.closed = true
     for (const timer of this.timers.values()) clearTimeout(timer)
     this.timers.clear()
+    for (const timer of this.turnTimers.values()) clearTimeout(timer)
+    this.turnTimers.clear()
     this.watched.clear()
     this.phased.clear()
     this.onClosed()

@@ -16,7 +16,12 @@
  * flip. `history` frames push fresh record batches to watched sockets only
  * (event level); `history-seed` frames broadcast a project seed scan's
  * start/finish to EVERY attached socket (project-scoped, no watch filter) —
- * both stay no-ops after dispose and without the event API.
+ * both stay no-ops after dispose and without the event API. A durable
+ * `assistant/message` row schedules ONE coalesced `turn` frame 400ms out
+ * (first-window-wins, its own timer map beside cwd's): the reply-settled
+ * signal open editor tabs refresh on — filtered by the watch set, never
+ * pushed on a (re)subscription, dropped with an un-watch mid-window, and
+ * gone once the socket closes or the hub disposes.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSessionPushHub, type SessionCwdAnswer } from '../src/session-push.ts'
@@ -112,11 +117,16 @@ describe('session push hub', () => {
     expect(socket.frames()).toEqual([{ kind: 'phase', sessionId: 't1', blank: false }])
 
     // The blank flip is one-shot: further message rows (the rest of the turn)
-    // must not spam the client's entry flip.
+    // must not spam the client's entry flip. Each durable assistant/message
+    // row rides its own coalesced turn beat (the reply-settled signal); a
+    // user/message carries none.
     emit('session/event', { id: 't1' }, { type: 'assistant/message' })
     emit('session/event', { id: 't1' }, { type: 'user/message' })
     vi.advanceTimersByTime(1_000)
-    expect(socket.frames()).toEqual([{ kind: 'phase', sessionId: 't1', blank: false }])
+    expect(socket.frames()).toEqual([
+      { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'turn', sessionId: 't1' },
+    ])
     hub.dispose()
   })
 
@@ -428,13 +438,15 @@ describe('session push hub with a phase resolver', () => {
     ])
 
     // The watch answer joined the one-shot set: the message rows that follow
-    // must not push the flip a second time.
+    // must not push the flip a second time. The assistant/message row still
+    // schedules its turn beat (a reply step settled), 400ms on.
     emit('session/event', { id: 't1' }, { type: 'user/message' })
     emit('session/event', { id: 't1' }, { type: 'assistant/message' })
     vi.advanceTimersByTime(1_000)
     expect(socket.frames()).toEqual([
       { kind: 'cwd', sessionId: 't1', cwd: '/wt', root: 'wt', parent: null },
       { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'turn', sessionId: 't1' },
     ])
     expect(resolvePhase).toHaveBeenCalledTimes(1)
     hub.dispose()
@@ -650,5 +662,179 @@ describe('session push hub: history frames', () => {
     const bare = createSessionPushHub({} as unknown as Context)
     expect(() => { bare.notifyHistorySeed('/work/alpha', true) }).not.toThrow()
     bare.dispose()
+  })
+})
+
+describe('session push hub: turn frames', () => {
+  it('pushes one turn frame 400ms after a durable assistant/message settles', () => {
+    const { ctx, emit } = fakeCtx()
+    const hub = createSessionPushHub(ctx)
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+
+    // A watch (re)subscription pushes NO turn frame — the frames a plain
+    // watch pushes (cwd/phase with resolvers) may come, but never a turn.
+    vi.advanceTimersByTime(1_000)
+    expect(socket.frames().filter(frame => frame.kind === 'turn')).toEqual([])
+
+    emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+    vi.advanceTimersByTime(399)
+    expect(socket.frames()).toEqual([])
+    vi.advanceTimersByTime(1)
+    expect(socket.frames()).toEqual([{ kind: 'turn', sessionId: 't1' }])
+    hub.dispose()
+  })
+
+  it('a user/message or a tool row schedules no turn frame', () => {
+    const { ctx, emit } = fakeCtx()
+    const hub = createSessionPushHub(ctx)
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+
+    emit('session/event', { id: 't1' }, { type: 'user/message' })
+    emit('session/event', { id: 't1' }, { type: 'tool/call' })
+    vi.advanceTimersByTime(1_000)
+    // The phase flip (user/message) and the cwd frame (tool/call) ride their
+    // own kinds; the turn kind stays silent — only a settled reply step
+    // means "the reply finished".
+    expect(socket.frames().filter(frame => frame.kind === 'turn')).toEqual([])
+    hub.dispose()
+  })
+
+  it('coalesces a burst of settled rows into the first trigger\'s window', () => {
+    const { ctx, emit } = fakeCtx()
+    const hub = createSessionPushHub(ctx)
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+
+    // A multi-step turn settles row after row; every row inside the window
+    // armed by the FIRST one joins it — one beat, not one per row.
+    for (let index = 0; index < 5; index++) {
+      emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+      vi.advanceTimersByTime(70)
+    }
+    // 5 rows × 70ms = 350ms: still inside the window armed at t=0.
+    expect(socket.frames()).toEqual([])
+    vi.advanceTimersByTime(50)
+    expect(socket.frames()).toEqual([{ kind: 'turn', sessionId: 't1' }])
+
+    // A window that has fired may fire again for the NEXT settled row — each
+    // beat lands 400ms after ITS row, so a multi-step turn stays fresh and
+    // the last row's beat is the completion signal.
+    emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+    vi.advanceTimersByTime(400)
+    expect(socket.frames()).toEqual([
+      { kind: 'turn', sessionId: 't1' },
+      { kind: 'turn', sessionId: 't1' },
+    ])
+    hub.dispose()
+  })
+
+  it('per-socket windows: two watched sockets each get their own beat', () => {
+    const { ctx, emit } = fakeCtx()
+    const hub = createSessionPushHub(ctx)
+    const a = new FakeSocket()
+    const b = new FakeSocket()
+    watch(hub, a, ['t1'])
+    watch(hub, b, ['t1'])
+
+    emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+    vi.advanceTimersByTime(400)
+    const beat = { kind: 'turn', sessionId: 't1' }
+    expect(a.frames()).toEqual([beat])
+    expect(b.frames()).toEqual([beat])
+    hub.dispose()
+  })
+
+  it('filters by the watch set: unwatched sessions push nothing', () => {
+    const { ctx, emit } = fakeCtx()
+    const hub = createSessionPushHub(ctx)
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+
+    emit('session/event', { id: 'other' }, { type: 'assistant/message' })
+    vi.advanceTimersByTime(1_000)
+    expect(socket.frames()).toEqual([])
+    hub.dispose()
+  })
+
+  it('re-subscribing (the reconnect case) pushes no fabricated turn frame', () => {
+    const { ctx, emit } = fakeCtx()
+    const hub = createSessionPushHub(ctx)
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+
+    // A settled row, its beat delivered…
+    emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+    vi.advanceTimersByTime(400)
+    expect(socket.frames()).toEqual([{ kind: 'turn', sessionId: 't1' }])
+
+    // …then the client re-subscribes (a reconnect re-sends the whole watch
+    // set on a fresh socket). Un-watch + re-watch must not conjure a "just
+    // finished" — the signal only exists when a row settles while watched.
+    socket.receive({ op: 'watch', sessionIds: [] })
+    socket.receive({ op: 'watch', sessionIds: ['t1'] })
+    vi.advanceTimersByTime(1_000)
+    expect(socket.frames()).toEqual([{ kind: 'turn', sessionId: 't1' }])
+    hub.dispose()
+  })
+
+  it('drops a pending turn window when the session is un-watched mid-window', () => {
+    const { ctx, emit } = fakeCtx()
+    const hub = createSessionPushHub(ctx)
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1', 't2'])
+    emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+
+    socket.receive({ op: 'watch', sessionIds: ['t2'] })
+    vi.advanceTimersByTime(1_000)
+    expect(socket.frames()).toEqual([])
+
+    // The dropped window does not poison the next one: t2's own row beats.
+    emit('session/event', { id: 't2' }, { type: 'assistant/message' })
+    vi.advanceTimersByTime(400)
+    expect(socket.frames()).toEqual([{ kind: 'turn', sessionId: 't2' }])
+    hub.dispose()
+  })
+
+  it('stops pushing after the socket closes or the hub disposes, timers cleared', () => {
+    const { ctx, emit } = fakeCtx()
+    const hub = createSessionPushHub(ctx)
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+    emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+
+    // A closed socket drops its pending window…
+    socket.fire('error')
+    vi.advanceTimersByTime(1_000)
+    expect(socket.frames()).toEqual([])
+
+    // …and dispose tears down the feed: no listener left, no frame, no throw.
+    const second = new FakeSocket()
+    watch(hub, second, ['t1'])
+    hub.dispose()
+    emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+    vi.advanceTimersByTime(1_000)
+    expect(second.frames()).toEqual([])
+  })
+
+  it('a cwd window and a turn window for the same session do not evict each other', () => {
+    const { ctx, emit } = fakeCtx()
+    const hub = createSessionPushHub(ctx)
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+
+    // Both schedules arm for the same session — separate timer maps, so the
+    // cwd beat at 250ms and the turn beat at 400ms BOTH land.
+    emit('session/event', { id: 't1' }, { type: 'tool/call' })
+    emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+    vi.advanceTimersByTime(250)
+    expect(socket.frames()).toEqual([{ kind: 'cwd', sessionId: 't1' }])
+    vi.advanceTimersByTime(150)
+    expect(socket.frames()).toEqual([
+      { kind: 'cwd', sessionId: 't1' },
+      { kind: 'turn', sessionId: 't1' },
+    ])
+    hub.dispose()
   })
 })
