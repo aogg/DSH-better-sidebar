@@ -289,12 +289,22 @@ describe('prompt-history routes（history.list scope=session：会话内过滤 +
     return { key: `${sessionId}:${seq}`, sessionId, seq, time, text, textTruncated: false }
   }
 
-  /** 仓库夹具：'cur' 活会话定位项目根；records 直接 appendRecords 入仓。
-   *  持久层 events 留空 + 只有 cur 一个头，后台种子扫描不会添乱（幂等也无账
-   *  可扫），断言对内存索引完全确定。 */
+  /** 仓库夹具：'cur'/'s1' 活会话定位项目根（客户端的现实用法里，sessionId
+   *  就是当前活会话——项目根由它解析，过滤也在同一字段上做）；records 直接
+   *  appendRecords 入仓。持久层 events 留空 + 这两个头，后台种子扫描不会添
+   *  乱（幂等也无账可扫），断言对内存索引完全确定。 */
   async function scopeFixture(seed: readonly HistorySendRecord[]) {
-    const { persistence } = fakePersistence({ headers: [{ header: { id: 'cur', cwd: '/work/alpha' } }], events: {} })
-    const ctx = makeCtx(persistence, { cur: { header: { cwd: '/work/alpha' } } })
+    const { persistence } = fakePersistence({
+      headers: [
+        { header: { id: 'cur', cwd: '/work/alpha' } },
+        { header: { id: 's1', cwd: '/work/alpha' } },
+      ],
+      events: {},
+    })
+    const ctx = makeCtx(persistence, {
+      cur: { header: { cwd: '/work/alpha' } },
+      s1: { header: { cwd: '/work/alpha' } },
+    })
     const store = new PromptHistoryStore({ root: join(home, 'scope-store') })
     if (seed.length > 0) await store.appendRecords(projectKeyOf('/work/alpha'), seed)
     return { ctx, store, api: buildPromptHistoryApi(ctx, { store }) }

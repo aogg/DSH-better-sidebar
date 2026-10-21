@@ -472,10 +472,11 @@ export function HistoryView(props: {
   }, [enqueue, refetchFirstPageOnce])
 
   /** 首屏/刷新/tab 切换：清空队列后重拉首页（annotations 失败静默降级为空
-   *  库）。响应落地（或失败）时 tab 已切走则整体丢弃——上一 tab 的在途结果
-   *  绝不写进新 tab 的状态。 */
+   *  库）。请求 scope 取本次渲染的 state（切 tab 重建本回调 → 下面的 effect
+   *  随之重拉）；响应落地（或失败）时 tab 已切走（scopeRef 镜像已变）则整体
+   *  丢弃——上一 tab 的在途结果绝不写进新 tab 的状态。 */
   const load = useCallback(async (): Promise<void> => {
-    const scopeAtStart = scopeRef.current
+    const scopeAtStart = scope
     setInitialLoading(true)
     setLoadError(undefined)
     setActionError(undefined)
@@ -509,12 +510,12 @@ export function HistoryView(props: {
     } finally {
       if (scopeRef.current === scopeAtStart) setInitialLoading(false)
     }
-  }, [applyListResult, props.sessionId, refreshWatch])
+  }, [applyListResult, props.sessionId, refreshWatch, scope])
   useEffect(() => { void load() }, [load])
 
-  /** 切顶部 tab：先写镜像（ws 回调/在途响应判仓用），再 setState 触发一次
-   *  完整 reload（load 依赖 scope，重建即重拉）——状态机只有一套，切 tab 不
-   *  保留上一 tab 的 records/游标，绝不串仓。 */
+  /** 切顶部 tab：先写镜像（ws 回调/在途响应判仓用），再 setState——scope 进
+   *  load 依赖，重建即触发一次完整 reload。状态机只有一套，切 tab 不保留上
+   *  一 tab 的 records/游标，绝不串仓。 */
   const switchScope = useCallback((next: HistoryScope): void => {
     if (scopeRef.current === next) return
     scopeRef.current = next
