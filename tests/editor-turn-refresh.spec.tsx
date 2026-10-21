@@ -399,9 +399,11 @@ describe('editor session-turn auto refresh', () => {
       await settle()
       expect(subscribed('turn-d-cycle')).toBe(true)
 
+      // reads: the first mount's load, the remount's load, then the turn's
+      // reload — the remount does its own fresh read before the frame lands.
       emitTurn('turn-d-cycle')
       await settle()
-      expect(reads()).toBe(2)
+      expect(reads()).toBe(3)
       again.unmount()
     } finally {
       vi.useRealTimers()
