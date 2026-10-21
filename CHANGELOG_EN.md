@@ -4,6 +4,12 @@
 >
 > 📝 The Chinese [CHANGELOG](./CHANGELOG.md) is the authoritative, item-by-item record; this file carries the English summaries and has historically lagged behind it. Where the two disagree, the Chinese one is current.
 
+### v0.28.18
+
+- 🗂️ **The session lens ("this round's files") gains a merged "Write+Edit" filter chip — one chip that admits both mutation kinds at once, with the existing per-kind filters untouched**: `OpFilter` gains a `'mutate'` bucket between `'all'` and the single kinds (admitting `write` + `edit`), the chip row reads All | Write+Edit | Write | Edit | Read, and the merged chip's count is the write and edit counts summed (reads excluded). Files touched: `src/client/changes/SessionLens.tsx`; 21 locale spots (`src/client/locales.ts` zh/en segments + the 19 `src/client/locales-*.ts`) add `changesFilterMutate` (each wording = that file's own `changesWrite` + `changesEdit`); `tests/session-lens-tree.spec.tsx` adds 1 case (clicking the merged chip drops the read branch whole while the write/edit rows stay, the chip's count equals the write+edit total, and "All" restores).
+  - **Version**: `SIDEBAR_SERVICE_VERSION` and package.json / dsh.plugin.json move to **0.28.18**.
+  - 🧪 Tests: `tests/session-lens-tree.spec.tsx` adds 1 merged write+edit filter case (same `chip()` helper and filter-case style as the existing spec).
+
 ### v0.28.17
 
 - 🔁 **Open file pages in the sidebar now refresh themselves the moment a session's reply settles, with a spinner on their tabs while the re-read runs — push over WebSocket the whole way, zero polling**: `/sidebar/ws/session` gains a `turn` frame — each durable `assistant/message` row that lands in the session log (one row per settled reply step; stream frames never reach the log and `assistant/attempt` is a failed attempt) schedules a beat, coalesced 400ms first-window-wins, so a multi-step turn pushes one beat per step and the last beat IS "the reply finished". A watch (re)subscription never pushes one (a reconnect must not fabricate a completion), and `user/message` / `tool/*` push none. Three pieces together:

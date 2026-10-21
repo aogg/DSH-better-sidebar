@@ -297,6 +297,7 @@ export const nl: Record<string, string> = {
   changesFileHistoryExpand: 'Bestandsgeschiedenis uitklappen',
   changesFileHistoryCollapse: 'Bestandsgeschiedenis inklappen',
   changesFilterAll: 'Alles',
+  changesFilterMutate: 'Schrijven+Bewerken',
   changesFilterEmpty: 'Geen bewerkingen van dit soort',
   changesOpenDiffTab: 'In eigen diff-tabblad openen',
   changesClosePreview: 'Voorbeeld sluiten',

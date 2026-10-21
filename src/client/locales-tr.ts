@@ -299,6 +299,7 @@ export const tr: Record<string, string> = {
   changesFileHistoryExpand: 'Dosya geçmişini aç',
   changesFileHistoryCollapse: 'Dosya geçmişini kapat',
   changesFilterAll: 'Tümü',
+  changesFilterMutate: 'Yazma+Düzenleme',
   changesFilterEmpty: 'Bu türde işlem yok',
   changesOpenDiffTab: 'Ayrı bir diff sekmesinde aç',
   changesClosePreview: 'Önizlemeyi kapat',

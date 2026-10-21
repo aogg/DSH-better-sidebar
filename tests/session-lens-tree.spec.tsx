@@ -9,7 +9,8 @@
  * path rides the title), the FOLDED header badges every distinct op kind the
  * group contains (edit→write→read, deduplicated), a preview selection
  * re-opens its own collapsed chain, a kind filter removes emptied branches
- * whole, and the fold handle (the tab header's 全部展开/全部收起) opens every
+ * whole, the merged 写入+编辑 chip filters both mutation kinds in one pass,
+ * and the fold handle (the tab header's 全部展开/全部收起) opens every
  * directory row, or folds every row AND every disclosed file history.
  */
 import { describe, expect, it, vi } from 'vitest'
@@ -237,6 +238,38 @@ describe('SessionLens directory tree', () => {
       click(chip(view.container, t('changesFilterAll'))!)
       expect(dirRow(view.container, 'src')).not.toBeNull()
       expect(dirRow(view.container, 'docs')).not.toBeNull()
+    } finally {
+      view.unmount()
+    }
+  })
+
+  it('admits write AND edit ops under the merged 写入+编辑 chip while reads drop out', () => {
+    const ops = [op('write', 'src/a.ts'), op('edit', 'src/b.ts'), op('read', 'docs/guide.md')]
+    const view = renderLens(ops)
+    try {
+      // The merged chip counts write+edit together (1 + 1): reads stay outside.
+      const mutate = chip(view.container, t('changesFilterMutate'))!
+      expect(/写入\+编辑\s*2|Write\+Edit\s*2/.test(mutate.textContent ?? '')).toBe(true)
+
+      click(mutate)
+      // The read-only branch disappears ENTIRELY; both mutation kinds remain.
+      expect(dirRow(view.container, 'docs')).toBeNull()
+      expect(fileHead(view.container, 'docs/guide.md')).toBeNull()
+      expect(dirRow(view.container, 'src')).not.toBeNull()
+      expect(fileHead(view.container, 'src/a.ts')).not.toBeNull()
+      expect(fileHead(view.container, 'src/b.ts')).not.toBeNull()
+
+      // Disclosing both surviving histories shows write+edit rows, no read.
+      click(fileHead(view.container, 'src/a.ts')!)
+      click(fileHead(view.container, 'src/b.ts')!)
+      const kinds = [...view.container.querySelectorAll<HTMLButtonElement>('button[data-op-kind]')]
+        .map(row => row.getAttribute('data-op-kind'))
+      expect(kinds).toEqual(['write', 'edit'])
+
+      // Back to all: the read row returns.
+      click(chip(view.container, t('changesFilterAll'))!)
+      expect(dirRow(view.container, 'docs')).not.toBeNull()
+      expect(fileHead(view.container, 'docs/guide.md')).not.toBeNull()
     } finally {
       view.unmount()
     }

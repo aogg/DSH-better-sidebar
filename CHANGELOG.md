@@ -2,6 +2,12 @@
 
 > 本文档收录 dsh-better-sidebar 的完整发布历史（最新版摘要见 [README](README.md)；同步发布于 [GitHub Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)）。
 
+### v0.28.18
+
+- 🗂️ **「本轮文件」视图（SessionLens）的筛选 chip 新增「写入+编辑」合并项——一枚 chip 同时放行 write 与 edit 两类操作，既有单类筛选行为一字不变**：`OpFilter` 在 `'all'` 与单 kind 之间加 `'mutate'` 合并桶（放行 `write` + `edit`），chip 行顺序变为 全部｜写入+编辑｜写入｜编辑｜读取，合并 chip 的计数是 write 与 edit 两个计数之和（读取不计入）。改动文件：`src/client/changes/SessionLens.tsx`；21 处 locale（`src/client/locales.ts` zh/en 两段 + 19 个 `src/client/locales-*.ts`）新增 `changesFilterMutate`（译法 = 各文件自己的 `changesWrite` + `changesEdit`）；`tests/session-lens-tree.spec.tsx` 新增 1 例（点合并 chip 后 read 分支整体消失、write/edit 行仍在、chip 计数为两者之和，回「全部」恢复）。
+  - **版本**：`SIDEBAR_SERVICE_VERSION` 与 package.json / dsh.plugin.json 一起升到 **0.28.18**。
+  - 🧪 测试：`tests/session-lens-tree.spec.tsx` 新增「合并写入+编辑筛选」1 例（沿用既有 `chip()` 辅助与筛选用例风格）。
+
 ### v0.28.17
 
 - 🔁 **会话完成时，侧边栏打开的文件页自动异步重读，重读期间标签转圈——全程 WS 推送，零轮询**：`/sidebar/ws/session` 新增 `turn` 帧——会话日志落定一条 durable `assistant/message`（一条即回复的一个步骤；流式帧不进日志，`assistant/attempt` 是失败尝试不推）就安排一拍，400ms 合并（首拍定时为准），多步回复每步各一拍、最后一拍即"说完了"；订阅/重新订阅绝不推（重连不得伪造完成信号），`user/message` 与 `tool/*` 不推。三处一起收：

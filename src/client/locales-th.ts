@@ -299,6 +299,7 @@ export const th: Record<string, string> = {
   changesFileHistoryExpand: 'ขยายประวัติไฟล์',
   changesFileHistoryCollapse: 'ยุบประวัติไฟล์',
   changesFilterAll: 'ทั้งหมด',
+  changesFilterMutate: 'เขียน+แก้ไข',
   changesFilterEmpty: 'ไม่มีการดำเนินการประเภทนี้',
   changesOpenDiffTab: 'เปิดในแท็บ diff แยก',
   changesClosePreview: 'ปิดตัวอย่าง',

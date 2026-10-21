@@ -299,6 +299,7 @@ export const hi: Record<string, string> = {
   changesFileHistoryExpand: 'फ़ाइल इतिहास खोलें',
   changesFileHistoryCollapse: 'फ़ाइल इतिहास बंद करें',
   changesFilterAll: 'सभी',
+  changesFilterMutate: 'लिखना+संपादन',
   changesFilterEmpty: 'इस प्रकार का कोई ऑपरेशन नहीं',
   changesOpenDiffTab: 'अलग diff टैब में खोलें',
   changesClosePreview: 'पूर्वावलोकन बंद करें',

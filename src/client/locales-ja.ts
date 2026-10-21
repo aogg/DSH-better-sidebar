@@ -299,6 +299,7 @@ export const ja: Record<string, string> = {
   changesFileHistoryExpand: '変更履歴を展開',
   changesFileHistoryCollapse: '変更履歴を折りたたむ',
   changesFilterAll: 'すべて',
+  changesFilterMutate: '書き込み+編集',
   changesFilterEmpty: 'この種類の操作はありません',
   changesOpenDiffTab: '独立タブで開く',
   changesClosePreview: 'プレビューを閉じる',

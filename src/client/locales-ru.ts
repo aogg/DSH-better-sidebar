@@ -295,6 +295,7 @@ export const ru: Record<string, string> = {
   changesFileHistoryExpand: 'Развернуть историю файла',
   changesFileHistoryCollapse: 'Свернуть историю файла',
   changesFilterAll: 'Все',
+  changesFilterMutate: 'Запись+Изменение',
   changesFilterEmpty: 'Нет операций этого типа',
   changesOpenDiffTab: 'Открыть в отдельной вкладке',
   changesClosePreview: 'Закрыть просмотр',

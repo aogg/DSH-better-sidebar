@@ -2,7 +2,9 @@
  * The session lens of the changes tab: agent truth — every file the model
  * read, wrote, or edited in this session, folded into a DIRECTORY tree (the
  * Git lens's shape, see {@link buildSessionTree}: single-child chains
- * compressed, directories before files), with kind filters. A directory row
+ * compressed, directories before files), with kind filters — the per-kind
+ * chips plus one merged WRITE+EDIT chip (the {@link OpFilter} 'mutate' bucket)
+ * that admits both mutation kinds at once. A directory row
  * (chevron + folder artwork + label + file count) discloses its subtree and
  * starts EXPANDED: folding is tracked as the set of COLLAPSED directories, so
  * a directory that first appears in a later poll is born open. Each file's op
@@ -31,8 +33,9 @@ import { ancestorDirs, buildSessionTree, dirPathsOf, foldedKindsOf, type Session
 import type { LensControl } from './lens-control.ts'
 import css from './changes.module.css'
 
-/** The op-kind filter chips: 'all' or one concrete kind. */
-type OpFilter = 'all' | FileOpKind
+/** The op-kind filter chips: 'all', the merged 'mutate' bucket (write+edit in
+ *  one pass — one chip counting and admitting both), or one concrete kind. */
+type OpFilter = 'all' | 'mutate' | FileOpKind
 
 const KIND_LABEL = { read: 'changesRead', write: 'changesWrite', edit: 'changesEdit' } as const
 
@@ -70,7 +73,11 @@ export const SessionLens = forwardRef<LensControl, SessionLensProps>(function Se
    *  work arrives expanded without anyone seeding the state. */
   const [collapsedDirs, setCollapsedDirs] = useState<ReadonlySet<string>>(() => new Set())
   const filteredOps = useMemo(
-    () => (filter === 'all' ? ops : ops.filter(op => op.kind === filter)),
+    () => (filter === 'all'
+      ? ops
+      : filter === 'mutate'
+        ? ops.filter(op => op.kind === 'write' || op.kind === 'edit')
+        : ops.filter(op => op.kind === filter)),
     [ops, filter],
   )
   const groups = useMemo(() => groupByFile(filteredOps), [filteredOps])
@@ -255,6 +262,13 @@ export const SessionLens = forwardRef<LensControl, SessionLensProps>(function Se
       <div className={css.filterRow} role="group" aria-label={t('changesSessionLens')}>
         <Chip active={filter === 'all'} count={ops.length} onClick={() => { setFilter('all') }}>
           {t('changesFilterAll')}
+        </Chip>
+        <Chip
+          active={filter === 'mutate'}
+          count={(counts.get('write') ?? 0) + (counts.get('edit') ?? 0)}
+          onClick={() => { setFilter('mutate') }}
+        >
+          {t('changesFilterMutate')}
         </Chip>
         {(['write', 'edit', 'read'] as const).map(kind => (
           <Chip

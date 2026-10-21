@@ -297,6 +297,7 @@ export const id: Record<string, string> = {
   changesFileHistoryExpand: 'Buka riwayat berkas',
   changesFileHistoryCollapse: 'Tutup riwayat berkas',
   changesFilterAll: 'Semua',
+  changesFilterMutate: 'Tulis+Edit',
   changesFilterEmpty: 'Tidak ada operasi jenis ini',
   changesOpenDiffTab: 'Buka di tab diff terpisah',
   changesClosePreview: 'Tutup pratinjau',

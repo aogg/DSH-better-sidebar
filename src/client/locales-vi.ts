@@ -299,6 +299,7 @@ export const vi: Record<string, string> = {
   changesFileHistoryExpand: 'Mở rộng lịch sử tệp',
   changesFileHistoryCollapse: 'Thu gọn lịch sử tệp',
   changesFilterAll: 'Tất cả',
+  changesFilterMutate: 'Ghi+Chỉnh sửa',
   changesFilterEmpty: 'Không có thao tác thuộc loại này',
   changesOpenDiffTab: 'Mở trong tab diff riêng',
   changesClosePreview: 'Đóng xem trước',

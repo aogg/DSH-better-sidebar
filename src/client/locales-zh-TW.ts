@@ -314,6 +314,7 @@ export const zhTW: Record<string, string> = {
   changesFileHistoryExpand: '展開修改歷史',
   changesFileHistoryCollapse: '收起修改歷史',
   changesFilterAll: '全部',
+  changesFilterMutate: '寫入+編輯',
   changesFilterEmpty: '沒有此類操作',
   changesOpenDiffTab: '在獨立頁籤中開啟',
   changesClosePreview: '關閉預覽',

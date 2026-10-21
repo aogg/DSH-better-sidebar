@@ -290,6 +290,7 @@ export const it: Record<string, string> = {
   changesFileHistoryExpand: 'Espandi cronologia del file',
   changesFileHistoryCollapse: 'Comprimi cronologia del file',
   changesFilterAll: 'Tutti',
+  changesFilterMutate: 'Scrittura+Modifica',
   changesFilterEmpty: 'Nessuna operazione di questo tipo',
   changesOpenDiffTab: 'Apri in una scheda diff',
   changesClosePreview: 'Ridimensiona l\'anteprima',

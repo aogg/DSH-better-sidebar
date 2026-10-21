@@ -282,6 +282,7 @@ export const sv: Record<string, string> = {
   changesFileHistoryExpand: 'Utfälla filhistorik',
   changesFileHistoryCollapse: 'Infälla filhistorik',
   changesFilterAll: 'Alla',
+  changesFilterMutate: 'Skriv+Redigera',
   changesFilterEmpty: 'Inga åtgärder av denna typ',
   changesOpenDiffTab: 'Öppna i egen diff-flik',
   changesClosePreview: 'Stäng förhandsvisning',

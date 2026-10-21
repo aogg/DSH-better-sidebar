@@ -285,6 +285,7 @@ export const de: Record<string, string> = {
   changesFileHistoryExpand: 'Dateiverlauf ausklappen',
   changesFileHistoryCollapse: 'Dateiverlauf einklappen',
   changesFilterAll: 'Alle',
+  changesFilterMutate: 'Schreiben+Bearbeiten',
   changesFilterEmpty: 'Keine Vorgänge dieser Art',
   changesOpenDiffTab: 'In eigenem Tab öffnen',
   changesClosePreview: 'Vorschau schließen',

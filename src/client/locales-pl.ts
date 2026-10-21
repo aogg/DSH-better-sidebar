@@ -301,6 +301,7 @@ export const pl: Record<string, string> = {
   changesFileHistoryExpand: 'Rozwiń historię pliku',
   changesFileHistoryCollapse: 'Zwiń historię pliku',
   changesFilterAll: 'Wszystko',
+  changesFilterMutate: 'Zapis+Edycja',
   changesFilterEmpty: 'Brak operacji tego rodzaju',
   changesOpenDiffTab: 'Otwórz w osobnej karcie',
   changesClosePreview: 'Zamknij podgląd',

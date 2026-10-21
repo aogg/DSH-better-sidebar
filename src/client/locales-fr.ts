@@ -292,6 +292,7 @@ export const fr: Record<string, string> = {
   changesFileHistoryExpand: 'Déplier l’historique du fichier',
   changesFileHistoryCollapse: 'Replier l’historique du fichier',
   changesFilterAll: 'Tout',
+  changesFilterMutate: 'Écriture+Modification',
   changesFilterEmpty: 'Aucune opération de ce type',
   changesOpenDiffTab: 'Ouvrir dans un onglet diff',
   changesClosePreview: 'Fermer l\'aperçu',

@@ -291,6 +291,7 @@ export const ko: Record<string, string> = {
   changesFileHistoryExpand: '파일 기록 펼치기',
   changesFileHistoryCollapse: '파일 기록 접기',
   changesFilterAll: '모두',
+  changesFilterMutate: '쓰기+편집',
   changesFilterEmpty: '이 종류의 작업이 없습니다',
   changesOpenDiffTab: '별도 탭에서 열기',
   changesClosePreview: '미리보기 닫기',

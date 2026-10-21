@@ -300,6 +300,7 @@ export const ar: Record<string, string> = {
   changesFileHistoryExpand: 'توسيع سجل الملف',
   changesFileHistoryCollapse: 'طي سجل الملف',
   changesFilterAll: 'الكل',
+  changesFilterMutate: 'كتابة+تحرير',
   changesFilterEmpty: 'لا توجد عمليات من هذا النوع',
   changesOpenDiffTab: 'فتح في تبويب diff منفصل',
   changesClosePreview: 'إغلاق المعاينة',
