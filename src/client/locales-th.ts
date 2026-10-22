@@ -775,5 +775,6 @@ export const th: Record<string, string> = {
   historyStoragePathDesc: 'รายการประวัติและข้อมูลปลั๊กอินจัดเก็บในไดเรกทอรีนี้; เว้นว่าง = ใช้พาธเริ่มต้น และเมื่อเปลี่ยน ข้อมูลเดิมจะย้ายไปโดยอัตโนมัติ',
   historyStoragePathPlaceholder: '~/.dsh/plugins/DSH-better-sidebar/',
   sideChatCurrentSession: 'เซสชันนี้',
+  sideChatRunning: 'กำลังทำงาน',
   sideChatGlobalUnread: 'ยังไม่อ่านทั้งหมด',
 }

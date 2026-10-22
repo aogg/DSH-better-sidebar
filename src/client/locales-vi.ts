@@ -775,5 +775,6 @@ export const vi: Record<string, string> = {
   historyStoragePathDesc: 'Bản ghi lịch sử và dữ liệu plugin đều lưu trong thư mục này; để trống = dùng đường dẫn mặc định, thay đổi sẽ tự động chuyển dữ liệu cũ sang',
   historyStoragePathPlaceholder: '~/.dsh/plugins/DSH-better-sidebar/',
   sideChatCurrentSession: 'Phiên này',
+  sideChatRunning: 'Đang chạy',
   sideChatGlobalUnread: 'Chưa đọc toàn cục',
 }

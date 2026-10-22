@@ -773,5 +773,6 @@ export const nl: Record<string, string> = {
   historyStoragePathDesc: 'Geschiedenisrecords en plug-in gegevens staan in deze map; leeg = standaardpad, en wijzigen migreert de oude gegevens automatisch',
   historyStoragePathPlaceholder: '~/.dsh/plugins/DSH-better-sidebar/',
   sideChatCurrentSession: 'Deze sessie',
+  sideChatRunning: 'Wordt uitgevoerd',
   sideChatGlobalUnread: 'Globaal ongelezen',
 }

@@ -24,6 +24,7 @@ import { act } from 'react-dom/test-utils'
 import { renderRoot, setupReactAct } from './test-utils.ts'
 import { SideChatView, consumeSidechatSeed } from '../src/client/SideChatView.tsx'
 import { markSidechatThreadRead, sidechatReadAt } from '../src/client/sidechat-unread.ts'
+import { sidechatWindows } from '../src/client/sidechat-windows.ts'
 import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { attachLocale } from '../src/client/locales.ts'
 import css from '../src/client/SideChatView.module.css'
@@ -298,6 +299,9 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
   attachLocale(undefined)
+  // A floating window is module state (page-level by design): never let a
+  // test's pop-out leak into the next one's exclusion checks.
+  for (const record of [...sidechatWindows.getSnapshot()]) sidechatWindows.close(record.threadId)
 })
 
 /** The bound-thread view props (tab meta pins threadId 't1'). */
@@ -994,7 +998,10 @@ describe('SideChatView top-right history list', () => {
     const card = await openHistory(container)
     const text = card.textContent ?? ''
     expect(text).toContain('历史对话')
-    // Newest first: t2 (30s old → 刚刚) before t1 (5min old → 5 分钟前).
+    // Newest first: t2 (30s old → 刚刚) before t1 (5min old → 5 分钟前). t2
+    // also RUNS, so it leads the RUNNING group too — its global row is the
+    // card's first button, the 本会话 twin follows under this session's
+    // header (the group split has its own cases below).
     const first = card.querySelector('button')?.textContent ?? ''
     expect(first).toContain('线程二')
     expect(text).toContain('刚刚')
@@ -1012,7 +1019,11 @@ describe('SideChatView top-right history list', () => {
     await act(async () => {})
 
     const card = await openHistory(container)
+    // t2 runs and lives in THIS session, so it ALSO rides the RUNNING group
+    // (covered by its own cases below) — pick the 本会话 twin, the one
+    // WITHOUT the global row class.
     const row = [...card.querySelectorAll<HTMLButtonElement>('button')]
+      .filter(candidate => !candidate.className.includes(requiredClass(css.sidechatHistoryRowGlobal)))
       .find(candidate => candidate.textContent?.includes('线程二'))
     expect(row).toBeDefined()
     await act(async () => { row?.click() })
@@ -1057,6 +1068,162 @@ describe('SideChatView top-right history list', () => {
     expect(card.textContent ?? '').toContain('暂无侧边对话')
     unmount()
   })
+
+  // ---- The RUNNING group: the popover's TOP group ----------------------
+  // rr: a FOREIGN-workspace thread that runs and is deliberately READ
+  // (watermark beyond its stamp) — it must still surface, because "who is
+  // executing" has nothing to do with read state. ru: foreign, idle,
+  // unread — it feeds only 全局未读, proving the running filter is a real
+  // filter and not "every global row". t1 stays the tab's bound thread.
+  function runningStore(): ReturnType<typeof makeStore> {
+    return makeStore({
+      byId: {
+        root: { id: 'root', displayTitle: '主会话', cwd: '/p', running: false },
+        t1: { id: 't1', displayTitle: 'Side: 线程一', origin: 'subagent', parentId: 'root', running: false },
+        ws2: { id: 'ws2', displayTitle: '另一工作区', cwd: '/other/proj', running: false },
+        rr: { id: 'rr', displayTitle: 'Side: 外区跑着', origin: 'subagent', parentId: 'ws2', updatedAt: Date.now() - 30_000, running: true },
+        ru: { id: 'ru', displayTitle: 'Side: 外区未读', origin: 'subagent', parentId: 'ws2', updatedAt: Date.now() - 60_000, running: false },
+      },
+    })
+  }
+
+  /** The popover's card element (the dialog may wrap it, so resolve the
+   *  list container before walking its direct children). */
+  function historyCard(dialog: HTMLElement): HTMLElement {
+    return dialog.querySelector<HTMLElement>(`.${requiredClass(css.sidechatHistoryCard)}`) ?? dialog
+  }
+
+  it('lists a READ running thread in its own group ABOVE 全局未读, idle rows out', async () => {
+    markSidechatThreadRead('rr', Date.now() + 60_000)  // read — must NOT evict it
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(runningStore()))))
+    await act(async () => {})
+
+    const card = historyCard(await openHistory(container))
+    // Walk the card's direct children: [head, 运行中 header + count, rr row,
+    // 全局未读 header + count, ru row, 本会话 header, t1 row…]. The running
+    // header must sit ABOVE the unread header, its one row between them.
+    const labels = [...card.children].map(child => child.textContent ?? '')
+    const runningHead = labels.indexOf('运行中1')
+    const unreadHead = labels.indexOf('全局未读1')
+    expect(runningHead).toBeGreaterThanOrEqual(0)
+    expect(unreadHead).toBeGreaterThan(runningHead)
+    const runningRow = card.children[runningHead + 1] as HTMLButtonElement
+    expect(runningRow.textContent).toContain('外区跑着')
+    expect(runningRow.textContent).toContain('proj · 另一工作区')
+    // Running ≠ unread: the running row carries NO unread dot (its group
+    // says "working right now"), the unread row keeps its dot.
+    expect(runningRow.querySelector(`.${requiredClass(css.sidechatUnreadDot)}`)).toBeNull()
+    const unreadRow = card.children[unreadHead + 1] as HTMLButtonElement
+    expect(unreadRow.textContent).toContain('外区未读')
+    expect(unreadRow.querySelector(`.${requiredClass(css.sidechatUnreadDot)}`)).not.toBeNull()
+    // The corner badge stays UNREAD-only: one unread thread (ru), not two.
+    expect(container.querySelector(`.${css.sidechatHistoryBadge}`)?.textContent).toBe('1')
+    unmount()
+  })
+
+  it('reopens a RUNNING row of THIS session through park + openTab', async () => {
+    markHistoryThreadsRead()
+    const host = makeArchiveHost()
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeArchiveCtx(historyStore(), host))))
+    await act(async () => {})
+
+    const card = await openHistory(container)
+    // historyStore's t2 runs inside THIS session: pick its RUNNING-group
+    // row (the global class), not the 本会话 twin under the last header.
+    const row = [...card.querySelectorAll<HTMLButtonElement>('button')]
+      .filter(candidate => candidate.className.includes(requiredClass(css.sidechatHistoryRowGlobal)))
+      .find(candidate => candidate.textContent?.includes('线程二'))
+    expect(row).toBeDefined()
+    await act(async () => { row?.click() })
+
+    // Same contract as a 本会话 row: popover closed, seed parked exactly
+    // once for the createTab, plain sidechat openTab in this scope.
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull()
+    expect(consumeSidechatSeed()).toBe('t2')
+    expect(consumeSidechatSeed()).toBeUndefined()
+    expect(host.betterSidebar.openTab).toHaveBeenCalledTimes(1)
+    expect(host.betterSidebar.openTab).toHaveBeenCalledWith({ type: 'sidechat' }, { sessionId: 'root', cwd: '/p' })
+    unmount()
+  })
+
+  it('jumps from a RUNNING row across workspaces: mark read, parent-scope tab, main-view switch', async () => {
+    const openSession = vi.fn()
+    const betterSidebar = { openTab: vi.fn(), updateTab: vi.fn() }
+    const ctx = {
+      sessions: { list: runningStore() },
+      get: (key: string) => {
+        if (key === 'betterSidebar') return betterSidebar
+        if (key === 'uiWorkspace') return { openSession }
+        return undefined
+      },
+    } as unknown as Context
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(ctx)))
+    await act(async () => {})
+
+    const card = await openHistory(container)
+    const row = [...card.querySelectorAll<HTMLButtonElement>('button')]
+      .find(candidate => candidate.textContent?.includes('外区跑着'))
+    expect(row).toBeDefined()
+    await act(async () => { row?.click() })
+
+    // The RUNNING group rides the SAME jump contract as the unread rows —
+    // only the grouping differs (one shared handler in the view).
+    expect(sidechatReadAt('rr')).toBeGreaterThan(0)
+    expect(betterSidebar.openTab).toHaveBeenCalledTimes(1)
+    expect(betterSidebar.openTab).toHaveBeenCalledWith({ type: 'sidechat' }, { sessionId: 'ws2', cwd: '/other/proj' })
+    expect(consumeSidechatSeed()).toBe('rr')
+    expect(openSession).toHaveBeenCalledTimes(1)
+    expect(openSession).toHaveBeenCalledWith('ws2')
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull()
+    unmount()
+  })
+
+  it('keeps the bound thread and floating windows OUT of the RUNNING group', async () => {
+    // t2 is historyStore's only runner. Bind the tab to it AND float it:
+    // both surfaces hold the thread on screen, so no global group may list
+    // it — a reader already watching a thread needs no "come back" row.
+    markHistoryThreadsRead()
+    const tab: SidebarTab = { id: 'tab-run', type: 'sidechat', title: '线程二', meta: { threadId: 't2' } }
+    sidechatWindows.open({ threadId: 't2', sessionId: 'root', cwd: '/p', title: '线程二' })
+    const { container, unmount } = renderRoot(createElement(SideChatView, {
+      ctx: makeCtx(historyStore()), scope: { sessionId: 'root', cwd: '/p' }, tab, visible: true,
+    }))
+    await act(async () => {})
+
+    const card = await openHistory(container)
+    const globalRows = [...card.querySelectorAll<HTMLButtonElement>('button')]
+      .filter(candidate => candidate.className.includes(requiredClass(css.sidechatHistoryRowGlobal)))
+    expect(globalRows).toHaveLength(0)
+    // Nothing unread either (both threads read or excluded) → no badge.
+    expect(container.querySelector(`.${css.sidechatHistoryBadge}`)).toBeNull()
+    unmount()
+  })
+
+  it('keeps the empty state hidden when ONLY the RUNNING group has rows', async () => {
+    // No side thread of THIS session and nothing unread anywhere — before
+    // the running group this card would read 暂无侧边对话; the lone runner
+    // must suppress it (the empty text needs ALL THREE groups empty).
+    markSidechatThreadRead('rr', Date.now() + 60_000)
+    const store = makeStore({
+      byId: {
+        root: { id: 'root', displayTitle: '主会话', running: false },
+        ws2: { id: 'ws2', displayTitle: '另一工作区', cwd: '/other/proj', running: false },
+        rr: { id: 'rr', displayTitle: 'Side: 外区跑着', origin: 'subagent', parentId: 'ws2', updatedAt: Date.now() - 30_000, running: true },
+      },
+    })
+    const tab: SidebarTab = { id: 'tab-lone', type: 'sidechat', title: '新对话', meta: { autoCreate: true } }
+    const { container, unmount } = renderRoot(createElement(SideChatView, {
+      ctx: makeCtx(store), scope: { sessionId: 'root', cwd: '/p' }, tab, visible: true,
+    }))
+    await act(async () => {})
+
+    const card = await openHistory(container)
+    const text = card.textContent ?? ''
+    expect(text).toContain('运行中')
+    expect(text).toContain('外区跑着')
+    expect(text).not.toContain('暂无侧边对话')
+    unmount()
+  })
 })
 
 /** The css-module map is `Record<string, string>` (index access reads
@@ -1087,7 +1254,10 @@ describe('SideChatView global unread group', () => {
       byId: {
         root: { id: 'root', displayTitle: '主会话', cwd: '/p', running: false },
         t1: { id: 't1', displayTitle: 'Side: 线程一', origin: 'subagent', parentId: 'root', running: false },
-        local: { id: 'local', displayTitle: 'Side: 本区未读', origin: 'subagent', parentId: 'root', updatedAt: Date.now() - 30_000, running: true },
+        // Idle on purpose: a running thread would ALSO feed the RUNNING
+        // group (its own cases live in the top-right describe above) and
+        // muddy this suite's two-row expectations.
+        local: { id: 'local', displayTitle: 'Side: 本区未读', origin: 'subagent', parentId: 'root', updatedAt: Date.now() - 30_000, running: false },
         ws2: { id: 'ws2', displayTitle: '另一工作区', cwd: '/other/proj', running: false },
         remote: { id: 'remote', displayTitle: 'Side: 外区线程', origin: 'subagent', parentId: 'ws2', updatedAt: Date.now() - 60_000, running: false },
       },

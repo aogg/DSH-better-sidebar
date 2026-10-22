@@ -636,18 +636,37 @@ export function SideChatView(props: {
   const floatingThreads = useSyncExternalStore(sidechatWindows.subscribe, sidechatWindows.getSnapshot)
   const sidechatReads = useSyncExternalStore(sidechatReadStore.subscribe, sidechatReadStore.getSnapshot)
 
-  /** The history popover's GLOBAL UNREAD group: every side thread of EVERY
-   *  workspace whose last activity postdates its read watermark, minus what
-   *  is on screen right now (this tab's bound thread, floating windows) and
-   *  what the host hides as archived. Read marks arrive through
-   *  `sidechatReads` above, so marking read collapses the row on the spot. */
-  const globalUnreadRows = useMemo(() => {
+  /** The history popover's GLOBAL row feed: every side thread of EVERY
+   *  workspace, minus what is on screen right now (this tab's bound thread —
+   *  the reader is holding it — and every floating window, each a reader of
+   *  its own thread) and what the host hides as archived. ONE scan feeds
+   *  BOTH global groups below (running + unread), so the two can never
+   *  drift apart about who is excluded. The feed rides the push-driven
+   *  sessions.list store the host already maintains — a thread starting or
+   *  settling arrives as a store update, so neither group polls. */
+  const globalRows = useMemo(() => {
     const exclude = new Set<string>()
     if (threadId !== undefined) exclude.add(threadId)
     for (const window of floatingThreads) exclude.add(window.threadId)
     return globalSideThreadRows(list.byId, { archivedIds, excludeIds: [...exclude] })
-      .filter(row => globalRowActivityAt(row, list) > (sidechatReads[row.id] ?? 0))
-  }, [list, archivedIds, threadId, floatingThreads, sidechatReads])
+  }, [list, archivedIds, threadId, floatingThreads])
+
+  /** The GLOBAL UNREAD group: the global rows whose last activity postdates
+   *  their read watermark. Read marks arrive through `sidechatReads` above,
+   *  so marking read collapses the row on the spot. */
+  const globalUnreadRows = useMemo(
+    () => globalRows.filter(row => globalRowActivityAt(row, list) > (sidechatReads[row.id] ?? 0)),
+    [globalRows, list, sidechatReads],
+  )
+
+  /** The GLOBAL RUNNING group (the popover's TOP group): the global rows
+   *  whose agent is executing right now. Read state is deliberately
+   *  irrelevant here — a thread can be fully read and still working, which
+   *  is exactly why it earns its own group instead of hiding behind the
+   *  unread filter (the two answer different questions: "谁在跑" vs "谁没
+   *  读"). Order inherits the feed's last-activity sort, newest first; a
+   *  thread that settles drops out on the next store push, no timer. */
+  const runningRows = useMemo(() => globalRows.filter(row => row.running), [globalRows])
 
   const [composer, setComposer] = useState('')
   const [busy, setBusy] = useState<'starting' | 'sending' | 'saving' | 'archiving' | null>(null)
@@ -1029,16 +1048,18 @@ export function SideChatView(props: {
     reopenThread(id)
   }
 
-  /** Open one GLOBAL-UNREAD row: mark it read first, then land the reader on
-   *  the thread. A row of THIS session reopens through the same park +
-   *  openTab path as the 本会话 rows; a FOREIGN session's thread additionally
-   *  opens its sidechat tab under the PARENT's scope (so the tab is seated in
-   *  the conversation it belongs to, not the one it was clicked from) and
-   *  switches the main view to that parent via the host bridge
-   *  (openHistorySession — the same jump the history-send rows use). A row
-   *  whose parent session is not listed cannot be navigated to; it renders
-   *  disabled and this handler returns early. */
-  const openGlobalUnread = (row: GlobalSideThreadRow): void => {
+  /** Open one GLOBAL-group row — the RUNNING and UNREAD groups share this
+   *  handler (the click intent is identical, only the grouping differs):
+   *  mark it read first, then land the reader on the thread. A row of THIS
+   *  session reopens through the same park + openTab path as the 本会话
+   *  rows; a FOREIGN session's thread additionally opens its sidechat tab
+   *  under the PARENT's scope (so the tab is seated in the conversation it
+   *  belongs to, not the one it was clicked from) and switches the main
+   *  view to that parent via the host bridge (openHistorySession — the
+   *  same jump the history-send rows use). A row whose parent session is
+   *  not listed cannot be navigated to; it renders disabled and this
+   *  handler returns early. */
+  const openGlobalThread = (row: GlobalSideThreadRow): void => {
     const parentId = row.parentId
     if (parentId === undefined || list.byId[parentId] === undefined) return
     markSidechatThreadRead(row.id)
@@ -1062,6 +1083,38 @@ export function SideChatView(props: {
   const globalRowWhere = (row: GlobalSideThreadRow): string =>
     [row.workspaceName, row.parentTitle].filter((part): part is string => part !== undefined).join(' · ')
 
+  /** One GLOBAL-group row — the RUNNING and UNREAD groups render the same
+   *  shape (title, then workspace · parent, then the relative last-activity
+   *  time; a thread the feed cannot date shows no time cell rather than a
+   *  fake one). The unread dot is the ONE difference and it stays a choice
+   *  of the group: the running group says "working right now" (its
+   *  StateDot), not "you have not read this", so it renders no dot. A
+   *  parent that is not in the list cannot be navigated to: the row stays
+   *  visible but inert (no park, no jump). */
+  const globalRow = (row: GlobalSideThreadRow, options: { unreadDot: boolean }): React.ReactNode => {
+    const at = globalRowActivityAt(row, list)
+    const time = at > 0 ? relativeTime(new Date(at).toISOString()) : undefined
+    const where = globalRowWhere(row)
+    const unaddressable = row.parentId === undefined || list.byId[row.parentId] === undefined
+    return (
+      <button
+        key={row.id}
+        type="button"
+        className={clsx(css.sidechatHistoryRow, css.sidechatHistoryRowGlobal)}
+        disabled={unaddressable}
+        onClick={() => { openGlobalThread(row) }}
+      >
+        <span className={css.sidechatHistoryTitle}>{threadDisplayTitle(row.title)}</span>
+        <span className={css.sidechatHistoryMeta}>
+          {row.running && <StateDot state="ongoing" size={8} />}
+          {where !== '' && <span>{where}</span>}
+          {time !== undefined && <span>{time}</span>}
+          {options.unreadDot && <span className={css.sidechatUnreadDot} aria-hidden="true" />}
+        </span>
+      </button>
+    )
+  }
+
   /** The history popover's rows: every listed side thread of this session,
    *  newest first (the catalog's creation times; an undated thread sorts
    *  last). Same feed the composer-bar menu reads — a CLOSED tab stays listed
@@ -1083,13 +1136,17 @@ export function SideChatView(props: {
   /** The top-right history control: a quiet button pinned over the
    *  transcript's corner — the overlay wrapper never catches pointers, so
    *  scrolled content under it stays fully interactive — and its anchored
-   *  popover listing the cross-workspace UNREAD threads first, then every
-   *  side thread of this session. A row click reopens that thread (same
-   *  session) or jumps across workspaces (foreign session, see
-   *  openGlobalUnread); the row bound to THIS tab is marked and re-clicking
-   *  it is a no-op (no second tab for the same thread). The button carries
-   *  the global unread count as a corner badge — the one signal a reader
-   *  sees without opening the popover. */
+   *  popover listing the cross-workspace RUNNING threads first (read state
+   *  irrelevant: a busy agent is worth surfacing even when read), then the
+   *  cross-workspace UNREAD threads, then every side thread of this
+   *  session. A row click reopens that thread (same session) or jumps
+   *  across workspaces (foreign session, see openGlobalThread); the row
+   *  bound to THIS tab is marked and re-clicking it is a no-op (no second
+   *  tab for the same thread). The button carries the global unread count
+   *  as a corner badge — the one signal a reader sees without opening the
+   *  popover. The RUNNING group deliberately does not feed the badge:
+   *  running and unread are different signals, and a running count would
+   *  flap with every start/stop while unread only grows until read. */
   const historyControl = (
     <>
       <div className={css.sidechatHistoryOverlay}>
@@ -1117,45 +1174,35 @@ export function SideChatView(props: {
       <AnchoredPopover anchor={historyOpen} onClose={() => { setHistoryOpen(null) }} width={280}>
         <div className={css.sidechatHistoryCard}>
           <div className={css.sidechatHistoryHead}>{t('sideChatHistory')}</div>
+          {/* The RUNNING group sits ABOVE 全局未读 on purpose: "something is
+              executing somewhere" outranks "something awaits reading" — the
+              reader is more likely to want the live thread than the stale
+              one. Rendered only when non-empty, like the unread group. */}
+          {runningRows.length > 0 && (
+            <>
+              <div className={css.sidechatHistoryGroup}>
+                <span>{t('sideChatRunning')}</span>
+                <span className={css.sidechatHistoryGroupCount}>{runningRows.length}</span>
+              </div>
+              {runningRows.map(row => globalRow(row, { unreadDot: false }))}
+            </>
+          )}
           {globalUnreadRows.length > 0 && (
             <>
               <div className={css.sidechatHistoryGroup}>
                 <span>{t('sideChatGlobalUnread')}</span>
                 <span className={css.sidechatHistoryGroupCount}>{globalUnreadRows.length}</span>
               </div>
-              {globalUnreadRows.map(row => {
-                const at = globalRowActivityAt(row, list)
-                const time = at > 0 ? relativeTime(new Date(at).toISOString()) : undefined
-                const where = globalRowWhere(row)
-                // A parent that is not in the list cannot be navigated to:
-                // the row stays visible but inert (no park, no jump).
-                const unaddressable = row.parentId === undefined || list.byId[row.parentId] === undefined
-                return (
-                  <button
-                    key={row.id}
-                    type="button"
-                    className={clsx(css.sidechatHistoryRow, css.sidechatHistoryRowGlobal)}
-                    disabled={unaddressable}
-                    onClick={() => { openGlobalUnread(row) }}
-                  >
-                    <span className={css.sidechatHistoryTitle}>{threadDisplayTitle(row.title)}</span>
-                    <span className={css.sidechatHistoryMeta}>
-                      {row.running && <StateDot state="ongoing" size={8} />}
-                      {where !== '' && <span>{where}</span>}
-                      {time !== undefined && <span>{time}</span>}
-                      <span className={css.sidechatUnreadDot} aria-hidden="true" />
-                    </span>
-                  </button>
-                )
-              })}
+              {globalUnreadRows.map(row => globalRow(row, { unreadDot: true }))}
             </>
           )}
           <div className={css.sidechatHistoryGroup}>
             <span>{t('sideChatCurrentSession')}</span>
           </div>
           {/* The empty state is a whole-CARD affair: it only means something
-              when NEITHER group has a row to show. */}
-          {historyRows.length === 0 && globalUnreadRows.length === 0 && (
+              when NO group — running, unread or this session's — has a row
+              to show. */}
+          {historyRows.length === 0 && globalUnreadRows.length === 0 && runningRows.length === 0 && (
             <div className={css.sidechatHistoryEmpty}>{t('sideChatEmpty')}</div>
           )}
           {historyRows.map(row => {

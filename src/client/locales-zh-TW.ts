@@ -790,5 +790,6 @@ export const zhTW: Record<string, string> = {
   historyStoragePathDesc: '歷史傳送記錄與外掛資料都存這個目錄；留空使用預設路徑，修改後舊資料自動搬遷',
   historyStoragePathPlaceholder: '~/.dsh/plugins/DSH-better-sidebar/',
   sideChatCurrentSession: '本對話',
+  sideChatRunning: '執行中',
   sideChatGlobalUnread: '全域未讀',
 }

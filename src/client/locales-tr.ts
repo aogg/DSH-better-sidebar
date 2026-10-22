@@ -775,5 +775,6 @@ export const tr: Record<string, string> = {
   historyStoragePathDesc: 'Geçmiş kayıtları ve eklenti verileri bu dizinde tutulur; boş = varsayılan yol, değiştirmek eski verileri otomatik olarak taşır',
   historyStoragePathPlaceholder: '~/.dsh/plugins/DSH-better-sidebar/',
   sideChatCurrentSession: 'Bu oturum',
+  sideChatRunning: 'Çalışıyor',
   sideChatGlobalUnread: 'Genel okunmamışlar',
 }
