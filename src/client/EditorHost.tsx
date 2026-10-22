@@ -686,16 +686,19 @@ export function EditorHost(props: {
     prevSaveState.current = current
   }, [toolbar?.saveState, toolbar?.mode])
 
-  // Model-write auto-refresh (issue #855): a `write` / `edit` tool call of THIS
-  // session that settled without an error and named THIS file reloads the
-  // preview — silently, through the very same load path the header's refresh
-  // button uses (so that manual entry keeps working untouched).
+  // Model-write auto-refresh (issue #855): a `write` / `edit` tool call of
+  // this session's TREE that settled without an error and named THIS file
+  // reloads the preview — silently, through the very same load path the
+  // header's refresh button uses (so that manual entry keeps working
+  // untouched).
   //
-  // The signal is the plugin's own `changes.ops` delta stream, consumed by ONE
-  // shared poller per session (see ops-stream.ts): this tab joins it only while
-  // it is on screen with a real file, so a parked tab costs no requests, and a
-  // tab of another session never sees these touches at all.
-  const ops = useFileOpStream(scope, visible && !showEmpty && !isDir)
+  // The signal is the plugin's own `changes.ops` delta stream, driven by ONE
+  // shared WS invalidation subscription per session (see ops-stream.ts): this
+  // tab joins it only while it is on screen with a real file, so a parked tab
+  // holds no subscription, and a tab of another session never sees these
+  // touches at all. `ctx` feeds the session list the stream resolves its
+  // tree watch set from (delegated agents write in child sessions).
+  const ops = useFileOpStream(scope, visible && !showEmpty && !isDir, ctx)
   /** The stream revision this tab's current path is known fresh at. */
   const opBaseline = useRef<{ key: string; revision: number } | null>(null)
   useEffect(() => {

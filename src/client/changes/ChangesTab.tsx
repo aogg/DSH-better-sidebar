@@ -18,11 +18,14 @@
  * exposes no event-log face): the tab pulls the delta past its cursor and
  * folds it into ops (and, from the same window, the `git add` records), and
  * publishes the op count to a module-level cache the tab-strip badge reads.
- * The pull is one catch-up whenever the tab becomes visible and then a cadence
- * ONLY while an event-backed lens is on screen — the git lens has no use for
- * the session event log (and the shared git-status store owns its own poller).
+ * The pull is one catch-up whenever the tab becomes visible or an
+ * event-backed lens enters the screen, and then ONE one-shot fetch per
+ * invalidation — the host's `ops` frames (see ../ops-push.ts) name the
+ * session TREE (delegated agents write in child sessions), so the git lens
+ * is the only lens with no use for the session event log (and the shared
+ * git-status store owns its own poller).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   IconChevronsUpDownOutlineRegular, IconRefreshOutlineRegular, SegmentedControl,
 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -30,7 +33,8 @@ import type { SidebarSessionEvent } from '../../context-types.ts'
 import type { TabComponentProps } from '../service.ts'
 import { t } from '../locales.ts'
 import { api } from '../api.ts'
-import { usePolling } from '../use-polling.ts'
+import { useSessionOps } from '../ops-push.ts'
+import { treeSessionIds } from '../subagent-lineage.ts'
 import { clearTabLoading, setTabLoading } from '../tab-loading.ts'
 import type { SidebarDiffRef } from '../state.ts'
 import { IconButton, Notice } from '../ui/index.ts'
@@ -161,8 +165,9 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
   const lensControl = useRef<LensControl | null>(null)
 
   // ── Session-event accumulation: one catch-up pull when the tab becomes
-  //    visible, then a 2.5s delta poll while the SESSION lens is on screen.
-  //    The cursor is the last delivered seq, so each poll ships only what the
+  //    visible or an event-backed lens enters the screen, then one one-shot
+  //    delta fetch per WS invalidation while such a lens is showing. The
+  //    cursor is the last delivered seq, so each pull ships only what the
   //    accumulator lacks. ───────────────────────────────────────────────────
   const eventsRef = useRef<readonly SidebarSessionEvent[]>([])
   // The fold of eventsRef as of the last poll. extractFileOps parses every
@@ -177,25 +182,29 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
   const addsRef = useRef<readonly GitAddRecord[]>([])
   const seqRef = useRef(0)
   const pollGen = useRef(0)
-  /** One delta request in flight at a time (the poller is fixed-interval, so a
-   *  slow host would otherwise run two pulls over the same cursor and append
-   *  the same delta twice). A pull that arrives while one is running is a
-   *  no-op: the in-flight answer already carries everything up to now. */
+  /** One delta request in flight at a time (a notice arriving while one runs
+   *  is a no-op: the in-flight answer already carries everything up to now),
+   *  and an invalidation landing mid-flight re-arms exactly one trailing
+   *  pull — the timer-free replacement of the old poll's next tick. */
   const pullingRef = useRef(false)
+  const pendingPullRef = useRef(false)
   const [opsError, setOpsError] = useState(false)
   const [tick, setTick] = useState(0)
   /**
    * Whether the tab's FIRST event pull has settled (resolve or reject —
    * whatever it brought back). Until it has, the page shows nothing but a
    * loading Notice and the tab reports itself loading to the strip (see the
-   * effect below). The steady-state 2.5s delta poll is NOT a load: once the
-   * first pull is in, the flag stays true and the later polls never touch it
+   * effect below). A steady-state invalidation pull is NOT a load: once the
+   * first pull is in, the flag stays true and the later pulls never touch it
    * (setting an already-true state is a React bail-out, no re-render).
    */
   const [firstPullSettled, setFirstPullSettled] = useState(false)
   const pull = useCallback(async (signal?: AbortSignal): Promise<void> => {
     const generation = pollGen.current
-    if (pullingRef.current) return
+    if (pullingRef.current) {
+      pendingPullRef.current = true
+      return
+    }
     pullingRef.current = true
     try {
       const { events, lastSeq } = await api.changesOps(scope, seqRef.current, signal)
@@ -204,10 +213,10 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
       if (generation !== pollGen.current || signal?.aborted === true) return
       // Nothing new: KEEP the previous fold's identity and touch nothing that
       // renders — not even the tick counter. This is a finished session's
-      // steady state (the server answers an empty window), so the idle 2.5 s
-      // poll must cost ZERO renders; `setOpsError(false)` is a bail-out
-      // no-op while the flag is already false, and a real recovery from an
-      // error still clears the banner with the one render it needs.
+      // steady state (the server answers an empty window), so an idle
+      // invalidation pull must cost ZERO renders; `setOpsError(false)` is a
+      // bail-out no-op while the flag is already false, and a real recovery
+      // from an error still clears the banner with the one render it needs.
       if (events.length === 0 && lastSeq <= seqRef.current) {
         setOpsError(false)
         return
@@ -248,7 +257,18 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
       // tab is no longer "coming up" (idempotent for every later poll). A
       // STALE generation's settle must not land: the session switch has
       // already reset the flag for the fresh pull that is now in flight.
-      if (generation === pollGen.current) setFirstPullSettled(true)
+      if (generation === pollGen.current) {
+        setFirstPullSettled(true)
+        // An invalidation arrived mid-flight: re-pull once (the in-flight
+        // answer was fetched before those rows landed). A stale generation
+        // drops the re-arm — the session switch's own first pull covers it.
+        if (pendingPullRef.current) {
+          pendingPullRef.current = false
+          void pull()
+        }
+      } else {
+        pendingPullRef.current = false
+      }
     }
     // Granular scope fields: the scope object's identity churns, only its
     // sessionId / cwd fields gate the poll target.
@@ -266,10 +286,34 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
     setFirstPullSettled(false)
   }, [scope.sessionId])
   // One catch-up whenever the tab becomes visible (the badge count follows the
-  // tab being opened); the CADENCE below runs only while an event-backed lens
-  // is showing (the git lens folds nothing from the session log).
+  // tab being opened), and one whenever an event-backed lens enters the screen
+  // (the old poll's first tick used to serve this — an immediate one-shot
+  // fetch, never a cadence). The git lens folds nothing from the session log,
+  // so it pulls none.
   useEffect(() => { if (visible) void pull() }, [visible, pull])
-  usePolling(visible && lens !== 'git', pull, { intervalMs: 2_500 })
+  useEffect(() => { if (visible && lens !== 'git') void pull() }, [lens, pull])
+  // The tab's ops watch set: the session plus its subagent descendants (the
+  // `changes.ops` answer folds the whole parentSession subtree, so a child's
+  // write must invalidate too). Root first — the host's 64-session watch
+  // guard always keeps the head. A hydrating session row degrades to the
+  // session itself.
+  const sessionList = useSyncExternalStore(
+    useMemo(() => (callback: () => void) => ctx.sessions.list.subscribe(callback), [ctx]),
+    useCallback(() => ctx.sessions.list.getSnapshot(), [ctx]),
+  )
+  const watchIds = useMemo(
+    () => [...new Set([scope.sessionId, ...treeSessionIds(sessionList.byId, scope.sessionId)])],
+    [sessionList, scope.sessionId],
+  )
+  // WS-driven invalidation (see ../ops-push.ts): an `ops` frame of the session
+  // tree — or the shared socket's re-open after a drop — pulls the delta
+  // once, only while an event-backed lens is on screen. No timer drives any
+  // request; a notice mid-flight re-arms one trailing pull inside `pull`.
+  useSessionOps({
+    sessionIds: visible && lens !== 'git' ? watchIds : [],
+    onInvalidate: () => { void pull() },
+    onReconnect: () => { void pull() },
+  })
   // Report the first pull's in-flight state to the tab strip's loading
   // registry: until it settles the tab shows nothing but a loading Notice, so
   // the strip's spinner is the tab's only "this page is coming" feedback.

@@ -22,9 +22,14 @@
  * reply's completion, and open editor tabs ride it to re-read a file the
  * reply may have rewritten (see turn-push.ts). No answer rides it: the
  * refresh IS the reaction, fetched through the editor's own load path.
- * Older clients drop the kind in their existing unknown-kind filter (no
- * crash, no shape change); an older host simply never sends it and the newer
- * client keeps working (it just never hears the scan-finish signal).
+ * A sixth, `{kind:'ops', sessionId, seq}` (v0.28.19+), is pure invalidation
+ * for the session's ops-delta consumers — the changes tab's session lens,
+ * the editor's file-op stream, the Tasks page's live/telemetry pulls. It
+ * says "re-pull your delta once" (a one-shot fetch, not a poll); `seq` is a
+ * diagnostic payload, never a client cursor. Older clients drop the kind in
+ * their existing unknown-kind filter (no crash, no shape change); an older
+ * host simply never sends it and the newer client keeps working (it just
+ * never hears the invalidation).
  *
  * This socket is the session hooks' ONLY data channel — there is no HTTP
  * polling beside it. A dropped socket is answered with reconnects that back
@@ -41,11 +46,12 @@ import { hostWebSocketUrl } from './host-route-url.ts'
 /** One host frame: which watched session changed, which fact — and maybe the answer. */
 export interface SessionPushFrame {
   /**
-   * `turn` frames (newer hosts only) name a settled reply step; an older host
-   * never sends them and an older client drops them in its unknown-kind
-   * filter — the union grows, neither side breaks.
+   * `turn` frames (newer hosts only) name a settled reply step; `ops` frames
+   * (newer hosts only) name a stale ops delta. An older host never sends
+   * either and an older client drops them in its unknown-kind filter — the
+   * union grows, neither side breaks.
    */
-  kind: 'phase' | 'cwd' | 'history' | 'history-seed' | 'turn'
+  kind: 'phase' | 'cwd' | 'history' | 'history-seed' | 'turn' | 'ops'
   /**
    * The session the frame is about. Every kind carries one EXCEPT
    * `history-seed` (project-scoped, no session on the wire).
@@ -82,26 +88,50 @@ export interface SessionPushFrame {
    * scan started, `false` = it finished. Absent on every other frame kind.
    */
   seeding?: unknown
+  /**
+   * `ops` frames carry the watched session's newest per-log seq inside the
+   * coalescing window — a DIAGNOSTIC payload, never a client cursor (subtree
+   * `changes.ops` answers renumber seqs when merging). Absent on every other
+   * frame kind.
+   */
+  seq?: unknown
 }
 
 /** How long to wait before re-opening a dropped socket; failures back off to the cap. */
 const RETRY_BASE_MS = 1000
 const RETRY_MAX_MS = 15_000
 
+/** A live session push connection: close it, or re-announce its watch set. */
+export interface SessionPushConnection {
+  /**
+   * Re-send the whole watch frame (a full replacement). For a getter-based
+   * connection whose ids change mid-flight — the shared ops hub's union of
+   * subscriber trees — this is how a membership change reaches the host
+   * without a reconnect.
+   */
+  reconcile(): void
+  /** Close the connection and stop its retries (idempotent). */
+  close(): void
+}
+
 /**
- * Open the session push socket for one fixed watch set.
- * @param sessionIds - sessions to watch; announced on every (re)open.
+ * Open the session push socket for a fixed OR mutable watch set.
+ * @param sessionIds - sessions to watch; an array is frozen for the
+ *   connection's lifetime (the hooks' contract), a getter is re-read on every
+ *   open AND every {@linkcode SessionPushConnection.reconcile} — the shared
+ *   ops hub (ops-push.ts) feeds it the union of its subscribers' sessions.
  * @param onFrame - one validated host frame.
  * @param onState - optional open/close signal (observability; the session
  *   hooks stay connected either way — a drop just means frames pause until
  *   the next successful reconnect).
- * @returns the disposer (idempotent per connection).
+ * @returns the live connection (close it to tear down; both calls idempotent).
  */
-export function connectSessionPush(
-  sessionIds: readonly string[],
+export function openSessionPush(
+  sessionIds: readonly string[] | (() => readonly string[]),
   onFrame: (frame: SessionPushFrame) => void,
   onState?: (open: boolean) => void,
-): () => void {
+): SessionPushConnection {
+  const currentIds = (): readonly string[] => (typeof sessionIds === 'function' ? sessionIds() : sessionIds)
   let socket: WebSocket | null = null
   let retry: number | undefined
   let closed = false
@@ -110,7 +140,7 @@ export function connectSessionPush(
   /** Push the whole watch set (a full replacement, also after a reconnect). */
   const sendWatch = (): void => {
     if (socket !== null && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ op: 'watch', sessionIds: [...sessionIds] }))
+      socket.send(JSON.stringify({ op: 'watch', sessionIds: [...currentIds()] }))
     }
   }
 
@@ -132,7 +162,7 @@ export function connectSessionPush(
       }
       if (frame === null || typeof frame !== 'object') return
       // A malformed or foreign frame is a late/dirty notice, not an invalidation.
-      if (frame.kind !== 'phase' && frame.kind !== 'cwd' && frame.kind !== 'history' && frame.kind !== 'history-seed' && frame.kind !== 'turn') return
+      if (frame.kind !== 'phase' && frame.kind !== 'cwd' && frame.kind !== 'history' && frame.kind !== 'history-seed' && frame.kind !== 'turn' && frame.kind !== 'ops') return
       // history-seed is project-scoped: no sessionId on the wire — its claim
       // token is the project root, so a cwd-less seed frame is malformed.
       if (frame.kind === 'history-seed') {
@@ -149,9 +179,29 @@ export function connectSessionPush(
   }
   connect()
 
-  return () => {
-    closed = true
-    if (retry !== undefined) window.clearTimeout(retry)
-    socket?.close()
+  return {
+    reconcile: sendWatch,
+    close: () => {
+      closed = true
+      if (retry !== undefined) window.clearTimeout(retry)
+      socket?.close()
+    },
   }
+}
+
+/**
+ * Open the session push socket for one fixed watch set.
+ * @param sessionIds - sessions to watch; announced on every (re)open.
+ * @param onFrame - one validated host frame.
+ * @param onState - optional open/close signal (observability; the session
+ *   hooks stay connected either way — a drop just means frames pause until
+ *   the next successful reconnect).
+ * @returns the disposer (idempotent per connection).
+ */
+export function connectSessionPush(
+  sessionIds: readonly string[],
+  onFrame: (frame: SessionPushFrame) => void,
+  onState?: (open: boolean) => void,
+): () => void {
+  return openSessionPush(sessionIds, onFrame, onState).close
 }

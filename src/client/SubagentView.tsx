@@ -29,7 +29,7 @@
  * descendant count is mono micro-type, and the canvas / tree / board / drawer
  * own their own chrome.
  */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useSyncExternalStore } from 'react'
 import {
   Button, IconRefreshOutlineRegular,
@@ -54,7 +54,7 @@ import { teamMembersOf, teamProjectionOf } from './team-projection.ts'
 import { treeSessionIds } from './subagent-lineage.ts'
 import { orderJobs, type TreeJob } from './subagent-jobs.ts'
 import { api } from './api.ts'
-import { usePolling } from './use-polling.ts'
+import { useSessionOps } from './ops-push.ts'
 import { useNarrowViewport } from './breakpoints.ts'
 import {
   clientJobs, collectRows, useJobObservation, useJobWatchers, useJobsSnapshot,
@@ -72,10 +72,21 @@ import type { SidebarStore } from './state.ts'
 import type { WorkflowRunView } from '../workflow-runs.ts'
 import legacy from './SubagentView.module.css'
 
-/** Poll cadence of the live "last text + tool call" lines while a child runs. */
-const POLL_MS = 3000
-/** Poll cadence of the workflow-run and team views while the page is visible. */
-const TELEMETRY_POLL_MS = 5000
+/**
+ * The last failure message already logged per refresh surface: a deployment
+ * without the subagent runtime answers 503 on EVERY invalidation pull, and
+ * one console line per distinct message is enough (the old poller swallowed
+ * these silently; the push-driven one-shot fetches log them, deduped).
+ */
+const loggedPullFailures = new Map<string, string>()
+
+/** Log one surface's refresh failure once per distinct message. */
+function logPullFailure(surface: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error)
+  if (loggedPullFailures.get(surface) === message) return
+  loggedPullFailures.set(surface, message)
+  console.error(`[dsh-better-sidebar] ${surface} refresh failed:`, error)
+}
 
 /**
  * The workspace face's "show this conversation" verb. DSH moved child and
@@ -94,46 +105,83 @@ interface CatalogRefreshFace {
 }
 
 /**
- * One shared live-preview poller for the whole tree. At most ONE
- * `subagents.live` request in flight (self-scheduling); a response settling
- * after the poller stopped is dropped via the aborted signal.
+ * One shared live-preview refresh for the whole tree. A response settling
+ * after the tree switched away is dropped through the root guard below. The
+ * refreshes are WS-driven (see ./ops-push.ts): the session tree's `ops`
+ * invalidation frames — one one-shot `subagents.live` fetch each, never a
+ * timer cadence (the answers are idempotent snapshots, so overlapping fetches
+ * of a slow route are harmless: the later answer wins).
  */
 function useSubagentLive(
   rootId: string | undefined,
   active: boolean,
+  watchIds: readonly string[],
 ): Readonly<Record<string, SidebarChildLiveView>> {
   const [live, setLive] = useState<Record<string, SidebarChildLiveView>>({})
 
   // A new tree must never inherit another root's live previews.
   useEffect(() => { setLive({}) }, [rootId])
+  // The staleness guard: a pull of root A that settles after the switch to
+  // root B must not land A's live map under B (the old poller's abort
+  // signal played this role).
+  const rootRef = useRef(rootId)
+  rootRef.current = rootId
 
-  const poll = useCallback(async (signal: AbortSignal): Promise<void> => {
+  const load = useCallback(async (): Promise<void> => {
     if (rootId === undefined) return
-    const result = await api.subagentsLive(rootId, signal)
-    if (!signal.aborted) setLive(result.live)
+    try {
+      const result = await api.subagentsLive(rootId)
+      if (rootRef.current === rootId) setLive(result.live)
+    } catch (error) {
+      logPullFailure('subagents.live', error)
+    }
   }, [rootId])
-  usePolling(rootId !== undefined && active, poll, {
-    intervalMs: POLL_MS,
-    mode: 'self-scheduling',
-    immediate: true,
+
+  // The old poller's `immediate` tick: one catch-up fetch on mount, on the
+  // page becoming active and on the tree switch.
+  useEffect(() => { if (rootId !== undefined && active) void load() }, [rootId, active, load])
+
+  // WS invalidation: any session of the tree appended events (a child
+  // running, a tool call settling), or the shared socket re-opened after a
+  // drop — re-fold the whole live map once.
+  useSessionOps({
+    sessionIds: rootId !== undefined && active ? watchIds : [],
+    onInvalidate: () => { void load() },
+    onReconnect: () => { void load() },
   })
 
   return live
 }
 
-/** The folded workflow runs of the tree (poll-driven; empty when none). */
-function useWorkflowRuns(rootId: string | undefined, active: boolean): readonly WorkflowRunView[] {
+/** The folded workflow runs of the tree (invalidation-driven; empty when none). */
+function useWorkflowRuns(
+  rootId: string | undefined,
+  active: boolean,
+  watchIds: readonly string[],
+): readonly WorkflowRunView[] {
   const [runs, setRuns] = useState<readonly WorkflowRunView[]>([])
   useEffect(() => { setRuns([]) }, [rootId])
-  const poll = useCallback(async (signal: AbortSignal): Promise<void> => {
+  // Same staleness guard as the live rows: a pull of the OLD root must not
+  // land its runs under the new one.
+  const rootRef = useRef(rootId)
+  rootRef.current = rootId
+  const load = useCallback(async (): Promise<void> => {
     if (rootId === undefined) return
-    const result = await api.workflowsList(rootId, signal)
-    if (!signal.aborted) setRuns(result.runs)
+    try {
+      const result = await api.workflowsList(rootId)
+      if (rootRef.current === rootId) setRuns(result.runs)
+    } catch (error) {
+      logPullFailure('workflows.list', error)
+    }
   }, [rootId])
-  usePolling(rootId !== undefined && active, poll, {
-    intervalMs: TELEMETRY_POLL_MS,
-    mode: 'self-scheduling',
-    immediate: true,
+  // The old poller's `immediate` tick, kept as the mount/activation catch-up.
+  useEffect(() => { if (rootId !== undefined && active) void load() }, [rootId, active, load])
+  // The telemetry rides the SAME tree invalidations as the live rows: the
+  // `tool-workflow/*` rows the fold reads are session events too.
+  useSessionOps({
+    sessionIds: rootId !== undefined && active ? watchIds : [],
+    onInvalidate: () => { void load() },
+    onReconnect: () => { void load() },
   })
   return runs
 }
@@ -214,8 +262,18 @@ export function SubagentView(props: {
   // The topology root: the main agent of the current session's tree.
   const rootId = useMemo(() => rootAncestor(byId, sessionId), [byId, sessionId])
   const rootSummary = rootId === undefined ? undefined : byId[rootId]
-  const live = useSubagentLive(rootId, active)
-  const runs = useWorkflowRuns(rootId, active)
+  // The tree's session ids (root first — the host's 64-session watch guard
+  // always keeps the head), shared by the live rows and the telemetry: both
+  // fold answers over the ROOT'S WHOLE SUBTREE, so any member's events must
+  // invalidate. The set grows as the session list learns of new children;
+  // events a brand-new child emits before then self-heal through the next
+  // notice's cursor delta.
+  const treeIds = useMemo(
+    () => (rootId === undefined ? [] : [...new Set([rootId, ...treeSessionIds(byId, rootId)])]),
+    [byId, rootId],
+  )
+  const live = useSubagentLive(rootId, active, treeIds)
+  const runs = useWorkflowRuns(rootId, active, treeIds)
   // The root-led team, straight off the SAME snapshot the catalogs come from
   // (see team-projection.ts): undefined = no team here (no experimental layer,
   // or the root is not a Lead), which is exactly the "hide the strip" state.

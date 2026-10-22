@@ -64,6 +64,21 @@
  *   `user/message` / `tool/*` rows push none either — only a settled reply
  *   step does.
  *
+ * - `ops`: `{kind:'ops', sessionId, seq}` — pure INVALIDATION, the side-chat
+ *   push model. Every durable session-event row (any type: the consumers —
+ *   the changes tab's session lens, the editor's file-op stream, the Tasks
+ *   page's live/telemetry pulls — each fold their own subset, so the hub
+ *   must not pre-filter) schedules one coalesced notice per socket per
+ *   session (first-window-wins 250ms, the max seq of the window rides the
+ *   frame as a diagnostic payload — subtree consumers renumber seqs when
+ *   merging, so clients treat the frame as "re-pull your delta now" and
+ *   never compare that seq with their own cursor). No event body crosses the
+ *   socket: the one-shot `changes.ops` / `subagents.live` / `workflows.list`
+ *   pull stays the single source of data, and a watch (re)subscription
+ *   pushes NO ops frame — a reconnecting client catches up through its own
+ *   re-pull (the client connector fires its reconnect hook), never through a
+ *   fabricated notice.
+ *
  * Two frame kinds, two schedules: the blank flip is one-shot, so each socket
  * pushes at most one `blank:false` phase frame per session, ever (a burst of
  * message events must not spam the client's entry flip). A `tool/call` only
@@ -80,6 +95,8 @@ import type { HistorySendRecord } from './prompt-history-extract.ts'
 const CWD_DEBOUNCE_MS = 250
 /** Coalescing window for settled `assistant/message` (turn) notices. */
 const TURN_COALESCE_MS = 400
+/** Coalescing window for `ops` invalidation notices (any durable row). */
+const OPS_DEBOUNCE_MS = 250
 /** Session ids one socket may watch (a resource guard, not a policy). */
 const MAX_WATCHED = 64
 
@@ -107,6 +124,15 @@ export type SessionPushFrame =
    * from spamming it.
    */
   | { kind: 'turn'; sessionId: string }
+  /**
+   * INVALIDATION ONLY (the side-chat push model): at least one durable
+   * session-event row of the watched session landed inside the 250ms window.
+   * `seq` is the newest row's own per-log seq — a diagnostic payload, NOT a
+   * client cursor (subtree `changes.ops` answers renumber seqs when merging,
+   * so a client must never compare it with its cursor; the reaction is always
+   * "re-pull the delta once"). No event body rides the frame.
+   */
+  | { kind: 'ops'; sessionId: string; seq: number }
 
 /** One resolved cwd answer, shaped like the `session.cwd` route's return value. */
 export interface SessionCwdAnswer {
@@ -182,6 +208,12 @@ export function createSessionPushHub(ctx: Context, options?: SessionPushHubOptio
   const offEvent = ctx.on('session/event', (session, event) => {
     const sessionId = (session as { id?: unknown } | null)?.id
     if (typeof sessionId !== 'string') return
+    // EVERY durable row invalidates the session's ops-delta consumers first
+    // (changes tab, file-op stream, Tasks telemetry): each folds its own
+    // subset of the log, so the one honest signal is "a row landed", with the
+    // per-socket 250ms window bounding a burst. The specific kinds below stay
+    // exactly as they were.
+    for (const socket of sockets) socket.notifyOps(sessionId, event.seq)
     // Same verdict as the `session.phase` route: the first user/assistant
     // message is the flip out of blank.
     if (event.type === 'user/message' || event.type === 'assistant/message') {
@@ -247,6 +279,10 @@ class SessionSocket {
    *  both key on session id, and sharing one map would let a cwd window and a
    *  turn window evict each other mid-flight). */
   private readonly turnTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Pending ops windows, keyed by session id (own map, the same
+   *  one-key-per-schedule reason as cwd/turn; the entry keeps the window's
+   *  newest seq so a burst lands as ONE frame carrying the max). */
+  private readonly opsTimers = new Map<string, { timer: ReturnType<typeof setTimeout>; seq: number }>()
   private closed = false
 
   /**
@@ -302,6 +338,13 @@ class SessionSocket {
       if (this.watched.has(id)) continue
       clearTimeout(timer)
       this.turnTimers.delete(id)
+    }
+    // The ops windows follow their watch entries out the same way: an
+    // unwatched session must not hear a late invalidation.
+    for (const [id, pending] of this.opsTimers) {
+      if (this.watched.has(id)) continue
+      clearTimeout(pending.timer)
+      this.opsTimers.delete(id)
     }
     // A NEWLY watched session hears its CURRENT answers right away: a client
     // re-subscribing (every reconnect re-sends the whole watch set on a fresh
@@ -371,6 +414,30 @@ class SessionSocket {
       this.turnTimers.delete(sessionId)
       this.send({ kind: 'turn', sessionId })
     }, TURN_COALESCE_MS))
+  }
+
+  /**
+   * Coalesce one ops invalidation for a session: a durable event row just
+   * landed. The FIRST trigger's window wins (the cwd/turn schedule), and a
+   * burst inside the window only raises the seq the frame will carry — one
+   * frame per burst, never one per row. (Re)subscriptions push nothing here:
+   * a reconnecting client catches up through its own re-pull, and a
+   * fabricated "something landed" would only duplicate it.
+   * @param sessionId - the session whose log grew.
+   * @param seq - the landed row's own per-log seq (diagnostic on the wire).
+   */
+  notifyOps(sessionId: string, seq: number): void {
+    if (this.closed || !this.watched.has(sessionId)) return
+    const pending = this.opsTimers.get(sessionId)
+    if (pending !== undefined) {
+      if (seq > pending.seq) pending.seq = seq
+      return
+    }
+    const entry = { timer: setTimeout(() => {
+      this.opsTimers.delete(sessionId)
+      this.send({ kind: 'ops', sessionId, seq: entry.seq })
+    }, OPS_DEBOUNCE_MS), seq }
+    this.opsTimers.set(sessionId, entry)
   }
 
   /**
@@ -478,6 +545,8 @@ class SessionSocket {
     this.timers.clear()
     for (const timer of this.turnTimers.values()) clearTimeout(timer)
     this.turnTimers.clear()
+    for (const pending of this.opsTimers.values()) clearTimeout(pending.timer)
+    this.opsTimers.clear()
     this.watched.clear()
     this.phased.clear()
     this.onClosed()
