@@ -112,7 +112,7 @@ import {
 } from './ui/index.ts'
 import { uploadItemsFromDrop, uploadItemsFromFiles, type UploadItem } from './upload.ts'
 import { useDirectoryWatch } from './use-dir-watch.ts'
-import { usePolling } from './use-polling.ts'
+import { useFsJobsWatch } from './fs-jobs-push.ts'
 import css from './sidebar.module.css'
 
 interface LevelData {
@@ -2186,20 +2186,23 @@ export function FileTree(props: {
    * Zip the selection through the host's ASYNC archive route:
    *
    *   archiveBuild(scope, paths, stem) → { id, name }
-   *   → poll archiveStatus(id) every 250ms (self-scheduling: one request in
-   *     flight) while the system's zip/tar packs into a temp file; the strip
-   *     shows a plain "packing" line, because a child process reports no
-   *     per-entry progress
+   *   → the id rides the shared `fs-jobs` push socket (fs-jobs-push.ts):
+   *     the host pushes the build's SETTLE (a child process reports nothing
+   *     per entry, so `building` has no intermediate frame) while the strip
+   *     shows a plain "packing" line; one one-shot `archiveStatus` fetch at
+   *     the start and after every socket re-open catches what landed before
+   *     the subscription did — no timer ever polls
    *   → state 'ready' → a plain `<a download>` on the route URL, which the
    *     browser streams to disk (see saveArchive for why it is not a blob)
-   *   → any failure (tool missing / build / status) → `zipFailed` in the strip.
+   *   → any failure (tool missing / build / status fetch) → `zipFailed` in
+   *     the strip.
    *
    * `archiveBusyRef` keeps a repeated pick from starting a second job — the
    * visible packing line is the feedback.
    */
   const [archiveBusy, setArchiveBusy] = useState(false)
   const archiveBusyRef = useRef(false)
-  /** The job being polled (state so the poller starts/stops with it). */
+  /** The job being followed (state so the subscription starts/stops with it). */
   const [archiveJobId, setArchiveJobId] = useState<string | null>(null)
   const archiveJobRef = useRef<{ id: string; name: string } | null>(null)
   /** Whether the CURRENT job's `ready` status was already handed to the
@@ -2219,7 +2222,7 @@ export function FileTree(props: {
 
   // A session/cwd swap abandons the archive job with it — the progress strip
   // belongs to the project that started the zip, and a leftover `archiveJobId`
-  // would keep the poller running in the new one, whose failures land as
+  // would keep the subscription running in the new one, whose failures land as
   // `zipFailed` there. A build still starting up is retired by the swap effect
   // above (scopeGenRef), so it cannot pump its job back in after this.
   useEffect(() => {
@@ -2243,9 +2246,10 @@ export function FileTree(props: {
    * The cost, stated plainly: the route's JSON error envelope can no longer be
    * inspected, so a failure at this point saves a JSON body under the archive's
    * name. Everything that realistically fails — no tool installed, an
-   * unreadable selection, a tool that exited non-zero — is caught by the
-   * `archive.status` poll BEFORE this runs, so what is left is an
-   * already-consumed or expired task between the poll and the click.
+   * unreadable selection, a tool that exited non-zero — settles the task as
+   * `error` and is caught by the push frames and the one-shot status reads
+   * BEFORE this runs, so what is left is an already-consumed or expired task
+   * between the settle and the click.
    */
   const saveArchive = useCallback((id: string, name: string): void => {
     setActionError(null)
@@ -2259,40 +2263,80 @@ export function FileTree(props: {
     settleArchive()
   }, [cwd, sessionId, settleArchive])
 
-  /** The poller's callbacks, read through a ref so the polling TASK stays
+  /** The settle handlers, read through a ref so the callbacks stay
    *  identity-stable (a churned task restarts the loop every render). */
   const archiveHandlersRef = useRef({ fail: failArchive, save: saveArchive })
   archiveHandlersRef.current = { fail: failArchive, save: saveArchive }
 
-  usePolling(archiveJobId !== null, useCallback(async (signal: AbortSignal): Promise<void> => {
+  /**
+   * Route one archive status answer — a `fs-jobs` push frame or a one-shot
+   * `archiveStatus` fetch — to the strip. Only the two terminal states act:
+   * `error` paints `zipFailed`, `ready` hands the bytes to the download
+   * ONCE and ends the subscription BEFORE the download starts (the GET
+   * consumes the task, so a second hand-off would either fetch a deleted id
+   * — 404, a bogus `zipFailed` beside a file that did land — or click the
+   * anchor twice).
+   */
+  const handleArchiveStatus = useCallback((
+    jobId: string,
+    status: { state: 'building' | 'ready' | 'error'; bytes: number; error?: string },
+  ): void => {
+    if (status.state === 'error') {
+      archiveHandlersRef.current.fail(status.error ?? `HTTP ${status.state}`)
+      return
+    }
+    if (status.state !== 'ready') return
+    if (archiveHandedOffRef.current) return
+    const job = archiveJobRef.current
+    if (job === null || job.id !== jobId) return
+    archiveHandedOffRef.current = true
+    setArchiveJobId(null)
+    archiveHandlersRef.current.save(job.id, job.name)
+  }, [])
+
+  /**
+   * One one-shot `archiveStatus` fetch: the initial read when a job starts
+   * (a build that settled before the subscription frame could land) and the
+   * catch-up after the push socket re-opened (the outage swallowed frames).
+   * A late answer for a job the tree no longer holds — a session swap
+   * retired it — is dropped on the id check.
+   */
+  const pullArchiveOnce = useCallback((): void => {
     const job = archiveJobRef.current
     if (job === null) return
-    // The poller swallows a rejected task (it must keep the loop alive), so
-    // every failure is caught HERE and turned into the strip's `zipFailed`.
-    try {
-      const status = await archiveStatus({ sessionId, cwd }, job.id)
-      // The transport may deliver a response after teardown; the signal is the
-      // only reliable staleness guard (the route call takes no signal).
-      if (signal.aborted) return
-      if (status.state === 'error') {
-        archiveHandlersRef.current.fail(status.error ?? `HTTP ${status.state}`)
-        return
-      }
-      if (status.state === 'ready') {
-        // Hand the job over exactly ONCE, and stop polling BEFORE the download
-        // starts: the GET releases the task, so the next tick would see 404 and
-        // paint `zipFailed` over a download that actually succeeded (or, while
-        // the first GET is still in flight, start a second one).
-        if (archiveHandedOffRef.current) return
-        archiveHandedOffRef.current = true
-        setArchiveJobId(null)
-        archiveHandlersRef.current.save(job.id, job.name)
-      }
-    } catch (error: unknown) {
-      if (signal.aborted) return
-      archiveHandlersRef.current.fail(error instanceof Error ? error.message : String(error))
-    }
-  }, [cwd, sessionId]), { intervalMs: 250, mode: 'self-scheduling', immediate: true })
+    void archiveStatus({ sessionId, cwd }, job.id)
+      .then((status) => {
+        if (archiveJobRef.current?.id !== job.id) return
+        handleArchiveStatus(job.id, status)
+      })
+      .catch((error: unknown) => {
+        if (archiveJobRef.current?.id !== job.id) return
+        archiveHandlersRef.current.fail(error instanceof Error ? error.message : String(error))
+      })
+  }, [cwd, sessionId, handleArchiveStatus])
+
+  // The push half: while a job runs, its id rides the session's shared
+  // `fs-jobs` socket (watch set = the union of every subscriber's job ids);
+  // every frame is the job's status, and the terminal one clears the id
+  // above, which unsubscribes. A re-opened socket missed frames, so the
+  // reconnect catches up with one fetch.
+  useFsJobsWatch({
+    sessionId,
+    jobs: archiveJobId === null ? [] : [archiveJobId],
+    onFrame: (frame) => {
+      const job = archiveJobRef.current
+      if (job === null || frame.kind !== 'archive' || frame.id !== job.id) return
+      handleArchiveStatus(frame.id, frame)
+    },
+    onReconnect: pullArchiveOnce,
+  })
+
+  // The initial one-shot read (the old poll loop's first tick, kept): it
+  // covers a build that settled before the subscription frame landed.
+  useEffect(() => {
+    if (archiveJobId === null) return
+    pullArchiveOnce()
+  }, [archiveJobId, pullArchiveOnce])
 
   const downloadArchive = (paths: readonly string[]): void => {
     if (archiveBusyRef.current) return

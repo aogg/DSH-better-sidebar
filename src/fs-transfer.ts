@@ -5,8 +5,12 @@
  *
  * Why a background job: a paste can name a directory with gigabytes inside it.
  * The wire call answers immediately with the PRE-WALKED totals (files + bytes),
- * the transfer keeps running on the host, and the client polls
- * `fs.transferStatus` (one small object) to drive the top-right progress card.
+ * the transfer keeps running on the host, and its progress reaches the client
+ * as PUSH frames over `/sidebar/ws/fs-jobs` (fs-jobs-push.ts) that drive the
+ * top-right progress card — no client timer ever polls `fs.transferStatus`
+ * again. Byte progress is folded into one frame per coalescing window
+ * ({@link NOTIFY_FLUSH_MS}, the debounce the 规范 allows); every state change
+ * — the cancel flag, the terminal settle — flushes immediately.
  * `fs.transferCancel` flips a flag the copy loop checks between files — the
  * in-flight file finishes, everything after it never starts (the Windows
  * cancel semantics: a partial copy stays partial).
@@ -70,7 +74,8 @@ interface TransferItem {
   files: number
 }
 
-/** The client-visible status snapshot (one small JSON object per poll). */
+/** The client-visible status snapshot (the `fs.transferStatus` answer and
+ * the `/sidebar/ws/fs-jobs` frame payload — one small JSON object). */
 export interface TransferStatusView {
   transferId: string
   mode: TransferMode
@@ -106,10 +111,85 @@ interface TransferRecord extends TransferStatusView {
   targetDir: string
   touchedSourceParents: readonly string[]
   gcTimer: NodeJS.Timeout | undefined
+  /** Pending progress-coalescing window (terminal states flush it away). */
+  notifyTimer: NodeJS.Timeout | undefined
 }
 
 /** The live registry (one plugin process). Cleared per job after retention. */
 const transfers = new Map<string, TransferRecord>()
+
+/**
+ * How long a burst of progress credit (a copy's chunks, a rename batch) is
+ * folded into ONE push frame — a coalescing window, never a poll tick: with
+ * no listener connected nothing runs at all, and no timer ever issues a
+ * status read.
+ */
+const NOTIFY_FLUSH_MS = 200
+
+/** Push sinks (the fs-jobs hub registers one per plugin mount). */
+const listeners = new Set<(status: TransferStatusView) => void>()
+
+/**
+ * Follow every transfer update (coalesced progress; immediate state
+ * changes). The listener receives status snapshots ONLY — it can never
+ * mutate the record, and a throwing listener is contained so one bad sink
+ * cannot stall a running copy.
+ * @returns the unsubscriber.
+ */
+export function onTransferUpdate(listener: (status: TransferStatusView) => void): () => void {
+  listeners.add(listener)
+  return () => { listeners.delete(listener) }
+}
+
+/** The wire snapshot of one record (the status route and the frames share it). */
+function viewOf(record: TransferRecord): TransferStatusView {
+  return {
+    transferId: record.transferId,
+    mode: record.mode,
+    state: record.state,
+    totalFiles: record.totalFiles,
+    totalBytes: record.totalBytes,
+    filesDone: record.filesDone,
+    bytesDone: record.bytesDone,
+    itemErrors: [...record.itemErrors],
+    ...(record.error !== undefined ? { error: record.error } : {}),
+  }
+}
+
+/** Hand one record's current snapshot to every push sink. */
+function emitUpdate(record: TransferRecord): void {
+  if (listeners.size === 0) return
+  const status = viewOf(record)
+  for (const listener of [...listeners]) {
+    try {
+      listener(status)
+    } catch (error) {
+      // Contained and logged, never swallowed silently — but a bad sink must
+      // not stall the copy loop that is the record's whole purpose.
+      console.error('[dsh-better-sidebar] transfer update listener failed:', error)
+    }
+  }
+}
+
+/** Fold a burst of progress credit into one frame ({@link NOTIFY_FLUSH_MS}). */
+function scheduleNotify(record: TransferRecord): void {
+  if (record.notifyTimer !== undefined) return
+  record.notifyTimer = setTimeout(() => {
+    record.notifyTimer = undefined
+    emitUpdate(record)
+  }, NOTIFY_FLUSH_MS)
+  // A pending frame must never hold the host process open.
+  record.notifyTimer.unref?.()
+}
+
+/** Push the record's state NOW — a state change never waits for the window. */
+function flushNotify(record: TransferRecord): void {
+  if (record.notifyTimer !== undefined) {
+    clearTimeout(record.notifyTimer)
+    record.notifyTimer = undefined
+  }
+  emitUpdate(record)
+}
 
 /** Walk budget: a paste pasting more entries than this refuses up front. */
 const MAX_TRANSFER_ENTRIES = 100_000
@@ -173,12 +253,14 @@ async function copyFileWithProgress(src: string, dest: string, record: TransferR
     new Transform({
       transform(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null, data?: Buffer) => void): void {
         record.bytesDone += chunk.length
+        scheduleNotify(record)
         callback(null, chunk)
       },
     }),
     createWriteStream(dest),
   )
   record.filesDone += 1
+  scheduleNotify(record)
 }
 
 /** Recreate one symlink row at the destination (the link, never its target). */
@@ -187,6 +269,7 @@ async function copySymlink(src: string, dest: string, record: TransferRecord): P
   await rm(dest, { force: true, recursive: true })
   await symlink(target, dest)
   record.filesDone += 1
+  scheduleNotify(record)
 }
 
 /**
@@ -214,6 +297,7 @@ async function transferNode(node: TransferNode, mode: TransferMode, record: Tran
         await unlink(node.src)
       }
       record.filesDone += 1
+      scheduleNotify(record)
       return
     }
     await copySymlink(node.src, node.dest, record)
@@ -226,6 +310,7 @@ async function transferNode(node: TransferNode, mode: TransferMode, record: Tran
       await rename(node.src, node.dest)
       record.bytesDone += node.size
       record.filesDone += 1
+      scheduleNotify(record)
       return
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error
@@ -250,6 +335,7 @@ async function transferItem(item: TransferItem, mode: TransferMode, conflict: Tr
     if (item.src === item.dest) {
       record.filesDone += item.files
       record.bytesDone += item.bytes
+      scheduleNotify(record)
       return
     }
     let existing: Stats | undefined
@@ -263,6 +349,7 @@ async function transferItem(item: TransferItem, mode: TransferMode, conflict: Tr
       // bar completes, touch nothing.
       record.filesDone += item.files
       record.bytesDone += item.bytes
+      scheduleNotify(record)
       return
     }
     if (existing !== undefined && conflict === 'replace') {
@@ -272,6 +359,7 @@ async function transferItem(item: TransferItem, mode: TransferMode, conflict: Tr
         record.itemErrors = [...record.itemErrors, `"${basename(item.dest)}": cannot overwrite a directory with a file`]
         record.filesDone += item.files
         record.bytesDone += item.bytes
+        scheduleNotify(record)
         return
       }
       if (sourceIsDir && !existing.isDirectory()) {
@@ -290,6 +378,7 @@ async function transferItem(item: TransferItem, mode: TransferMode, conflict: Tr
     }
   } catch (error) {
     record.itemErrors = [...record.itemErrors, `"${basename(item.dest)}": ${error instanceof Error ? error.message : String(error)}`]
+    scheduleNotify(record)
   }
 }
 
@@ -314,7 +403,14 @@ async function runTransfer(record: TransferRecord): Promise<void> {
     record.state = 'error'
     record.error = error instanceof Error ? error.message : String(error)
   } finally {
-    record.gcTimer = setTimeout(() => { transfers.delete(record.transferId) }, TRANSFER_RETAIN_MS)
+    // The terminal frame rides the settle itself, never the coalescing
+    // window — a finished job's card must not wait for a timer.
+    flushNotify(record)
+    record.gcTimer = setTimeout(() => {
+      if (record.notifyTimer !== undefined) clearTimeout(record.notifyTimer)
+      record.notifyTimer = undefined
+      transfers.delete(record.transferId)
+    }, TRANSFER_RETAIN_MS)
     record.gcTimer.unref?.()
   }
 }
@@ -386,6 +482,7 @@ export async function startWorkspaceTransfer(input: WorkspaceTransferInput): Pro
     targetDir,
     touchedSourceParents: [...touchedSourceParents],
     gcTimer: undefined,
+    notifyTimer: undefined,
     error: undefined,
   }
   transfers.set(transferId, record)
@@ -398,17 +495,7 @@ export async function startWorkspaceTransfer(input: WorkspaceTransferInput): Pro
 export function transferStatus(transferId: string): TransferStatusView | undefined {
   const record = transfers.get(transferId)
   if (record === undefined) return undefined
-  return {
-    transferId: record.transferId,
-    mode: record.mode,
-    state: record.state,
-    totalFiles: record.totalFiles,
-    totalBytes: record.totalBytes,
-    filesDone: record.filesDone,
-    bytesDone: record.bytesDone,
-    itemErrors: [...record.itemErrors],
-    ...(record.error !== undefined ? { error: record.error } : {}),
-  }
+  return viewOf(record)
 }
 
 /** Ask one job to stop after its current file (`false` for an unknown id). */
@@ -417,5 +504,7 @@ export function transferCancel(transferId: string): boolean {
   if (record === undefined) return false
   if (record.state === 'running') record.state = 'canceling'
   record.cancelRequested = true
+  // The cancellation is a state change the card must show at once.
+  flushNotify(record)
   return true
 }

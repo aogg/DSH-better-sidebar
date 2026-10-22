@@ -32,7 +32,7 @@ import {
 import { createProbeGate, listDirectory, messageOf, parentOf, requireAbsolute, rootLabel, type SidebarFsEntry } from './fs-tree.ts'
 import { resolveSessionPath } from './session-path.ts'
 import { createWorkspaceFile, mkdirWorkspaceEntry, renameWorkspaceEntry, removeWorkspaceEntry, writeWorkspaceText, writeWorkspaceUpload } from './fs-operations.ts'
-import { startWorkspaceTransfer, transferCancel, transferStatus, type TransferConflict, type TransferMode } from './fs-transfer.ts'
+import { startWorkspaceTransfer, onTransferUpdate, transferCancel, transferStatus, type TransferConflict, type TransferMode } from './fs-transfer.ts'
 // `ensureWorkspacePath` stays for the WRITE/watch destinations (archive
 // selection, fs-watch registration), which must keep their lexical meaning;
 // the READ routes resolve through `resolveTargetCompat` below.
@@ -46,6 +46,7 @@ import { isTrustedApiRequest } from './trust-fence.ts'
 import { registerBundleRoute } from './bundle-route.ts'
 import { createDirectoryWatchers, type DirectoryWatchers } from './fs-watch.ts'
 import { createGitWatchHub } from './git-push.ts'
+import { createFsJobsPushHub } from './fs-jobs-push.ts'
 import { createSidechatPushHub } from './sidechat-push.ts'
 import { createSessionPushHub } from './session-push.ts'
 import { launchExternal } from './open-external.ts'
@@ -2179,6 +2180,51 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
     },
   }), 'dsh-better-sidebar: git push WebSocket')
 
+  // ── File-tree background-job push WebSocket ───────────────────────────
+  // The file tree's two background jobs — the zip-and-download build
+  // (`archive.status` every 250ms) and the paste/move transfer
+  // (`fs.transferStatus` every 400ms) — used to advance on client-side poll
+  // timers. This socket replaces both: the client names the job ids it
+  // follows (`{op:'watch',jobs:[...]}`, a full replacement), the host pushes
+  // a frame per meaningful change (an archive's settle; a transfer's
+  // coalesced byte progress, its cancel flag and its terminal state — the
+  // coalescing window lives in fs-transfer.ts), and every newly watched id
+  // is answered with its CURRENT snapshot so a settle that raced the
+  // subscription is still delivered. No timer here ever issues a status
+  // read, and the client has no polling fallback — a dropped socket is
+  // answered with reconnects and one catch-up fetch. Archive frames are
+  // session-fenced exactly like `archive.status`; transfer frames are
+  // capability-scoped by the job's uuid, like their status route.
+  const fsJobsWss = new WebSocketServer({ noServer: true })
+  const fsJobsPush = createFsJobsPushHub({
+    warn: (message, error) => {
+      ctx.logger.warn(`dsh-better-sidebar: ${message}`)
+      if (error !== undefined) ctx.logger.warn(error)
+    },
+    readTransfer: (id) => transferStatus(id),
+    readArchive: (id, sessionId) => archiveTasks.snapshot(id, sessionId),
+  })
+  // Registry sinks (both registered before any socket can attach, so no
+  // settle can slip between the hub and its sources).
+  const stopTransferPush = onTransferUpdate((status) => { fsJobsPush.pushTransfer(status) })
+  ctx.effect(() => () => { stopTransferPush() }, 'dsh-better-sidebar: transfer push sink')
+  const stopArchivePush = archiveTasks.onSettle((event) => { fsJobsPush.pushArchive(event) })
+  ctx.effect(() => () => { stopArchivePush() }, 'dsh-better-sidebar: archive push sink')
+  ctx.effect(() => () => { fsJobsPush.dispose() }, 'dsh-better-sidebar: fs-jobs push hub')
+  ctx.effect(() => ctx.webServer.registerUpgrade({
+    path: '/sidebar/ws/fs-jobs',
+    handler: (req, socket, head) => {
+      if (!fence(req)) {
+        socket.destroy()
+        return
+      }
+      fsJobsWss.handleUpgrade(req as unknown as IncomingMessage, socket as unknown as Duplex, head as Buffer, (ws) => {
+        const url = new URL(req.url ?? '/', 'http://dsh.internal')
+        fsJobsPush.attach(ws, url.searchParams.get('sessionId') ?? undefined)
+      })
+    },
+  }), 'dsh-better-sidebar: fs-jobs push WebSocket')
+
   // ── Side-chat live push WebSocket ──────────────────────────────────────
   // The side-chat transcript polls `sidechat.events`; this socket tells it
   // WHEN to pull instead, so a streaming answer, a just-claimed message and a
@@ -2272,6 +2318,7 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
     agentOpenWss.close()
     fsWatchWss.close()
     gitWss.close()
+    fsJobsWss.close()
     sidechatWss.close()
     sessionWss.close()
   }, 'dsh-better-sidebar: teardown')

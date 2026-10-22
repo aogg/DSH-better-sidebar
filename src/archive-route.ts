@@ -1,10 +1,13 @@
 /**
  * The `/sidebar/archive` flow: the file tree's "zip and download" action.
  *
- * Three steps, unchanged from before: `archive.build` fences every `path` and
- * answers with an id immediately; `archive.status` reports
- * `building → ready | error`; `GET /sidebar/archive` serves the finished bytes
- * once. What changed is what happens in between.
+ * Three steps: `archive.build` fences every `path` and answers with an id
+ * immediately; the build's progress reaches the client as a PUSH frame over
+ * `/sidebar/ws/fs-jobs` (fs-jobs-push.ts — a child process reports nothing
+ * per entry, so the only pushed change is the settle) while one initial and
+ * every reconnect-triggered `archive.status` fetch stay one-shot; `GET
+ * /sidebar/archive` serves the finished bytes once. No client timer ever
+ * polls the status route again.
  *
  * The archive is no longer BUILT BY US. The system's `zip` (or `tar` — see
  * archive-tools.ts) writes it, straight into a temp file in the OS temp
@@ -77,6 +80,16 @@ interface ArchiveTask {
 /** The status shape the client reads (never carries the bytes). */
 export interface ArchiveStatus {
   state: 'building' | 'ready' | 'error'
+  bytes: number
+  error?: string
+}
+
+/** A settled build, as the push sink reads it (never carries the bytes). */
+export interface ArchiveSettleEvent {
+  id: string
+  /** The builder session — the ws push is fenced to it, like every read. */
+  sessionId: string
+  state: 'ready' | 'error'
   bytes: number
   error?: string
 }
@@ -190,6 +203,15 @@ export interface ArchiveTasks {
   start(input: { sessionId: string; name: string; paths: readonly string[] }): Promise<{ id: string; name: string; entries: number }>
   /** Poll one task (a settled task past its TTL reads as missing). */
   status(id: string, sessionId: string): ArchiveStatus
+  /**
+   * One task's status for THIS session, or undefined when the id is
+   * unknown, expired, or another session's — the push hub's
+   * subscribe-time snapshot read (`status` kept its throwing semantics for
+   * the HTTP route's error envelope).
+   */
+  snapshot(id: string, sessionId: string): ArchiveStatus | undefined
+  /** Subscribe to settled builds (the ws push sink); returns the unsubscriber. */
+  onSettle(listener: (event: ArchiveSettleEvent) => void): () => void
   /** Look one task up for a download; `sessionId` must match the builder's. */
   lookup(id: string, sessionId: string): ArchiveLookup
   /** Release a task (called after its bytes were served): deletes the temp file. */
@@ -215,7 +237,16 @@ export function createArchiveTasks(options: ArchiveTaskOptions = {}): ArchiveTas
   const tasks = new Map<string, ArchiveTask>()
   /** Running children, by task id (teardown kills them). */
   const children = new Map<string, { kill(): void }>()
+  /** Settle sinks (the ws push hub registers one per plugin mount). */
+  const settleListeners = new Set<(event: ArchiveSettleEvent) => void>()
   const spawner = options.spawn ?? undefined
+
+  /** The wire status of one task (the route answer and the frame share it). */
+  const statusOf = (task: ArchiveTask): ArchiveStatus => ({
+    state: task.state,
+    bytes: task.bytes,
+    ...(task.error === undefined ? {} : { error: task.error }),
+  })
 
   const tempPathOf = (id: string, ext: string): string =>
     join(options.tempDir ?? tmpdir(), archiveTempName(id, ext))
@@ -285,11 +316,17 @@ export function createArchiveTasks(options: ArchiveTaskOptions = {}): ArchiveTas
       const task = tasks.get(id)
       if (task === undefined) throw new SidebarError('not-found', 'unknown or expired archive', 404)
       if (task.sessionId !== sessionId) throw new SidebarError('forbidden', 'archive belongs to another session', 403)
-      return {
-        state: task.state,
-        bytes: task.bytes,
-        ...(task.error === undefined ? {} : { error: task.error }),
-      }
+      return statusOf(task)
+    },
+    snapshot(id, sessionId) {
+      sweep(Date.now())
+      const task = tasks.get(id)
+      if (task === undefined || task.sessionId !== sessionId) return undefined
+      return statusOf(task)
+    },
+    onSettle(listener) {
+      settleListeners.add(listener)
+      return () => { settleListeners.delete(listener) }
     },
     lookup,
     release(id) {
@@ -332,10 +369,29 @@ export function createArchiveTasks(options: ArchiveTaskOptions = {}): ArchiveTas
     spawner: ArchiveSpawn | undefined,
   ): Promise<void> {
     const settle = (error: string | undefined): void => {
-      task.state = error === undefined ? 'ready' : 'error'
+      const state = error === undefined ? 'ready' as const : 'error' as const
+      task.state = state
       if (error !== undefined) task.error = error
       task.expiresAt = Date.now() + ARCHIVE_TTL_MS
       children.delete(id)
+      // The settle is the ONE pushed change (a child process reports no
+      // per-entry progress): every sink hears it immediately, never on a
+      // timer. A throwing sink is contained — a bad push hub must not lose
+      // the task table's own settle — and logged rather than swallowed.
+      const event: ArchiveSettleEvent = {
+        id,
+        sessionId: task.sessionId,
+        state,
+        bytes: task.bytes,
+        ...(task.error === undefined ? {} : { error: task.error }),
+      }
+      for (const listener of [...settleListeners]) {
+        try {
+          listener(event)
+        } catch (listenerError) {
+          console.error('[dsh-better-sidebar] archive settle listener failed:', listenerError)
+        }
+      }
     }
     let handle: Awaited<ReturnType<typeof open>> | undefined
     try {
