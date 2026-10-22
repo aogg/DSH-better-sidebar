@@ -767,6 +767,6 @@ export const ko: Record<string, string> = {
   historyStoragePathDesc: '프롬프트 기록과 플러그인 데이터는 이 디렉터리에 저장됩니다. 비워 두면 기본 경로를 사용하며, 변경하면 기존 데이터가 자동으로 이전됩니다',
   historyStoragePathPlaceholder: '~/.dsh/plugins/DSH-better-sidebar/',
   sideChatCurrentSession: '이 세션',
-  sideChatRunning: '실행 중',
+  sideChatGlobalRunning: '전체 실행 중',
   sideChatGlobalUnread: '전체 읽지 않음',
 }

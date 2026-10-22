@@ -11,6 +11,7 @@ import { encodeHtmlUrl } from '../html-route.ts'
 import { hostRouteUrl } from './host-route-url.ts'
 import { resolveSidebarPath } from './paths.ts'
 import type {
+  SidechatGlobalThreadRow,
   SidechatLiveEvent,
   SidechatLogEvent,
   SidechatModelCatalog,
@@ -246,6 +247,13 @@ export interface FsPageResult {
 
 /** The `subagents.live` response: one row per tree child (and the root). */
 export type SubagentLiveResult = { live: Record<string, SidebarChildLiveView> }
+
+/** The `sidechat.threads` response: the host's own census of the GLOBAL side
+ *  threads, plus the degraded flag (see {@link api.sidechatThreads}). */
+export interface SidechatThreadsResult {
+  rows: SidechatGlobalThreadRow[]
+  degraded: boolean
+}
 
 /** The `workflows.list` response: the tree's folded workflow runs. */
 export type WorkflowsListResult = { runs: WorkflowRunView[] }
@@ -788,6 +796,18 @@ export const api = {
       model,
       ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     }),
+  /**
+   * The GLOBAL side-thread census (the ws threads channel's data pull): the
+   * host reads every side-labeled child of these ROOT sessions straight from
+   * the subagent tree — the freshest running/label/activity view, which the
+   * session-list store reflects late for subagent children. `rootIds` are
+   * the client list's top-level sessions (`origin !== 'subagent'`, capped at
+   * 64 both ends). `degraded: true` (no `subagents` service, or every root
+   * failed) means "keep your store-derived groups"; the census failing never
+   * blanks the history popover.
+   */
+  sidechatThreads: (rootIds: readonly string[], signal?: AbortSignal) =>
+    call<SidechatThreadsResult>('sidechat.threads', { rootIds: [...rootIds] }, signal),
   /** Read the side card preferences (plugin-global, no session scope). */
   settingsGet: () =>
     call<{ value?: unknown; revision?: number; externalDisable?: boolean }>('settings.get', {}),

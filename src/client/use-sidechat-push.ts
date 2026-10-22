@@ -16,20 +16,35 @@
  * fires `onReconnect` so the view catches up on the outage — there is no
  * polling fallback, by design.
  *
+ * The GLOBAL threads channel (`threads: true` + `onThreadsStale`) subscribes
+ * the same socket to `{ scope: 'threads' }` frames — "some side thread
+ * anywhere may have changed its running/title/last-activity", the freshness
+ * feed of the history popover's 全局运行中 / 全局未读 groups. Same contract
+ * as the per-thread channel: the frame carries no data, the view answers it
+ * with one `sidechat.threads` pull (debounced, abort-guarded). The FIRST
+ * successful open also fires `onThreadsStale` — subscribe-and-pull
+ * alignment, because the watch frame only tells the host what to watch from
+ * NOW on, and the current thread set would stay unknown until the next
+ * host-side change. A re-open after a drop fires it again (frames the outage
+ * swallowed are gone for good), next to `onReconnect`.
+ *
  * Lifecycle mirrors use-dir-watch: one socket for the component's lifetime,
  * a full `watch` frame re-announcing the subscription set whenever the id
  * list changes, exponential backoff (1s → 15s, forever) on a drop — whose
  * successful exit fires `onReconnect` — and no socket at all while the list
- * is empty.
+ * is empty, UNLESS `threads` keeps it alive: a tab with no bound thread must
+ * still hear the global thread set (that is its history popover's live feed).
  */
 import { useEffect, useMemo, useRef } from 'react'
 import { hostWebSocketUrl } from './host-route-url.ts'
 
-/** One host frame: a watched thread whose transcript is stale. `running` is
+/** One host frame: a watched thread whose transcript is stale (`threadId`),
+ *  or the GLOBAL thread-set invalidation (`scope: 'threads'`). `running` is
  *  the host's own run-state hint; it is deliberately not read here — the
  *  panel re-reads both the transcript and `sidechat.info` on every notice. */
 interface SidechatPushFrame {
   threadId?: unknown
+  scope?: unknown
   running?: unknown
 }
 
@@ -46,9 +61,24 @@ export interface SidechatPushOptions {
    * The socket re-opened after at least one failed attempt — the FIRST open
    * never fires this. Every frame the outage swallowed is gone, so the view
    * re-pulls its threads instead of waiting for the next notice. Purely an
-   * event callback: the retry timers stay inside this hook.
+   * event callback: the retry timers stay inside this hook. With `threads`
+   * subscribed, `onThreadsStale` fires on the same open, so a view that only
+   * handles the bound thread here is still fully caught up on the overlay.
    */
   onReconnect?: () => void
+  /**
+   * Also subscribe this socket to the GLOBAL thread-set invalidation
+   * (`{ scope: 'threads' }` frames + the open-time alignment below). Keeps
+   * the socket alive even with an empty `threadIds`.
+   */
+  threads?: boolean
+  /**
+   * The GLOBAL thread set may be stale: re-pull the `sidechat.threads`
+   * census. Fired on every `{ scope: 'threads' }` frame AND once per
+   * successful open while subscribed (first open = initial alignment, later
+   * opens = the reconnect catch-up). The caller debounces.
+   */
+  onThreadsStale?: () => void
 }
 
 /** How long to wait before re-opening a dropped socket; failures back off to the cap. */
@@ -60,7 +90,7 @@ const RETRY_MAX_MS = 15_000
  * @param options - the watched ids and the invalidation/reconnect callbacks.
  */
 export function useSidechatPush(options: SidechatPushOptions): void {
-  const { threadIds, onInvalidate, onReconnect } = options
+  const { threadIds, onInvalidate, onReconnect, threads = false, onThreadsStale } = options
   // The id list is a fresh array on every render, so neither the socket effect
   // nor the invalidation callback may depend on its identity. The CONTENT key
   // (NUL-joined — no session id can contain one) is what everything derives
@@ -73,10 +103,17 @@ export function useSidechatPush(options: SidechatPushOptions): void {
   invalidateRef.current = onInvalidate
   const reconnectRef = useRef(onReconnect)
   reconnectRef.current = onReconnect
+  const threadsStaleRef = useRef(onThreadsStale)
+  threadsStaleRef.current = onThreadsStale
+  /** Read inside the socket effect only (a mount-time constant in practice);
+   *  the ref keeps the effect honest about not re-opening on option drift. */
+  const threadsRef = useRef(threads)
+  threadsRef.current = threads
   /** Set by the socket effect; re-announces the current subscription set. */
   const reconcileRef = useRef<() => void>(() => {})
-  /** Stable dependency: re-open the socket only when it gains or loses every id. */
-  const subscribed = idsKey !== ''
+  /** Stable dependency: re-open the socket only when it gains or loses every
+   *  id — or when the threads channel appears or disappears. */
+  const subscribed = idsKey !== '' || threads
 
   useEffect(() => {
     if (!subscribed) return
@@ -88,7 +125,13 @@ export function useSidechatPush(options: SidechatPushOptions): void {
     /** Push this socket's whole subscription set (a full replacement). */
     const reconcile = (): void => {
       if (socket !== null && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ op: 'watch', threadIds: [...wantedRef.current] }))
+        socket.send(JSON.stringify({
+          op: 'watch',
+          threadIds: [...wantedRef.current],
+          // Absent without the threads subscription: the host treats the
+          // bare frame exactly as before (backward compatibility).
+          ...(threadsRef.current ? { threads: true } : {}),
+        }))
       }
     }
     reconcileRef.current = reconcile
@@ -104,6 +147,12 @@ export function useSidechatPush(options: SidechatPushOptions): void {
         failures = 0
         reconcile()
         if (recovered) reconnectRef.current?.()
+        // Subscribe-and-pull alignment, on EVERY open (first = initial
+        // alignment; a later open = the frames the outage swallowed are
+        // gone): without this the current global thread set stays unknown
+        // until the next host-side change. The caller's debounce folds this
+        // together with the onReconnect catch-up on a recovered open.
+        if (threadsRef.current) threadsStaleRef.current?.()
       }
       socket.onmessage = (event) => {
         if (typeof event.data !== 'string') return
@@ -113,7 +162,16 @@ export function useSidechatPush(options: SidechatPushOptions): void {
         } catch {
           return
         }
-        if (frame === null || typeof frame !== 'object' || typeof frame.threadId !== 'string') return
+        if (frame === null || typeof frame !== 'object') return
+        if (frame.scope === 'threads') {
+          // The GLOBAL thread set may be stale — no thread id, no data. A
+          // socket that never subscribed stays silent (the host promises not
+          // to send these; the guard keeps the client total if one ever
+          // slips through, symmetric with the watched-id check below).
+          if (threadsRef.current) threadsStaleRef.current?.()
+          return
+        }
+        if (typeof frame.threadId !== 'string') return
         // Only watched ids: a frame for a thread this socket no longer
         // subscribes to is a late notice, not an invalidation.
         if (!wantedRef.current.includes(frame.threadId)) return

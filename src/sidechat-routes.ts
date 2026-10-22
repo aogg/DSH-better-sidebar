@@ -40,7 +40,10 @@ import type {
   SidebarAgentPresetsService,
   SidebarSessionPersistenceService,
   SidebarSessionTitleService,
+  SidebarSubagentDescendantEntry,
+  SidebarSubagentsService,
 } from './context-types.ts'
+import type { SidechatThreadsNotifier } from './sidechat-push.ts'
 import {
   boundaryDelivered,
   buildSidechatInheritance,
@@ -54,9 +57,11 @@ import {
   SIDE_BOUNDARY_PREFIX,
   SIDE_BOUNDARY_PROMPT,
   SIDE_INJECTION_SOURCE_KIND,
+  SIDE_LABEL_PREFIX,
   SIDE_NEW_THREAD_TITLE,
   sideLabel,
   type SeedEvent,
+  type SidechatGlobalThreadRow,
   type SidechatLiveEvent,
   type SidechatLogEvent,
   type SidechatModelCatalog,
@@ -143,6 +148,17 @@ export interface SidechatRoutes {
    *  request through the agent-scoped selection the host installs for its
    *  composer. */
   'sidechat.model'(payload: unknown): Promise<{ accepted: true; selection: SidechatModelSelection }>
+  /**
+   * The GLOBAL side-thread census the history popover's ws overlay pulls:
+   * every side-labeled child of the requested roots, read straight from the
+   * host subagent tree (`listDescendants`) — the freshest running/label
+   * view, which the client session-list store reflects late for subagent
+   * children. Degraded (`subagents` service missing, or EVERY root failed)
+   * answers `{ rows: [], degraded: true }` instead of a 503: the client
+   * keeps its store-derived groups as the base, so the census failing must
+   * never blank the popover.
+   */
+  'sidechat.threads'(payload: unknown): Promise<{ rows: SidechatGlobalThreadRow[]; degraded: boolean }>
 }
 
 /** Timeout guarding the create call (the registry detaches it before the
@@ -154,6 +170,28 @@ const CREATE_TIMEOUT_MS = 15_000
  *  thread beyond it renders its tail window — the same degradation the
  *  capped walk had, never a failed poll. */
 const EVENTS_CAP = 8_000
+
+/** Root sessions one `sidechat.threads` call may enumerate (the same guard
+ *  as the push hub's watch cap — a resource fence, not a policy; the client
+ *  caps its side too). */
+const THREADS_ROOTS_CAP = 64
+
+/** Best-effort last-activity read of one session: the live session store's
+ *  newest event time. A missing store, an unreadable log or an undated tail
+ *  all read as undefined — the row ships without the field and the client
+ *  keeps whatever stamp its own store holds. Never throws. */
+function lastActivityAtOf(ctx: Context, id: string): number | undefined {
+  try {
+    const sessions = ctx.sessions as
+      | { get?(id: string): { snapshotEvents?(): readonly { time?: unknown }[] } | undefined }
+      | undefined
+    const events = sessions?.get?.(id)?.snapshotEvents?.() ?? []
+    const time = events.at(-1)?.time
+    return typeof time === 'number' && Number.isFinite(time) && time > 0 ? time : undefined
+  } catch {
+    return undefined
+  }
+}
 
 /** Per-activation disposers of created thread agents (the dispose route
  *  releases them; the session and its history always stay persisted). */
@@ -517,8 +555,15 @@ async function modelCatalogOf(ctx: Context): Promise<SidechatModelCatalog> {
  *  names the /sidebar/api dispatcher looks up (`api[method]`).
  *  @param ctx - host plugin context.
  *  @param live - the live assistant stream buffer; absent only in tests that
- *    never exercise streaming (then every `live` response is empty). */
-export function buildSidechatApi(ctx: Context, live?: AssistantLiveBuffer): SidechatRoutes {
+ *    never exercise streaming (then every `live` response is empty).
+ *  @param notifier - the push hub slice poked when the thread SET changes
+ *    (create / first-rename / dispose) — absent in tests that don't exercise
+ *    the ws channel. */
+export function buildSidechatApi(
+  ctx: Context,
+  live?: AssistantLiveBuffer,
+  notifier?: SidechatThreadsNotifier,
+): SidechatRoutes {
   return {
     'sidechat.start': async (payload: unknown) => {
       const sessionId = requireString(payload, 'sessionId')
@@ -669,6 +714,11 @@ export function buildSidechatApi(ctx: Context, live?: AssistantLiveBuffer): Side
         admitFirstContact(handle.agent, promptParts.join('\n\n'), question)
         pinTitle(sideLabel(question))
       }
+      // A thread exists now that no feed event has necessarily announced:
+      // poke the threads channel directly so every watching popover re-pulls
+      // its census and the new thread shows up without waiting for its first
+      // append.
+      notifier?.notifyThreads()
       return { childId }
     },
 
@@ -702,6 +752,11 @@ export function buildSidechatApi(ctx: Context, live?: AssistantLiveBuffer): Side
           }
         }
       }
+      // First contact flips a placeholder thread into a NAMED, usually
+      // RUNNING one: the feeds may take a moment to log the claim, so the
+      // rename/deliver pokes the threads channel right away (the hub folds
+      // this into whatever the feeds arm within its window).
+      notifier?.notifyThreads()
       return { accepted: true as const }
     },
 
@@ -727,6 +782,9 @@ export function buildSidechatApi(ctx: Context, live?: AssistantLiveBuffer): Side
           // The agent may already be gone (restart); the session persists.
         }
       }
+      // The thread just left the live set: its 「全局运行中」 row must drop
+      // on the next census pull, not whenever the store catches up.
+      notifier?.notifyThreads()
       return { accepted: true as const }
     },
 
@@ -806,6 +864,58 @@ export function buildSidechatApi(ctx: Context, live?: AssistantLiveBuffer): Side
     },
 
     'sidechat.models': async () => modelCatalogOf(ctx),
+
+    'sidechat.threads': async (payload: unknown) => {
+      const rawRoots = (payload as { rootIds?: unknown } | null)?.rootIds
+      if (!Array.isArray(rawRoots)) {
+        throw new SidebarError('bad-request', 'rootIds must be an array of session ids')
+      }
+      // Dedupe (two listed roots cannot share a tree, but the fence is
+      // cheaper than doubting it) and cap — same guard scale as the ws
+      // watch set.
+      const rootIds = [...new Set(
+        rawRoots.filter((id): id is string => typeof id === 'string' && id !== ''),
+      )].slice(0, THREADS_ROOTS_CAP)
+      const subagents = ctx.get('subagents') as SidebarSubagentsService | undefined
+      if (subagents === undefined || typeof subagents.listDescendants !== 'function') {
+        // No tree to enumerate: degraded, not 503 — the client's store
+        // derived groups remain the base and must keep the popover alive.
+        return { rows: [], degraded: true }
+      }
+      const rows = new Map<string, SidechatGlobalThreadRow>()
+      let failures = 0
+      for (const rootId of rootIds) {
+        let descendants: SidebarSubagentDescendantEntry[]
+        try {
+          descendants = await subagents.listDescendants(rootId)
+        } catch {
+          // One root's tree unreadable: skip it, keep the census alive for
+          // the rest (the degraded flag below only trips when EVERY root
+          // failed — a partial answer beats an empty one).
+          failures += 1
+          continue
+        }
+        for (const entry of descendants) {
+          if (entry.kind !== 'child') continue
+          // Side threads are exactly the side-labeled children; every other
+          // descendant (worksubagents, diagnostics) is not a conversation.
+          if (entry.label === undefined || !entry.label.startsWith(SIDE_LABEL_PREFIX)) continue
+          if (rows.has(entry.id)) continue
+          const activity = lastActivityAtOf(ctx, entry.id)
+          rows.set(entry.id, {
+            id: entry.id,
+            title: entry.label,
+            running: entry.activity === 'running',
+            parentId: entry.parentId,
+            ...(activity === undefined ? {} : { lastActivityAt: activity }),
+          })
+        }
+      }
+      if (rootIds.length > 0 && failures === rootIds.length) {
+        return { rows: [], degraded: true }
+      }
+      return { rows: [...rows.values()], degraded: false }
+    },
 
     'sidechat.model': async (payload: unknown) => {
       const childId = requireString(payload, 'childId')

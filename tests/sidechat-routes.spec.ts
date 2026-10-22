@@ -107,6 +107,9 @@ function ctxWith(services: {
   sessionPersistence?: unknown
   llm?: unknown
   sessionController?: unknown
+  subagents?: unknown
+  /** Mounted as the ctx.sessions PROPERTY (the store face is not behind get). */
+  sessions?: unknown
 }): Context {
   const table: Record<string, unknown> = {
     ...(services.agents === undefined ? {} : { agents: services.agents }),
@@ -115,8 +118,10 @@ function ctxWith(services: {
     ...(services.sessionPersistence === undefined ? {} : { sessionPersistence: services.sessionPersistence }),
     ...(services.llm === undefined ? {} : { llm: services.llm }),
     ...(services.sessionController === undefined ? {} : { sessionController: services.sessionController }),
+    ...(services.subagents === undefined ? {} : { subagents: services.subagents }),
   }
   return {
+    ...(services.sessions === undefined ? {} : { sessions: services.sessions }),
     get: (key: string) => table[key],
   } as unknown as Context
 }
@@ -934,5 +939,126 @@ describe('sidechat.info reports the effective route', () => {
       provider: 'cold',
       model: 'cold-model',
     })
+  })
+})
+
+/**
+ * The GLOBAL thread census ('sidechat.threads', 2026-10-22): the ws threads
+ * channel's data pull. The route enumerates the requested roots through the
+ * host subagent tree and answers ONLY the side-labeled children — the
+ * freshest running/label/activity view, which the client session list lags
+ * on. Degradation is a RESULT, never a 503: the client's store-derived
+ * groups stay the base, so the census failing must not blank the popover.
+ */
+describe('sidechat.threads', () => {
+  /** One child entry of listDescendants (structural mirror). */
+  function child(id: string, label: string | undefined, activity: 'running' | 'inactive', parentId: string): unknown {
+    return { kind: 'child', id, activity, hasChildren: false, mode: 'continuable', label, parentId, depth: 1 }
+  }
+
+  function censusServices(list: (root: string) => unknown[] | Promise<unknown[]>, sessions?: unknown) {
+    return {
+      subagents: { listDescendants: vi.fn(async (root: string) => list(root)) },
+      ...(sessions === undefined ? {} : { sessions }),
+    }
+  }
+
+  it('answers the side-labeled children with live last-activity, others out', async () => {
+    const sessions = {
+      get: (id: string) => (id === 's1'
+        ? { header: {}, snapshotEvents: () => [{ type: 'x', seq: 1, time: 5_000, data: {} }, { type: 'y', seq: 2, time: 9_000, data: {} }] }
+        : undefined),
+    }
+    const services = censusServices(root => (root === 'root-a'
+      ? [
+          child('s1', 'Side: 一', 'running', 'root-a'),
+          child('s2', '普通子代理', 'inactive', 'root-a'),   // not a side label → out
+          { kind: 'diagnostic', id: 'd1', reason: 'corrupt', parentId: 'root-a', depth: 1 }, // out
+          child('s3', 'Side: 三', 'inactive', 'root-a'),
+        ]
+      : []), sessions)
+    const api = buildSidechatApi(ctxWith(services))
+
+    await expect(api['sidechat.threads']({ rootIds: ['root-a', 'root-b'] })).resolves.toEqual({
+      rows: [
+        { id: 's1', title: 'Side: 一', running: true, parentId: 'root-a', lastActivityAt: 9_000 },
+        { id: 's3', title: 'Side: 三', running: false, parentId: 'root-a' },
+      ],
+      degraded: false,
+    })
+    // An undatable session ships WITHOUT the field (the client keeps its
+    // own stamp) instead of faking an epoch.
+    expect(services.subagents.listDescendants).toHaveBeenCalledTimes(2)
+  })
+
+  it('skips a failing root and answers degraded only when EVERY root fails', async () => {
+    const listDescendants = vi.fn(async (root: string) => {
+      if (root.startsWith('bad')) throw new Error('catalog exploded')
+      return [child('s1', 'Side: 一', 'inactive', root)]
+    })
+    const api = buildSidechatApi(ctxWith({ subagents: { listDescendants } }))
+
+    // One root fails, one answers: a partial census beats an empty one.
+    await expect(api['sidechat.threads']({ rootIds: ['bad-1', 'good'] })).resolves.toEqual({
+      rows: [{ id: 's1', title: 'Side: 一', running: false, parentId: 'good' }],
+      degraded: false,
+    })
+    // Both roots fail: degraded RESULT (rows: []), never a thrown 503 —
+    // the client falls back to its store-derived groups.
+    await expect(api['sidechat.threads']({ rootIds: ['bad-1', 'bad-2'] })).resolves.toEqual({
+      rows: [],
+      degraded: true,
+    })
+  })
+
+  it('degrades when the subagents service is missing or unshaped', async () => {
+    const api = buildSidechatApi(ctxWith({}))
+    await expect(api['sidechat.threads']({ rootIds: ['root'] })).resolves.toEqual({
+      rows: [],
+      degraded: true,
+    })
+    const shapeless = buildSidechatApi(ctxWith({ subagents: { listDescendants: 'not-a-function' } }))
+    await expect(shapeless['sidechat.threads']({ rootIds: ['root'] })).resolves.toEqual({
+      rows: [],
+      degraded: true,
+    })
+  })
+
+  it('rejects a non-array rootIds and dedupes + caps the roots', async () => {
+    const listDescendants = vi.fn(async () => [])
+    const api = buildSidechatApi(ctxWith({ subagents: { listDescendants } }))
+    await expect(api['sidechat.threads']({ rootIds: 'root' })).rejects.toMatchObject({ code: 'bad-request' })
+
+    const roots = Array.from({ length: 80 }, (_, index) => `root-${index}`)
+    await api['sidechat.threads']({ rootIds: ['root-a', 'root-a', ...roots] })
+    // Deduped, capped at 64: 81 requested roots → 64 enumerate calls.
+    expect(listDescendants).toHaveBeenCalledTimes(64)
+  })
+
+  it('pokes the threads channel from start, first-prompt and dispose', async () => {
+    const parent = agent('parent', {
+      events: [
+        ev('user/message', 0, { content: [{ type: 'text', text: 'q' }], source: { kind: 'user' } }),
+        ev('turn/end', 1, { turn: 1, reason: { kind: 'completed' } }),
+      ],
+    })
+    const childAgent = agent('child')
+    const services = happyServices(parent, childAgent)
+    const notifyThreads = vi.fn()
+    const api = buildSidechatApi(ctxWith(services), undefined, { notifyThreads })
+    expect(notifyThreads).not.toHaveBeenCalled()
+
+    // Create: a thread exists that no feed event has necessarily announced.
+    const { childId } = await api['sidechat.start']({ sessionId: 'parent', question: 'hello' })
+    expect(notifyThreads).toHaveBeenCalledTimes(1)
+
+    // First prompt: the placeholder becomes a NAMED thread (the rename is
+    // exactly what the census reports as `title`).
+    await api['sidechat.prompt']({ childId, text: 'hi again' })
+    expect(notifyThreads).toHaveBeenCalledTimes(2)
+
+    // Dispose: the thread leaves the live set (its running row must drop).
+    await api['sidechat.dispose']({ childId })
+    expect(notifyThreads).toHaveBeenCalledTimes(3)
   })
 })

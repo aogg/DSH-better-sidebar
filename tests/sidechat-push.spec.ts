@@ -6,7 +6,7 @@
  * burst folds into one notice, and a socket that goes away stops hearing.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createSidechatPushHub } from '../src/sidechat-push.ts'
+import { createSidechatPushHub, THREADS_DEBOUNCE_MS as THREADS_WINDOW_MS } from '../src/sidechat-push.ts'
 import type { Context } from '../src/context-types.ts'
 import type { WebSocket } from 'ws'
 
@@ -64,8 +64,8 @@ class FakeSocket {
     return this as unknown as WebSocket
   }
 
-  frames(): { threadId: string }[] {
-    return this.sent.map(raw => JSON.parse(raw) as { threadId: string })
+  frames(): { threadId?: string; scope?: string }[] {
+    return this.sent.map(raw => JSON.parse(raw) as { threadId?: string; scope?: string })
   }
 }
 
@@ -188,5 +188,88 @@ describe('sidechat push hub', () => {
     const hub = createSidechatPushHub(ctx)
     hub.dispose()
     for (const set of listeners.values()) expect(set.size).toBe(0)
+  })
+})
+
+/**
+ * The GLOBAL threads channel: a socket that watched `threads: true` also
+ * hears ONE coalesced `{scope:'threads'}` frame per burst — triggered by
+ * EITHER feed (any session's durable append, any stream delta) or by the
+ * routes' direct `notifyThreads()` poke. The frame carries no data, and a
+ * socket that never subscribed must not receive it (old clients stay
+ * untouched).
+ */
+describe('sidechat push hub threads channel', () => {
+  it('pushes a coalesced threads notice on both feeds and on notifyThreads', () => {
+    const { ctx, emit } = fakeCtx()
+    const hub = createSidechatPushHub(ctx)
+    const socket = new FakeSocket()
+    hub.attach(socket.asWebSocket())
+    socket.receive({ op: 'watch', threads: true })
+
+    // Any session's durable append feeds the channel (the running flips ride
+    // turn/start / turn/end appends)…
+    emit('session/event', { id: 'anywhere' }, { type: 'turn/end' })
+    // …and so does a stream delta for a thread this socket does not watch —
+    // the GLOBAL groups care about every workspace, not a watch set.
+    emit('agent/assistant-stream', { agent: { session: { id: 'unwatched' } }, frame: { type: 'chunk' } })
+    vi.advanceTimersByTime(THREADS_WINDOW_MS)
+    // Folded into ONE frame: both triggers landed inside the same window.
+    expect(socket.frames()).toEqual([{ scope: 'threads' }])
+
+    // The routes' direct poke (create / rename / dispose) arms the same
+    // channel while it is already armed → still one frame per window.
+    hub.notifyThreads()
+    vi.advanceTimersByTime(THREADS_WINDOW_MS)
+    expect(socket.frames()).toEqual([{ scope: 'threads' }, { scope: 'threads' }])
+    hub.dispose()
+  })
+
+  it('never pushes a threads frame to a socket that did not subscribe', () => {
+    const { ctx, emit } = fakeCtx()
+    const hub = createSidechatPushHub(ctx)
+    const socket = new FakeSocket()
+    hub.attach(socket.asWebSocket())
+    // The pre-threads watch shape: no `threads` key.
+    socket.receive({ op: 'watch', threadIds: ['t1'] })
+
+    emit('session/event', { id: 't1' }, { type: 'turn/start' })
+    hub.notifyThreads()
+    vi.advanceTimersByTime(1_000)
+    // Only the per-thread notice the watch set asked for.
+    expect(socket.frames()).toEqual([{ threadId: 't1' }])
+    hub.dispose()
+  })
+
+  it('drops the threads subscription (and its pending notice) on a re-watch without the flag', () => {
+    const { ctx, emit } = fakeCtx()
+    const hub = createSidechatPushHub(ctx)
+    const socket = new FakeSocket()
+    hub.attach(socket.asWebSocket())
+    socket.receive({ op: 'watch', threads: true })
+    emit('session/event', { id: 'x' }, { type: 'turn/end' })
+
+    // Re-watch WITHOUT threads BEFORE the notice fires: the pending frame
+    // dies with the subscription, like an unwatched thread's notice does.
+    socket.receive({ op: 'watch', threadIds: ['t1'] })
+    vi.advanceTimersByTime(1_000)
+    expect(socket.frames()).toEqual([])
+    hub.dispose()
+  })
+
+  it('keeps the threads channel independent of the per-thread channel', () => {
+    const { ctx, emit } = fakeCtx()
+    const hub = createSidechatPushHub(ctx)
+    const socket = new FakeSocket()
+    hub.attach(socket.asWebSocket())
+    socket.receive({ op: 'watch', threadIds: ['t1'], threads: true })
+
+    emit('session/event', { id: 't1' }, { type: 'turn/start' })
+    emit('agent/assistant-stream', { agent: { session: { id: 't1' } }, frame: { type: 'chunk' } })
+    vi.advanceTimersByTime(THREADS_WINDOW_MS)
+    // The watched thread's notice rides the 60ms window, the global one the
+    // threads window: two frames, each its own coalescing timer.
+    expect(socket.frames()).toEqual([{ threadId: 't1' }, { scope: 'threads' }])
+    hub.dispose()
   })
 })

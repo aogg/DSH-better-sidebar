@@ -773,6 +773,6 @@ export const id: Record<string, string> = {
   historyStoragePathDesc: 'Catatan riwayat dan data plugin tersimpan di direktori ini; kosong = jalur bawaan, dan mengubahnya memigrasikan data lama secara otomatis',
   historyStoragePathPlaceholder: '~/.dsh/plugins/DSH-better-sidebar/',
   sideChatCurrentSession: 'Sesi ini',
-  sideChatRunning: 'Berjalan',
+  sideChatGlobalRunning: 'Berjalan global',
   sideChatGlobalUnread: 'Belum dibaca global',
 }

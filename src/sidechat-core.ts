@@ -570,6 +570,85 @@ export function globalSideThreadRows(
 }
 
 /**
+ * One row of the `sidechat.threads` wire answer: the host's OWN view of one
+ * side thread, read straight from the subagent tree (`listDescendants`) —
+ * the freshest possible `running` / label / activity, exactly what the
+ * session-list store is slow to reflect for subagent children. Shaped to
+ * overlay {@link GlobalSideThreadRow}: the parent join fields (parentTitle /
+ * workspaceName) are deliberately NOT carried, because they come from the
+ * parent's row, which the client store already holds.
+ */
+export interface SidechatGlobalThreadRow {
+  id: string
+  /** The durable thread label, `Side: `-prefixed (same shape as the store). */
+  title: string
+  running: boolean
+  /** The parent session id (always present on child entries). */
+  parentId?: string
+  /** Last activity (the live session's newest event time, epoch ms) when the
+   *  host could read one; absent → the client keeps the store's own stamp. */
+  lastActivityAt?: number
+}
+
+/**
+ * Fold the ws-pulled thread rows over the store-derived base rows.
+ *
+ * WHY the store stays the base: it feeds the exclusion fences (this tab's
+ * bound thread, floating windows, archived) and the parent join (titles,
+ * workspace names), and it answers even when the ws channel is degraded —
+ * the overlay is an freshness LIFTS, never a replacement. A base row the
+ * overlay covers takes the overlay's running/title/lastActivity (the route
+ * read the live tree; the store's copy lags), keeping the store's parent
+ * fields; an overlay row the store does not list YET (a thread created
+ * seconds ago in another workspace) becomes a row through the same parent
+ * join and the SAME archived/excluded fences, so a thread someone is
+ * already reading can never leak into the global groups. Sorted by last
+ * activity, newest first, undated last — the base feed's own order.
+ */
+export function mergeGlobalThreadRows(
+  base: readonly GlobalSideThreadRow[],
+  overlay: readonly SidechatGlobalThreadRow[],
+  byId: Readonly<Record<string, SidebarSessionSummary>>,
+  opts: { archivedIds?: readonly string[]; excludeIds?: readonly string[] } = {},
+): GlobalSideThreadRow[] {
+  if (overlay.length === 0) return [...base]
+  const archived = new Set(opts.archivedIds ?? [])
+  const excluded = new Set(opts.excludeIds ?? [])
+  const overlayById = new Map(overlay.map(row => [row.id, row]))
+  const merged: GlobalSideThreadRow[] = base.map(row => {
+    const over = overlayById.get(row.id)
+    if (over === undefined) return row
+    return {
+      ...row,
+      title: over.title,
+      running: over.running,
+      ...(over.parentId !== undefined ? { parentId: over.parentId } : {}),
+      // Only a POSITIVE overlay stamp overrides: an absent field means the
+      // host could not date the thread, not "it was never active".
+      ...(over.lastActivityAt !== undefined && over.lastActivityAt > 0
+        ? { lastActivityAt: over.lastActivityAt }
+        : {}),
+    }
+  })
+  const covered = new Set(base.map(row => row.id))
+  for (const over of overlay) {
+    if (covered.has(over.id) || archived.has(over.id) || excluded.has(over.id)) continue
+    const parent = over.parentId === undefined ? undefined : byId[over.parentId]
+    const workspaceName = parent === undefined ? undefined : workspaceBasename(parent.cwd)
+    merged.push({
+      id: over.id,
+      title: over.title,
+      running: over.running,
+      ...(over.parentId !== undefined ? { parentId: over.parentId } : {}),
+      ...(parent !== undefined ? { parentTitle: parent.displayTitle } : {}),
+      ...(workspaceName !== undefined ? { workspaceName } : {}),
+      lastActivityAt: over.lastActivityAt !== undefined && over.lastActivityAt > 0 ? over.lastActivityAt : 0,
+    })
+  }
+  return merged.sort((a, b) => b.lastActivityAt - a.lastActivityAt)
+}
+
+/**
  * Whether the thread log already carries the side boundary message — i.e.
  * the first prompt was delivered. Tolerant to the content shape (block
  * array or bare string) and to inherited seed messages (only an OWN

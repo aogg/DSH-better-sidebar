@@ -105,12 +105,23 @@ class FakeSocket {
   onopen: (() => void) | null = null
   onmessage: ((event: { data: string }) => void) | null = null
   onclose: (() => void) | null = null
+  sent: string[] = []
   constructor(url: string) {
     this.url = url
     FakeSocket.instances.push(this)
   }
-  send(_frame: string): void {}
+  send(frame: string): void { this.sent.push(frame) }
   close(): void { this.readyState = 3 }
+  /** The host's connection acknowledgement (fires the hook's open path). */
+  open(): void { this.readyState = FakeSocket.OPEN; this.onopen?.() }
+  /** One host frame (a `{threadId}` or `{scope:'threads'}` notice). */
+  frame(payload: unknown): void { this.onmessage?.({ data: JSON.stringify(payload) }) }
+  /** A drop WITHOUT a clean close (the hook's retry path). */
+  drop(): void { this.onclose?.() }
+  /** The frames the hook sent, as parsed objects. */
+  frames(): { op: string; threadIds: string[]; threads?: boolean }[] {
+    return this.sent.map(raw => JSON.parse(raw) as { op: string; threadIds: string[]; threads?: boolean })
+  }
 }
 
 /** A settable connection-state snapshot (the alpha.2 ConnectionHandle face). */
@@ -209,6 +220,10 @@ let infoValue: Record<string, unknown> = { live: false, provider: 'deepseek', pr
 let catalogValue: Record<string, unknown> = { available: false, groups: [], failures: [] }
 let modelCalls: Record<string, unknown>[] = []
 let dequeueCalls: Record<string, unknown>[] = []
+/** The ws threads channel's census answer + its pull log (overlay cases). */
+let threadsValue: { rows: unknown[]; degraded: boolean } = { rows: [], degraded: false }
+let threadsPulls = 0
+let threadsPayloads: Record<string, unknown>[] = []
 /** How many `sidechat.start` requests the current test issued. */
 let startCalls = 0
 /** Non-null while a test wants `sidechat.prompt` to stay in flight. */
@@ -254,6 +269,9 @@ beforeEach(() => {
   modelCalls = []
   dequeueCalls = []
   startCalls = 0
+  threadsValue = { rows: [], degraded: false }
+  threadsPulls = 0
+  threadsPayloads = []
   promptHold = null
   promptError = null
   vi.stubGlobal('fetch', async (url: string | URL, init?: RequestInit) => {
@@ -264,6 +282,11 @@ beforeEach(() => {
     if (method === 'sidechat.events') {
       eventsPulls += 1
       return jsonResponse({ ok: true, value: { events: eventsValue, live: [], pending: pendingValue } })
+    }
+    if (method === 'sidechat.threads') {
+      threadsPulls += 1
+      threadsPayloads.push(payload)
+      return jsonResponse({ ok: true, value: threadsValue })
     }
     if (method === 'sidechat.info') return jsonResponse({ ok: true, value: infoValue })
     if (method === 'sidechat.models') return jsonResponse({ ok: true, value: catalogValue })
@@ -1006,7 +1029,10 @@ describe('SideChatView top-right history list', () => {
     expect(first).toContain('线程二')
     expect(text).toContain('刚刚')
     expect(text).toContain('5 分钟前')
-    // The running thread carries the state word, the idle one the idle word.
+    // The running thread carries the state word in its 本会话 row (运行中 =
+    // sideChatBlockRunning, untouched by the group rename), the idle one the
+    // idle word — and the GLOBAL group header is now 全局运行中.
+    expect(text).toContain('全局运行中')
     expect(text).toContain('运行中')
     expect(text).toContain('空闲')
     unmount()
@@ -1099,11 +1125,12 @@ describe('SideChatView top-right history list', () => {
     await act(async () => {})
 
     const card = historyCard(await openHistory(container))
-    // Walk the card's direct children: [head, 运行中 header + count, rr row,
-    // 全局未读 header + count, ru row, 本会话 header, t1 row…]. The running
-    // header must sit ABOVE the unread header, its one row between them.
+    // Walk the card's direct children: [head, 全局运行中 header + count, rr
+    // row, 全局未读 header + count, ru row, 本会话 header, t1 row…]. The
+    // running header must sit ABOVE the unread header, its one row between
+    // them.
     const labels = [...card.children].map(child => child.textContent ?? '')
-    const runningHead = labels.indexOf('运行中1')
+    const runningHead = labels.indexOf('全局运行中1')
     const unreadHead = labels.indexOf('全局未读1')
     expect(runningHead).toBeGreaterThanOrEqual(0)
     expect(unreadHead).toBeGreaterThan(runningHead)
@@ -1219,7 +1246,7 @@ describe('SideChatView top-right history list', () => {
 
     const card = await openHistory(container)
     const text = card.textContent ?? ''
-    expect(text).toContain('运行中')
+    expect(text).toContain('全局运行中')
     expect(text).toContain('外区跑着')
     expect(text).not.toContain('暂无侧边对话')
     unmount()
@@ -1379,5 +1406,165 @@ describe('SideChatView global unread group', () => {
 
     expect(container.querySelector(`.${css.sidechatHistoryBadge}`)?.textContent).toBe('9+')
     unmount()
+  })
+})
+
+/**
+ * The GLOBAL threads overlay (2026-10-22): the history popover's 全局运行中 /
+ * 全局未读 groups no longer trust the session-list store alone — the ws
+ * threads channel says WHEN to re-pull `sidechat.threads`, and the census
+ * answer overlays the store-derived rows (store stays the base: fences +
+ * parent join). These cases drive the real hook through a FakeSocket, so the
+ * subscribe-and-pull alignment, the debounced pull, the degraded contract
+ * and the reconnect catch-up are all exercised end to end.
+ */
+describe('SideChatView global threads overlay (ws-pulled census)', () => {
+  /** rr: a FOREIGN-workspace thread the STORE says is idle and undated —
+   *  exactly the row the store is known to lag on. The ws census is the only
+   *  source that can light it up. */
+  function overlayStore(): ReturnType<typeof makeStore> {
+    return makeStore({
+      byId: {
+        root: { id: 'root', displayTitle: '主会话', cwd: '/p', running: false },
+        t1: { id: 't1', displayTitle: 'Side: 线程一', origin: 'subagent', parentId: 'root', running: false },
+        ws2: { id: 'ws2', displayTitle: '另一工作区', cwd: '/other/proj', running: false },
+        rr: { id: 'rr', displayTitle: 'Side: 外区跑着', origin: 'subagent', parentId: 'ws2', running: false },
+      },
+    })
+  }
+
+  async function openHistory(container: HTMLElement): Promise<HTMLElement> {
+    const trigger = container.querySelector<HTMLButtonElement>('button[aria-label="历史对话"]')
+    if (trigger === null) throw new Error('the top-right history button is absent')
+    await act(async () => { trigger.click() })
+    const card = document.body.querySelector<HTMLElement>('[role="dialog"]')
+    if (card === null) throw new Error('the history popover must open')
+    return card
+  }
+
+  /** The card element (the dialog may wrap it). */
+  function historyCard(dialog: HTMLElement): HTMLElement {
+    return dialog.querySelector<HTMLElement>(`.${requiredClass(css.sidechatHistoryCard)}`) ?? dialog
+  }
+
+  /** The push debounce window plus a margin (real timers — the wait is one
+   *  debounced pull, not a poll: nothing re-fires after it). */
+  async function flushDebounce(): Promise<void> {
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 150)) })
+  }
+
+  it('mounts the socket with the threads flag and pulls the census on open (subscribe-and-pull)', async () => {
+    const { unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(overlayStore()))))
+    const socket = FakeSocket.instances[0]!
+    expect(socket.frames()).toEqual([])  // nothing before the host acks
+    act(() => { socket.open() })
+    // The watch frame carries the bound thread AND the threads subscription.
+    expect(socket.frames()).toEqual([{ op: 'watch', threadIds: ['t1'], threads: true }])
+    await flushDebounce()
+    // One census pull, rooted at the TOP-LEVEL sessions only (t1/rr are
+    // origin:'subagent' — the threads hang off roots, never off threads).
+    expect(threadsPulls).toBe(1)
+    expect(threadsPayloads[0]).toEqual({ rootIds: ['root', 'ws2'] })
+    unmount()
+  })
+
+  it('lights a store-idle thread into 全局运行中 from the ws census (store stays the join base)', async () => {
+    // Read-marked: the row may ONLY surface through the running group, never
+    // as unread — proves the census moved `running`, not the unread filter.
+    markSidechatThreadRead('rr', Date.now() + 60_000)
+    threadsValue = {
+      rows: [{ id: 'rr', title: 'Side: 外区跑着', running: true, parentId: 'ws2', lastActivityAt: Date.now() - 30_000 }],
+      degraded: false,
+    }
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(overlayStore()))))
+    act(() => { FakeSocket.instances[0]!.open() })
+    await flushDebounce()
+
+    const card = historyCard(await openHistory(container))
+    const labels = [...card.children].map(child => child.textContent ?? '')
+    const runningHead = labels.indexOf('全局运行中1')
+    expect(runningHead).toBeGreaterThanOrEqual(0)
+    const runningRow = card.children[runningHead + 1] as HTMLButtonElement
+    expect(runningRow.textContent).toContain('外区跑着')
+    // The parent join (workspace · parent title) still comes from the STORE:
+    // the census carries ids, the store renders where the row leads.
+    expect(runningRow.textContent).toContain('proj · 另一工作区')
+    // Nothing unread → the badge stays absent (running never feeds it).
+    expect(container.querySelector(`.${css.sidechatHistoryBadge}`)).toBeNull()
+    unmount()
+  })
+
+  it('turns a census-only thread into a row through the store parent join', async () => {
+    markSidechatThreadRead('rr', Date.now() + 60_000)
+    // 'nn' exists nowhere in the client store — a thread created seconds ago
+    // in THIS workspace, announced by the ws channel before the store lists it.
+    threadsValue = {
+      rows: [{ id: 'nn', title: 'Side: 新线程', running: false, parentId: 'root', lastActivityAt: Date.now() - 5_000 }],
+      degraded: false,
+    }
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(overlayStore()))))
+    act(() => { FakeSocket.instances[0]!.open() })
+    await flushDebounce()
+
+    expect(container.querySelector(`.${css.sidechatHistoryBadge}`)?.textContent).toBe('1')
+    const card = historyCard(await openHistory(container))
+    const row = [...card.querySelectorAll<HTMLButtonElement>('button')]
+      .find(candidate => candidate.textContent?.includes('新线程'))
+    expect(row).toBeDefined()
+    // Parent join from the store row ('p · 主会话'), the global-row shape.
+    expect(row?.textContent).toContain('主会话')
+    expect(row?.className.includes(requiredClass(css.sidechatHistoryRowGlobal))).toBe(true)
+    unmount()
+  })
+
+  it('keeps the store-derived groups when the census answers degraded', async () => {
+    // A store-side unread row (dated, idle) — the census is degraded, so the
+    // groups must fall back to exactly what the store says.
+    const store = makeStore({
+      byId: {
+        root: { id: 'root', displayTitle: '主会话', cwd: '/p', running: false },
+        t1: { id: 't1', displayTitle: 'Side: 线程一', origin: 'subagent', parentId: 'root', running: false },
+        ru: { id: 'ru', displayTitle: 'Side: 本区未读', origin: 'subagent', parentId: 'root', updatedAt: Date.now() - 60_000, running: false },
+      },
+    })
+    threadsValue = { rows: [], degraded: true }
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(store))))
+    act(() => { FakeSocket.instances[0]!.open() })
+    await flushDebounce()
+    expect(threadsPulls).toBe(1)
+
+    expect(container.querySelector(`.${css.sidechatHistoryBadge}`)?.textContent).toBe('1')
+    const card = historyCard(await openHistory(container))
+    expect(card.textContent ?? '').toContain('本区未读')
+    unmount()
+  })
+
+  it('re-pulls the census once after a socket drop and re-open (no polling in between)', async () => {
+    markSidechatThreadRead('rr', Date.now() + 60_000)
+    vi.useFakeTimers()
+    try {
+      const { unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(overlayStore()))))
+      const first = FakeSocket.instances[0]!
+      act(() => { first.open() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(150) })
+      expect(threadsPulls).toBe(1)
+
+      // The wire drops; the hook retries forever (1s first backoff). No pull
+      // may fire while the socket is down — retries are not polls.
+      act(() => { first.drop() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+      expect(threadsPulls).toBe(1)
+
+      // The re-open catches up: onReconnect + the open-time alignment fold
+      // into ONE debounced census pull.
+      const second = FakeSocket.instances[1]!
+      expect(second).toBeDefined()
+      act(() => { second.open() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(150) })
+      expect(threadsPulls).toBe(2)
+      unmount()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

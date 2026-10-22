@@ -768,6 +768,6 @@ export const fr: Record<string, string> = {
   historyStoragePathDesc: 'Les enregistrements d\'historique et les données du plugin vivent dans ce répertoire ; vide = chemin par défaut, et le changer migre automatiquement les anciennes données',
   historyStoragePathPlaceholder: '~/.dsh/plugins/DSH-better-sidebar/',
   sideChatCurrentSession: 'Cette session',
-  sideChatRunning: 'En cours',
+  sideChatGlobalRunning: 'Globalement en cours',
   sideChatGlobalUnread: 'Non lus globaux',
 }

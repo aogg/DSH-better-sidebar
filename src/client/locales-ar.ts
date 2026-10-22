@@ -776,6 +776,6 @@ export const ar: Record<string, string> = {
   historyStoragePathDesc: 'تُحفظ سجلات الإرسال وبيانات الإضافة في هذا الدليل؛ اتركه فارغًا للاستخدام الافتراضي، وتغييره ينقل البيانات القديمة تلقائيًا',
   historyStoragePathPlaceholder: '~/.dsh/plugins/DSH-better-sidebar/',
   sideChatCurrentSession: 'هذه الجلسة',
-  sideChatRunning: 'قيد التشغيل',
+  sideChatGlobalRunning: 'قيد التشغيل عالميًا',
   sideChatGlobalUnread: 'غير المقروء عالميًا',
 }

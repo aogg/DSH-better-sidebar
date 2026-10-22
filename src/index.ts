@@ -47,7 +47,7 @@ import { registerBundleRoute } from './bundle-route.ts'
 import { createDirectoryWatchers, type DirectoryWatchers } from './fs-watch.ts'
 import { createGitWatchHub } from './git-push.ts'
 import { createFsJobsPushHub } from './fs-jobs-push.ts'
-import { createSidechatPushHub } from './sidechat-push.ts'
+import { createSidechatPushHub, type SidechatPushHub } from './sidechat-push.ts'
 import { createSessionPushHub } from './session-push.ts'
 import { launchExternal } from './open-external.ts'
 import { createArchiveTasks, respondArchiveDownload, type ArchiveTasks } from './archive-route.ts'
@@ -693,6 +693,7 @@ function buildApi(
   assistantLive: AssistantLiveBuffer,
   archiveTasks: ArchiveTasks,
   historyApi: HistoryRoutes,
+  sidechatPush: SidechatPushHub,
 ): Record<string, ApiMethod> {
   const cwdOf = async (payload: unknown, opts?: { fresh?: boolean }): Promise<{ sessionId: string; cwd: string }> => {
     const sessionId = requireString(payload, 'sessionId')
@@ -1487,8 +1488,9 @@ function buildApi(
     // Every operation runs through these routes because subagent-origin
     // identities are fenced from the generic session RPCs (agent-lookup
     // ownership), and the thread is created with a CUSTOM seed the stock
-    // fork APIs cannot express.
-    ...buildSidechatApi(ctx, assistantLive),
+    // fork APIs cannot express. The push hub rides along so the routes can
+    // announce thread-set changes on the ws threads channel.
+    ...buildSidechatApi(ctx, assistantLive, sidechatPush),
   }
 }
 
@@ -1795,7 +1797,14 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
   const historyLive = createPromptHistoryLive(ctx, historyStore, { logger: ctx.logger })
   ctx.effect(() => () => { historyLive.dispose() }, 'dsh-better-sidebar: prompt-history live recorder')
   const historyApi = buildPromptHistoryApi(ctx, { store: historyStore, live: historyLive })
-  const api = buildApi(ctx, resolved, () => settingsFace, assistantLive, archiveTasks, historyApi)
+  // The side-chat push hub is built BEFORE the api table (its ws upgrade
+  // route is still registered further below): the sidechat.* routes hold it
+  // and poke `notifyThreads()` whenever the thread SET changes (create /
+  // first-rename / dispose) — a change no session append may announce, so
+  // the routes must be able to reach the hub directly.
+  const sidechatPush: SidechatPushHub = createSidechatPushHub(ctx)
+  ctx.effect(() => () => { sidechatPush.dispose() }, 'dsh-better-sidebar: side-chat push hub')
+  const api = buildApi(ctx, resolved, () => settingsFace, assistantLive, archiveTasks, historyApi, sidechatPush)
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: '/sidebar/api',
@@ -2231,9 +2240,9 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
   // finished tool call appear immediately rather than on the next 2s tick.
   // Frames carry only the stale thread id (never event bodies), so the
   // transcript transport, its afterSeq deltas and its tail cap are unchanged.
+  // (`sidechatPush` itself is built next to the api table above — the
+  // sidechat routes hold it and poke notifyThreads() on thread-set changes.)
   const sidechatWss = new WebSocketServer({ noServer: true })
-  const sidechatPush = createSidechatPushHub(ctx)
-  ctx.effect(() => () => { sidechatPush.dispose() }, 'dsh-better-sidebar: side-chat push hub')
   ctx.effect(() => ctx.webServer.registerUpgrade({
     path: '/sidebar/ws/sidechat',
     handler: (req, socket, head) => {

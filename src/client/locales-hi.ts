@@ -775,6 +775,6 @@ export const hi: Record<string, string> = {
   historyStoragePathDesc: 'प्रॉम्प्ट इतिहास रिकॉर्ड और प्लगइन डेटा इस निर्देशिका में रहते हैं; खाली = डिफ़ॉल्ट पथ, और बदलने पर पुराना डेटा अपने आप माइग्रेट हो जाता है',
   historyStoragePathPlaceholder: '~/.dsh/plugins/DSH-better-sidebar/',
   sideChatCurrentSession: 'यह सेशन',
-  sideChatRunning: 'चल रहा है',
+  sideChatGlobalRunning: 'सभी चल रहा है',
   sideChatGlobalUnread: 'सभी अपठित',
 }

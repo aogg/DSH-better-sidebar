@@ -79,10 +79,12 @@ import {
   SIDE_LABEL_PREFIX,
   SIDE_NEW_THREAD_TITLE,
   globalSideThreadRows,
+  mergeGlobalThreadRows,
   sideThreadRows,
   threadHasCompletedTurn,
   threadTrailingPending,
   type GlobalSideThreadRow,
+  type SidechatGlobalThreadRow,
   type SidechatLiveEvent,
   type SidechatModelCatalog,
   type SidechatModelInfo,
@@ -636,20 +638,86 @@ export function SideChatView(props: {
   const floatingThreads = useSyncExternalStore(sidechatWindows.subscribe, sidechatWindows.getSnapshot)
   const sidechatReads = useSyncExternalStore(sidechatReadStore.subscribe, sidechatReadStore.getSnapshot)
 
+  // ── GLOBAL threads overlay (the ws threads channel's data half) ─────────
+  // The session-list store lags arbitrarily on subagent running/updatedAt
+  // (DSH keeps no client-side event feed for hidden child sessions), so the
+  // 「全局运行中 / 全局未读」 groups answer from THIS overlay: the host's
+  // `{ scope: 'threads' }` frames say WHEN to re-pull `sidechat.threads`,
+  // the route answers with the tree's own census, and the result replaces
+  // the overlay wholesale (a thread that settled or vanished drops out on
+  // the next pull instead of haunting the groups). The store stays the base
+  // (see globalRows) — the overlay only makes it fresher.
+  //
+  // No polling anywhere: a burst of frames folds into ONE debounced pull,
+  // a degraded answer clears the overlay (the store-derived groups stand),
+  // and a failed pull just waits for the next frame or the reconnect
+  // alignment. Several surfaces (tabs + floating windows) each keep their
+  // own socket and pull; a module-level in-flight dedupe was considered and
+  // rejected — a shared promise must bind ONE abort signal, coupling one
+  // surface's unmount to another's request, and the pulls are debounced and
+  // tiny, so the simple per-surface pull stands.
+  const [threadOverlay, setThreadOverlay] = useState<readonly SidechatGlobalThreadRow[]>([])
+  const listRef = useRef(list)
+  listRef.current = list
+  const threadsControllerRef = useRef<AbortController | null>(null)
+  const threadsTimerRef = useRef<number | undefined>(undefined)
+
+  /** Root sessions for the census: the client list's TOP-LEVEL sessions
+   *  (side threads hang off them as subagent children), capped to the same
+   *  64 the host fences. Computed at pull time from the freshest store. */
+  const pullThreads = useCallback(async (): Promise<void> => {
+    threadsControllerRef.current?.abort()
+    const controller = new AbortController()
+    threadsControllerRef.current = controller
+    const rootIds = Object.values(listRef.current.byId)
+      .filter(summary => summary.origin !== 'subagent')
+      .map(summary => summary.id)
+      .slice(0, 64)
+    try {
+      const result = await api.sidechatThreads(rootIds, controller.signal)
+      if (controller.signal.aborted) return
+      setThreadOverlay(result.degraded ? [] : result.rows)
+    } catch {
+      // Aborted by a newer pull, or the wire failed: keep the previous
+      // overlay — the next frame (or reconnect) re-pulls, never a timer.
+    }
+  }, [])
+
+  /** One debounced census pull per burst of `{ scope: 'threads' }` frames
+   *  (the window also folds the open-time alignment into the frames that
+   *  race it). Same scale as the transcript's own push debounce. */
+  const handleThreadsStale = useCallback((): void => {
+    if (threadsTimerRef.current !== undefined) window.clearTimeout(threadsTimerRef.current)
+    threadsTimerRef.current = window.setTimeout(() => {
+      threadsTimerRef.current = undefined
+      void pullThreads()
+    }, PUSH_DEBOUNCE_MS)
+  }, [pullThreads])
+
   /** The history popover's GLOBAL row feed: every side thread of EVERY
    *  workspace, minus what is on screen right now (this tab's bound thread —
    *  the reader is holding it — and every floating window, each a reader of
    *  its own thread) and what the host hides as archived. ONE scan feeds
-   *  BOTH global groups below (running + unread), so the two can never
-   *  drift apart about who is excluded. The feed rides the push-driven
-   *  sessions.list store the host already maintains — a thread starting or
-   *  settling arrives as a store update, so neither group polls. */
+   *  BOTH global groups below (全局运行中 + 全局未读), so the two can never
+   *  drift apart about who is excluded.
+   *
+   *  Two freshness layers: the sessions.list store (push-driven by the host)
+   *  is the BASE — it owns the exclusion fences and the parent join — and
+   *  the ws `sidechat.threads` overlay is folded over it (the store lags
+   *  arbitrarily on subagent running/updatedAt, which is exactly what the
+   *  threads channel exists to fix; see threadOverlay below). */
   const globalRows = useMemo(() => {
     const exclude = new Set<string>()
     if (threadId !== undefined) exclude.add(threadId)
     for (const window of floatingThreads) exclude.add(window.threadId)
-    return globalSideThreadRows(list.byId, { archivedIds, excludeIds: [...exclude] })
-  }, [list, archivedIds, threadId, floatingThreads])
+    const fences = { archivedIds, excludeIds: [...exclude] }
+    return mergeGlobalThreadRows(
+      globalSideThreadRows(list.byId, fences),
+      threadOverlay,
+      list.byId,
+      fences,
+    )
+  }, [list, archivedIds, threadId, floatingThreads, threadOverlay])
 
   /** The GLOBAL UNREAD group: the global rows whose last activity postdates
    *  their read watermark. Read marks arrive through `sidechatReads` above,
@@ -665,7 +733,8 @@ export function SideChatView(props: {
    *  is exactly why it earns its own group instead of hiding behind the
    *  unread filter (the two answer different questions: "谁在跑" vs "谁没
    *  读"). Order inherits the feed's last-activity sort, newest first; a
-   *  thread that settles drops out on the next store push, no timer. */
+   *  thread that settles drops out on the next store push or ws overlay
+   *  pull — no timer. */
   const runningRows = useMemo(() => globalRows.filter(row => row.running), [globalRows])
 
   const [composer, setComposer] = useState('')
@@ -882,12 +951,15 @@ export function SideChatView(props: {
   }, [fetchThread, fetchInfo])
   // A socket that dropped mid-watch reports its re-open: every frame the
   // outage swallowed is gone for good, so the bound thread re-pulls at once
-  // instead of waiting for the host's next staleness notice.
+  // instead of waiting for the host's next staleness notice — and the GLOBAL
+  // thread census re-pulls through the same debounced path (its open-time
+  // alignment fired on the re-open too; the debounce folds the two).
   const handleReconnect = useCallback((): void => {
+    handleThreadsStale()
     if (threadId === undefined) return
     void fetchThread(threadId)
     void fetchInfo(threadId)
-  }, [threadId, fetchThread, fetchInfo])
+  }, [threadId, fetchThread, fetchInfo, handleThreadsStale])
   const watchedThreads = useMemo(
     () => (threadId === undefined ? [] : [threadId]),
     [threadId],
@@ -896,6 +968,13 @@ export function SideChatView(props: {
     threadIds: watchedThreads,
     onInvalidate: handleInvalidate,
     onReconnect: handleReconnect,
+    // The history popover's global groups ride their own channel: threads
+    // frames arrive regardless of this tab's binding, and the open-time
+    // alignment gives even a freshly mounted tab the current census (before
+    // the channel existed a tab with no bound thread opened no socket — it
+    // still needs this feed, so `threads: true` keeps the socket alive).
+    threads: true,
+    onThreadsStale: handleThreadsStale,
   })
 
   // The model catalog is deployment-scoped, so one read per mount serves every
@@ -912,6 +991,9 @@ export function SideChatView(props: {
     controllerRef.current?.abort()
     if (invalidateRef.current !== undefined) window.clearTimeout(invalidateRef.current)
     if (copiedIdTimerRef.current !== undefined) window.clearTimeout(copiedIdTimerRef.current)
+    // The threads census' own pull + debounce timer.
+    threadsControllerRef.current?.abort()
+    if (threadsTimerRef.current !== undefined) window.clearTimeout(threadsTimerRef.current)
   }, [])
 
   // When the wire recovers (disconnected → connected), pull immediately
@@ -1174,14 +1256,15 @@ export function SideChatView(props: {
       <AnchoredPopover anchor={historyOpen} onClose={() => { setHistoryOpen(null) }} width={280}>
         <div className={css.sidechatHistoryCard}>
           <div className={css.sidechatHistoryHead}>{t('sideChatHistory')}</div>
-          {/* The RUNNING group sits ABOVE 全局未读 on purpose: "something is
-              executing somewhere" outranks "something awaits reading" — the
-              reader is more likely to want the live thread than the stale
-              one. Rendered only when non-empty, like the unread group. */}
+          {/* The GLOBAL RUNNING group sits ABOVE 全局未读 on purpose:
+              "something is executing somewhere" outranks "something awaits
+              reading" — the reader is more likely to want the live thread
+              than the stale one. Rendered only when non-empty, like the
+              unread group. */}
           {runningRows.length > 0 && (
             <>
               <div className={css.sidechatHistoryGroup}>
-                <span>{t('sideChatRunning')}</span>
+                <span>{t('sideChatGlobalRunning')}</span>
                 <span className={css.sidechatHistoryGroupCount}>{runningRows.length}</span>
               </div>
               {runningRows.map(row => globalRow(row, { unreadDot: false }))}

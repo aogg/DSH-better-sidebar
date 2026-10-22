@@ -758,6 +758,6 @@ export const sv: Record<string, string> = {
   historyStoragePathDesc: 'Historikposter och plugin-data lagras i den här mappen; tomt = standardväg, och en ändring migrerar gamla data automatiskt',
   historyStoragePathPlaceholder: '~/.dsh/plugins/DSH-better-sidebar/',
   sideChatCurrentSession: 'Denna session',
-  sideChatRunning: 'Körs',
+  sideChatGlobalRunning: 'Körs globalt',
   sideChatGlobalUnread: 'Globala olästa',
 }

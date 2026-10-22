@@ -20,6 +20,23 @@
  * times a second and are folded into one notice per 250ms — each notice costs
  * the client a pull that re-sends the CURRENT attempt's chunks, so faster would
  * only burn bandwidth.
+ *
+ * A third channel rides the same two feeds: the GLOBAL thread-set
+ * invalidation (`{ scope: 'threads' }`). The history popover's cross-workspace
+ * 「全局运行中 / 全局未读」 groups used to trust the client session-list store
+ * alone, whose subagent rows lag arbitrarily on running/updatedAt flips; a
+ * socket that subscribed with `threads: true` now also hears ONE coalesced
+ * "the thread set may be stale" frame whenever ANY session appends durably
+ * (turn/start and turn/end are appends — exactly the running flips), whenever
+ * stream deltas flow (a running thread is producing), or when the sidechat
+ * routes create / rename / dispose a thread (`notifyThreads()` — a brand-new
+ * thread may announce nothing through the feeds for a while). The frame stays
+ * data-free: the client answers it with one `sidechat.threads` pull, so the
+ * route stays the single source of the tree's truth and a dropped socket
+ * self-heals through the same pull. Its window (200ms) sits between the other
+ * two: one turn flip usually fires BOTH feeds plus maybe a route poke, and
+ * those must fold into a single re-pull, yet the flip has to read as
+ * immediate.
  * @module dsh-better-sidebar/sidechat-push
  */
 import type { WebSocket } from 'ws'
@@ -29,22 +46,45 @@ import type { Context } from './context-types.ts'
 const DURABLE_DEBOUNCE_MS = 60
 /** Coalescing window for in-flight model deltas. */
 const STREAM_DEBOUNCE_MS = 250
+/**
+ * Coalescing window for the GLOBAL thread-set invalidation. Deliberately
+ * between the durable (60ms) and stream (250ms) windows: one running flip
+ * typically hits the append feed AND the stream feed (plus a route poke on
+ * create/rename), and they must fold into ONE overlay re-pull per socket —
+ * while staying fast enough that 「全局运行中」 lights up without a
+ * perceptible lag. Exported for the specs (they must advance THE window,
+ * not a copied literal).
+ */
+export const THREADS_DEBOUNCE_MS = 200
 /** Thread ids one socket may watch (a resource guard, not a policy). */
 const MAX_WATCHED = 64
 
-/** One frame the host pushes: the thread whose transcript is stale. */
+/**
+ * One frame the host pushes. Either a watched thread whose transcript is
+ * stale (`threadId`) or the GLOBAL thread-set invalidation (`scope`), never
+ * both — and never any data body.
+ */
 export interface SidechatPushFrame {
-  threadId: string
+  threadId?: string
+  scope?: 'threads'
 }
 
-/** The frame the client sends to replace its watch set. */
+/** The frame the client sends to replace its watch set. Frames from before
+ *  the threads channel carry no `threads` key and stay fully legal. */
 interface WatchFrame {
   op?: unknown
   threadIds?: unknown
+  threads?: unknown
+}
+
+/** The slice of the hub the sidechat routes poke when the thread SET changes
+ *  (create / rename / dispose) — a change no session append may announce. */
+export interface SidechatThreadsNotifier {
+  notifyThreads(): void
 }
 
 /** The host-side push hub: one set of feeds, any number of sockets. */
-export interface SidechatPushHub {
+export interface SidechatPushHub extends SidechatThreadsNotifier {
   /** Attach one accepted socket (reads its watch frames, pushes notices). */
   attach(ws: WebSocket): void
   /** Release the session feeds (socket teardown stays with the server). */
@@ -61,24 +101,41 @@ export function createSidechatPushHub(ctx: Context): SidechatPushHub {
   if (typeof ctx.on !== 'function') {
     // Test doubles without the event API still accept sockets, which then
     // simply never hear anything.
-    return { attach: () => {}, dispose: () => {} }
+    return { attach: () => {}, dispose: () => {}, notifyThreads: () => {} }
   }
   const offEvent = ctx.on('session/event', (session) => {
     const sessionId = (session as { id?: unknown } | null)?.id
     if (typeof sessionId !== 'string') return
-    for (const socket of sockets) socket.notify(sessionId, DURABLE_DEBOUNCE_MS)
+    for (const socket of sockets) {
+      socket.notify(sessionId, DURABLE_DEBOUNCE_MS)
+      // ANY durable append may move the global groups: a turn/start or
+      // turn/end flips `running`, any other append bumps last activity —
+      // and both are exactly what the threads channel exists to announce.
+      socket.notifyThreads(THREADS_DEBOUNCE_MS)
+    }
   })
   const offStream = ctx.on('agent/assistant-stream', (payload) => {
     const record = payload as { agent?: unknown } | null
     const session = (record?.agent as { session?: { id?: unknown } } | undefined)?.session
     const sessionId = typeof session?.id === 'string' ? session.id : undefined
     if (sessionId === undefined) return
-    for (const socket of sockets) socket.notify(sessionId, STREAM_DEBOUNCE_MS)
+    for (const socket of sockets) {
+      socket.notify(sessionId, STREAM_DEBOUNCE_MS)
+      // Stream deltas prove the thread is running RIGHT NOW — the strongest
+      // possible 「全局运行中」 signal, so they ride the threads channel too.
+      socket.notifyThreads(THREADS_DEBOUNCE_MS)
+    }
   })
   return {
     attach: (ws) => {
       const socket = new SidechatSocket(ws, () => { sockets.delete(socket) })
       sockets.add(socket)
+    },
+    notifyThreads: () => {
+      // Route-driven poke (thread created / renamed / disposed): same
+      // coalescing window, so a create that immediately streams folds into
+      // the notice the feeds are already arming.
+      for (const socket of sockets) socket.notifyThreads(THREADS_DEBOUNCE_MS)
     },
     dispose: () => {
       offEvent()
@@ -89,12 +146,16 @@ export function createSidechatPushHub(ctx: Context): SidechatPushHub {
   }
 }
 
-/** One attached socket's watch set and per-thread coalescing timers. */
+/** One attached socket's watch set and per-channel coalescing timers. */
 class SidechatSocket {
   private readonly socket: WebSocket
   private readonly onClosed: () => void
   private readonly watched = new Set<string>()
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Whether this socket also hears the GLOBAL thread-set channel. */
+  private threads = false
+  /** The armed threads-coalescing timer (one per socket, not per thread). */
+  private threadsTimer: ReturnType<typeof setTimeout> | undefined
   private closed = false
 
   /**
@@ -123,6 +184,14 @@ class SidechatSocket {
       : []
     this.watched.clear()
     for (const id of ids.slice(0, MAX_WATCHED)) this.watched.add(id)
+    // The threads channel is opt-in per watch frame (absent key = not
+    // subscribed — the backward-compatible shape). Unsubscribing drops the
+    // pending notice with its timer, like an unwatched thread does.
+    this.threads = frame.threads === true
+    if (!this.threads && this.threadsTimer !== undefined) {
+      clearTimeout(this.threadsTimer)
+      this.threadsTimer = undefined
+    }
     // Threads no longer watched drop their pending notice with their timer.
     for (const [id, timer] of this.timers) {
       if (this.watched.has(id)) continue
@@ -145,6 +214,21 @@ class SidechatSocket {
     }, delayMs))
   }
 
+  /**
+   * Coalesce ONE notice for the GLOBAL thread set (first trigger's window
+   * wins, exactly like the per-thread channel). Sockets that never
+   * subscribed with `threads: true` stay silent — an old client must not
+   * start receiving frames it does not know.
+   * @param delayMs - the threads coalescing window.
+   */
+  notifyThreads(delayMs: number): void {
+    if (this.closed || !this.threads || this.threadsTimer !== undefined) return
+    this.threadsTimer = setTimeout(() => {
+      this.threadsTimer = undefined
+      this.send({ scope: 'threads' })
+    }, delayMs)
+  }
+
   /** Push one notice (silently dropped once the socket is gone). */
   private send(frame: SidechatPushFrame): void {
     if (this.closed) return
@@ -161,6 +245,8 @@ class SidechatSocket {
     this.closed = true
     for (const timer of this.timers.values()) clearTimeout(timer)
     this.timers.clear()
+    if (this.threadsTimer !== undefined) clearTimeout(this.threadsTimer)
+    this.threadsTimer = undefined
     this.watched.clear()
     this.onClosed()
   }

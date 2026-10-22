@@ -773,6 +773,6 @@ export const ru: Record<string, string> = {
   historyStoragePathDesc: 'Записи истории и данные плагина хранятся в этом каталоге; пусто = путь по умолчанию, при изменении старые данные переносятся автоматически',
   historyStoragePathPlaceholder: '~/.dsh/plugins/DSH-better-sidebar/',
   sideChatCurrentSession: 'Текущая сессия',
-  sideChatRunning: 'Выполняется',
+  sideChatGlobalRunning: 'Выполняется глобально',
   sideChatGlobalUnread: 'Общие непрочитанные',
 }

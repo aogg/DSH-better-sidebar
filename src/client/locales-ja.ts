@@ -775,6 +775,6 @@ export const ja: Record<string, string> = {
   historyStoragePathDesc: '送信履歴の記録とプラグインデータはこのディレクトリに保存されます。空欄で既定のパスを使い、変更すると旧データは自動的に移行されます',
   historyStoragePathPlaceholder: '~/.dsh/plugins/DSH-better-sidebar/',
   sideChatCurrentSession: 'このセッション',
-  sideChatRunning: '実行中',
+  sideChatGlobalRunning: 'グローバル実行中',
   sideChatGlobalUnread: 'グローバル未読',
 }

@@ -777,6 +777,6 @@ export const pl: Record<string, string> = {
   historyStoragePathDesc: 'Rekordy historii i dane wtyczki są przechowywane w tym katalogu; puste = domyślna ścieżka, a zmiana automatycznie przenosi stare dane',
   historyStoragePathPlaceholder: '~/.dsh/plugins/DSH-better-sidebar/',
   sideChatCurrentSession: 'Ta sesja',
-  sideChatRunning: 'Uruchomione',
+  sideChatGlobalRunning: 'Wszystkie uruchomione',
   sideChatGlobalUnread: 'Wszystkie nieprzeczytane',
 }
