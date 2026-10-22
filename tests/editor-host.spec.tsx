@@ -103,6 +103,26 @@ const fsRead = vi.fn()
 // below hits exactly that path, so the prototype gets a counting stub (and
 // the gesture test asserts the centering scroll was actually attempted).
 const scrollTo = vi.fn()
+beforeEach(() => {
+  // The sidebar store hydrates its session state from localStorage
+  // (`dsh-sidebar:v1:<id>`, see state.ts), and EVERY case in this file mounts
+  // the same session id — without this sweep a previous case's tabs leak into
+  // the next mount through the hydration path: openTab then DEDUPES onto the
+  // stale same-path tab and keeps its old meta (meta.treeOpen lost → the tree
+  // panel never renders; a stale tab no viewer claims → the whole container
+  // collapses to the "cannot be previewed" binary pane), and the tree-row
+  // condition wait burns its whole 20s budget on a chrome-less pane. The
+  // failure class looked like load flake for a day (it fires only when the
+  // right sibling cases ran before, so single describes and most whole-file
+  // runs passed); the pollution bisect pinned it: the same -t selection is
+  // green at 0319bc8, fails from d7b2528 on, heals at 7432a39, breaks again
+  // from 712e989's turn refresh on. Sweeping the keys is the product-safe
+  // isolation: persistence itself is correct product behavior.
+  for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+    const key = localStorage.key(i)
+    if (key?.startsWith('dsh-sidebar:')) localStorage.removeItem(key)
+  }
+})
 beforeAll(() => {
   ;(Element.prototype as unknown as { scrollTo: () => void }).scrollTo = scrollTo
 })
