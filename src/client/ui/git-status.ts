@@ -24,8 +24,9 @@
  * re-fetch on a self-built `setInterval` ladder (30 s baseline, dropping a
  * tier whenever a round trip came back slow, finally stopping the timer —
  * a cost guard for pathological repositories). Every slot now subscribes,
- * for as long as at least one visible consumer holds it, to the ONE shared
- * `/sidebar/ws/git` push socket (`../git-push.ts`): the host watches the
+ * for as long as at least one visible consumer holds it, to its session's
+ * `/sidebar/ws/git` push socket (`../git-push.ts`, one connection per
+ * sessionId): the host watches the
  * checkout's files and `.git` metadata and names the worktree when they
  * move, and the notice re-pulls ONCE — no client timer drives any fetch.
  * The old slow-tier ladder is subsumed by the notice path itself: the host
@@ -372,7 +373,7 @@ function ensureSlotWatch(slot: Slot): void {
   const roots = watchRootsOf(slot)
   if (roots.length === 0) return
   const invalidate = (): void => { if (slot.visible > 0) fetchSlot(slot) }
-  slot.watch = subscribeGitWatch(roots, invalidate, invalidate)
+  slot.watch = subscribeGitWatch(slot.sessionId, roots, invalidate, invalidate)
 }
 
 function retain(slot: Slot): void {
@@ -456,7 +457,7 @@ export interface GitStatusView {
 /**
  * Subscribe to the shared git status of one session (optionally of one linked
  * worktree). While `visible` is true the consumer holds the answer AND the
- * slot's push subscription (the one shared `/sidebar/ws/git` socket): the
+ * slot's push subscription (its session's `/sidebar/ws/git` socket): the
  * first answer is fetched on the first visible consumer, every host notice of
  * the slot's checkout re-pulls it once, and the last consumer's release drops
  * both the snapshot and the subscription. No consumer can keep a timer

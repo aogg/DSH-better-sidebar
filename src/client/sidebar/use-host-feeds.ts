@@ -17,9 +17,11 @@ import { activateFilesPage } from '../sidebar-folder.ts'
 import { mountedSessionId } from '../native/surface.ts'
 import { t } from '../locales.ts'
 
-/** How many consecutive reconnect failures stop the agent-opens push loop
- * (the loop restarts on session switch). */
-const FAILURE_LIMIT = 3
+/** How long to wait before re-opening a dropped agent-opens socket. The
+ * push rule (必须遵守规范): a dropped socket reconnects FOREVER with an
+ * exponential backoff to the cap — no failure limit, no polling fallback. */
+const RETRY_BASE_MS = 1000
+const RETRY_MAX_MS = 15_000
 
 /**
  * Subagent auto-open debounce (ms). The host delivers a new child's origin
@@ -148,7 +150,8 @@ export function useHostFeeds(feeds: {
    * folder activates the plugin's 「文件」page and reveals the folder row in
    * its tree ({@link activateFilesPage}), and a URL opens in DSH's own
    * browser tab type. A disconnected socket
-   * retries with a short backoff (mirror of the agent-terminals loop): the
+   * reconnects forever with an exponential backoff (1 s → 15 s, reset on
+   * success; never a failure limit, never a polling fallback): the
    * host queue keeps undelivered requests and replays them on the first
    * attach, so a refresh or a session switch lands the opens the model
    * queued while no view was connected.
@@ -166,6 +169,9 @@ export function useHostFeeds(feeds: {
       const url = hostWebSocketUrl('sidebar/ws/agent-opens')
       url.search = new URLSearchParams({ sessionId }).toString()
       socket = new WebSocket(url.toString())
+      socket.onopen = () => {
+        failures = 0
+      }
       socket.onmessage = (event) => {
         if (typeof event.data !== 'string') return
         try {
@@ -200,11 +206,13 @@ export function useHostFeeds(feeds: {
       socket.onclose = () => {
         if (closed) return
         failures += 1
-        if (failures >= FAILURE_LIMIT) {
-          console.error('[dsh-better-sidebar] agent-opens connection failed; stopping reconnect loop', sessionId)
-          return
+        // Never give up (the push rule): each consecutive failure only
+        // widens the gap, up to the cap. The log is throttled so a long
+        // outage cannot spam — the first drop, then every 10th failure.
+        if (failures === 1 || failures % 10 === 0) {
+          console.error('[dsh-better-sidebar] agent-opens connection dropped; reconnecting', sessionId)
         }
-        retry = window.setTimeout(connect, 2000)
+        retry = window.setTimeout(connect, Math.min(RETRY_BASE_MS * 2 ** (failures - 1), RETRY_MAX_MS))
       }
       socket.onerror = () => { socket?.close() }
     }

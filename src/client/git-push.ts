@@ -1,6 +1,5 @@
 /**
- * One shared `git` invalidation subscription per client
- * (`/sidebar/ws/git`).
+ * `git` invalidation subscriptions per session (`/sidebar/ws/git`).
  *
  * Every git-domain consumer the phase-2 polling audit named — the shared
  * status store (`ui/git-status.ts`), the changes tab's Git lens
@@ -14,23 +13,30 @@
  * stays the single source of data, exactly the ops-push model. A
  * one-shot fetch on notice is NOT polling: no timer drives it.
  *
- * One socket for the whole client, not one per consumer (the turn-push
- * rule): the hub's watch set is the UNION of every subscriber's
+ * ONE CONNECTION PER SESSION — the endpoint's own fence: the host only
+ * accepts `/sidebar/ws/git` with `?sessionId=` on the URL (a bare one
+ * is answered with an immediate 1008 close) and resolves every watch
+ * spelling against THAT session's cwd chain, so subscribers of
+ * different sessions can never share a socket. Each session's hub is
+ * the ops-push shape in miniature, keyed by sessionId: one connection
+ * whose watch set is the UNION of that session's subscribers'
  * worktrees — typically the few checkouts of the session's repository —
  * re-announced through {@linkcode GitPushConnection.reconcile} whenever
  * a subscriber joins, leaves or changes its set. The FIRST subscriber
- * opens the shared connection, every `git` frame of a watched worktree
- * fans out to the subscribers that named it, and the LAST unsubscriber
- * closes it.
+ * of a session opens its connection, every `git` frame of a watched
+ * worktree fans out to the subscribers that named it, and a session's
+ * LAST unsubscriber closes its connection. Sessions are fully
+ * independent — each connection owns its own backoff bookkeeping, so
+ * one session's drops and retries never disturb another's.
  *
- * Availability is the socket's own story: reconnects back off 1s → 15s
+ * Availability is each socket's own story: reconnects back off 1s → 15s
  * and never give up (openGitPush), there is NO timer-driven HTTP
  * fallback, and a successful re-open fires every subscriber's
  * `onReconnect` so each re-pulls what the outage swallowed. The
  * mount/visibility initial loads stay with the consumers (one-shot
  * fetches, unchanged).
  *
- * Two entry points share the hub: the {@linkcode useGitWatch} hook for
+ * Two entry points share the hubs: the {@linkcode useGitWatch} hook for
  * React consumers (the lenses) and {@linkcode subscribeGitWatch} for the
  * status store, whose slot lifecycle is imperative (retain/release, not
  * mount/unmount).
@@ -57,7 +63,7 @@ const RETRY_MAX_MS = 15_000
 export interface GitPushConnection {
   /**
    * Re-send the whole watch frame (a full replacement). For a getter-based
-   * connection whose worktrees change mid-flight — the shared hub's union
+   * connection whose worktrees change mid-flight — a session hub's union
    * of subscriber sets — this is how a membership change reaches the host
    * without a reconnect.
    */
@@ -67,9 +73,12 @@ export interface GitPushConnection {
 }
 
 /**
- * Open the git push socket for a mutable watch set.
+ * Open ONE session's git push socket for a mutable watch set.
+ * @param sessionId - the session the endpoint is fenced on: it rides the
+ *   URL (`?sessionId=` — without it the host closes with 1008) and every
+ *   watch spelling resolves against that session's cwd chain.
  * @param worktrees - worktrees to watch, re-read on every open AND every
- *   {@linkcode GitPushConnection.reconcile} (the shared hub feeds it the
+ *   {@linkcode GitPushConnection.reconcile} (the session hub feeds it the
  *   union of its subscribers' sets).
  * @param onFrame - one validated host frame.
  * @param onState - optional open/close signal (observability; the hub
@@ -78,6 +87,7 @@ export interface GitPushConnection {
  * @returns the live connection (close it to tear down; idempotent).
  */
 export function openGitPush(
+  sessionId: string,
   worktrees: () => readonly string[],
   onFrame: (frame: GitPushFrame) => void,
   onState?: (open: boolean) => void,
@@ -96,7 +106,11 @@ export function openGitPush(
 
   const connect = (): void => {
     if (closed) return
-    socket = new WebSocket(hostWebSocketUrl('sidebar/ws/git').toString())
+    // The session fence rides the URL, exactly like fs-watch's and
+    // agent-opens' sockets: a bare URL is refused with 1008 by the host.
+    const url = hostWebSocketUrl('sidebar/ws/git')
+    url.search = new URLSearchParams({ sessionId }).toString()
+    socket = new WebSocket(url.toString())
     socket.onopen = () => {
       failures = 0
       onState?.(true)
@@ -141,11 +155,12 @@ interface GitSubscriber {
   worktrees: ReadonlySet<string>
   /** One watched worktree's git state moved — re-pull once. */
   onGit(worktree: string): void
-  /** The shared socket re-opened after a drop — catch up on the outage. */
+  /** The session's socket re-opened after a drop — catch up on the outage. */
   onReconnect(): void
 }
 
-/** The singleton hub: one connection alive while at least one subscriber holds it. */
+/** One session's hub: one connection alive while at least one of that
+ *  session's subscribers holds it. */
 interface GitHub {
   subscribers: Set<GitSubscriber>
   /** Re-announce the union watch set (membership changed mid-connection). */
@@ -153,8 +168,9 @@ interface GitHub {
   close(): void
 }
 
-/** The hub, created on the first subscriber and torn down with the last. */
-let hub: GitHub | undefined
+/** The hubs, one per session — keyed by the endpoint's own fence: the
+ *  sessionId the URL must carry and the host resolves watch paths against. */
+const hubs = new Map<string, GitHub>()
 
 /** Fan one `git` frame out to the subscribers that named the worktree. */
 function fanOutGit(subscribers: ReadonlySet<GitSubscriber>, worktree: string): void {
@@ -181,7 +197,8 @@ function fanOutReconnect(subscribers: ReadonlySet<GitSubscriber>): void {
   }
 }
 
-/** The union of every subscriber's worktrees, capped like the host caps watches. */
+/** The union of one session's subscribers' worktrees, capped like the host
+ *  caps watches. */
 function unionWorktrees(subscribers: ReadonlySet<GitSubscriber>): string[] {
   const paths = new Set<string>()
   for (const subscriber of subscribers) {
@@ -193,18 +210,21 @@ function unionWorktrees(subscribers: ReadonlySet<GitSubscriber>): string[] {
   return [...paths]
 }
 
-/** Open (or return) the singleton hub. */
-function ensureHub(): GitHub {
-  if (hub !== undefined) return hub
+/** Open (or return) one session's hub. */
+function ensureHub(sessionId: string): GitHub {
+  const existing = hubs.get(sessionId)
+  if (existing !== undefined) return existing
   const subscribers = new Set<GitSubscriber>()
   // Reconnect bookkeeping: the FIRST open is not a reconnect (nothing was
   // missed — no frame ever arrived), only an open that follows a
   // successful connection's close is, because that gap swallowed frames.
   // The callbacks close over the LOCAL subscriber set, so a frame a dying
-  // socket delivers after teardown fans out to nobody.
+  // socket delivers after teardown fans out to nobody (the set emptied
+  // with that session's last leave).
   let connectedOnce = false
   let dropped = false
   const connection = openGitPush(
+    sessionId,
     () => unionWorktrees(subscribers),
     (frame: GitPushFrame) => { fanOutGit(subscribers, frame.worktree) },
     (open: boolean) => {
@@ -218,29 +238,39 @@ function ensureHub(): GitHub {
       if (connectedOnce) dropped = true
     },
   )
-  hub = { subscribers, reconcile: () => { connection.reconcile() }, close: () => { connection.close() } }
+  const hub: GitHub = { subscribers, reconcile: () => { connection.reconcile() }, close: () => { connection.close() } }
+  hubs.set(sessionId, hub)
   return hub
 }
 
-/** Join a subscriber with a non-empty set; the first join opens the socket. */
-function joinGitHub(subscriber: GitSubscriber): void {
-  const currentHub = ensureHub()
-  currentHub.subscribers.add(subscriber)
-  currentHub.reconcile()
+/** Join a subscriber with a non-empty set; the session's first join opens
+ *  its socket. */
+function joinGitHub(sessionId: string, subscriber: GitSubscriber): void {
+  const hub = ensureHub(sessionId)
+  hub.subscribers.add(subscriber)
+  hub.reconcile()
 }
 
-/** Leave the hub; the last leave tears the shared socket down. */
-function leaveGitHub(subscriber: GitSubscriber): void {
+/** Leave the session's hub; the session's last leave tears its socket down. */
+function leaveGitHub(sessionId: string, subscriber: GitSubscriber): void {
+  const hub = hubs.get(sessionId)
   if (hub === undefined) return
   hub.subscribers.delete(subscriber)
   if (hub.subscribers.size === 0) {
+    hubs.delete(sessionId)
     hub.close()
-    hub = undefined
   }
 }
 
 /** What a consumer hands the hook. */
 export interface GitWatchOptions {
+  /**
+   * The session whose connection this subscriber joins — the endpoint's
+   * own fence: the URL carries it and the host resolves every watch
+   * spelling against that session's cwd chain. `undefined` unsubscribes
+   * (no socket of any session is held for the consumer).
+   */
+  sessionId: string | undefined
   /**
    * Worktrees whose changes invalidate. An empty list unsubscribes (no
    * socket at all when no subscriber remains) — pass `[]` while hidden to
@@ -255,20 +285,21 @@ export interface GitWatchOptions {
    */
   onInvalidate: (worktree: string) => void
   /**
-   * The shared socket re-opened after at least one failed attempt — the
-   * FIRST open never fires this. Every frame the outage swallowed is
+   * The session's socket re-opened after at least one failed attempt —
+   * the FIRST open never fires this. Every frame the outage swallowed is
    * gone, so the consumer re-pulls instead of waiting for the next notice.
    */
   onReconnect?: () => void
 }
 
 /**
- * Follow the host's `git` invalidations for the given worktrees on the ONE
- * shared push socket.
- * @param options - the watched paths and the invalidation/reconnect callbacks.
+ * Follow the host's `git` invalidations for the given worktrees on the
+ * session's ONE push socket.
+ * @param options - the session, the watched paths and the
+ * invalidation/reconnect callbacks.
  */
 export function useGitWatch(options: GitWatchOptions): void {
-  const { worktrees } = options
+  const { sessionId, worktrees } = options
   // The path list is a fresh array on every render, so neither the
   // subscription effect nor the membership effect may depend on its
   // identity. The CONTENT key (NUL-joined — no path can contain one) is
@@ -284,11 +315,11 @@ export function useGitWatch(options: GitWatchOptions): void {
   /** The subscriber this hook owns, while it is joined. */
   const subscriberRef = useRef<GitSubscriber | undefined>(undefined)
   /** Stable dependency: join/leave only when it gains or loses every path. */
-  const subscribed = setKey !== ''
+  const subscribed = sessionId !== undefined && setKey !== ''
 
   useEffect(() => {
-    if (!subscribed) return
-    const currentHub = ensureHub()
+    if (!subscribed || sessionId === undefined) return
+    const currentHub = ensureHub(sessionId)
     const subscriber: GitSubscriber = {
       worktrees: new Set(wantedRef.current),
       onGit: (worktree: string) => { invalidateRef.current(worktree) },
@@ -300,12 +331,15 @@ export function useGitWatch(options: GitWatchOptions): void {
     return () => {
       subscriberRef.current = undefined
       currentHub.subscribers.delete(subscriber)
-      if (currentHub.subscribers.size === 0 && hub === currentHub) {
-        hub = undefined
+      if (currentHub.subscribers.size === 0 && hubs.get(sessionId) === currentHub) {
+        hubs.delete(sessionId)
         currentHub.close()
       }
     }
-  }, [subscribed])
+    // The session is part of the connection's identity: a session switch
+    // tears the OLD session's subscription down (possibly closing its
+    // socket when this was its last subscriber) and joins the new one's.
+  }, [subscribed, sessionId])
 
   // A membership change on the SAME socket only swaps the set and re-sends
   // the watch frame (a newly created linked worktree joins the set once the
@@ -316,8 +350,9 @@ export function useGitWatch(options: GitWatchOptions): void {
     const subscriber = subscriberRef.current
     if (subscriber === undefined) return
     subscriber.worktrees = new Set(wanted)
+    const hub = sessionId === undefined ? undefined : hubs.get(sessionId)
     hub?.reconcile()
-  }, [setKey, wanted])
+  }, [setKey, wanted, sessionId])
 }
 
 /** An imperative subscription (the status store's slot lifecycle). */
@@ -331,13 +366,16 @@ export interface GitWatchHandle {
 /**
  * Follow the host's `git` invalidations without a React lifecycle — the
  * shared status store's slots retain/release outside any component.
+ * @param sessionId - the session whose connection the subscription joins
+ *   (the endpoint's fence; watch spellings resolve against its cwd chain).
  * @param worktrees - the worktrees to watch (empty: nothing is joined
- *  until {@linkcode GitWatchHandle.setWorktrees} names one).
+ *   until {@linkcode GitWatchHandle.setWorktrees} names one).
  * @param onInvalidate - one watched worktree moved; re-pull once.
- * @param onReconnect - the shared socket re-opened after a drop; catch up.
+ * @param onReconnect - the session's socket re-opened after a drop; catch up.
  * @returns the subscription handle (close it with the slot's release).
  */
 export function subscribeGitWatch(
+  sessionId: string,
   worktrees: readonly string[],
   onInvalidate: (worktree: string) => void,
   onReconnect?: () => void,
@@ -349,20 +387,20 @@ export function subscribeGitWatch(
   }
   let joined = false
   /** Join lazily and leave on empty: an empty set must neither open nor
-   *  hold the shared socket (the hook's `subscribed` flag, imperatively). */
+   * hold the session's socket (the hook's `subscribed` flag, imperatively). */
   const sync = (): void => {
     if (joined) {
       if (subscriber.worktrees.size === 0) {
         joined = false
-        leaveGitHub(subscriber)
+        leaveGitHub(sessionId, subscriber)
         return
       }
-      hub?.reconcile()
+      hubs.get(sessionId)?.reconcile()
       return
     }
     if (subscriber.worktrees.size === 0) return
     joined = true
-    joinGitHub(subscriber)
+    joinGitHub(sessionId, subscriber)
   }
   sync()
   return {
@@ -373,7 +411,7 @@ export function subscribeGitWatch(
     close: () => {
       if (!joined) return
       joined = false
-      leaveGitHub(subscriber)
+      leaveGitHub(sessionId, subscriber)
     },
   }
 }

@@ -196,6 +196,7 @@ export const RoundDiffLens = forwardRef<LensControl, RoundDiffLensProps>(functio
   // the agent made in a terminal included); one one-shot reload per notice,
   // and one catch-up per reconnect. No timer drives any fetch here.
   useGitWatch({
+    sessionId: scopeSessionId,
     worktrees: visible ? watchRoots : [],
     onInvalidate: () => { void load(new AbortController().signal) },
     onReconnect: () => { void load(new AbortController().signal) },

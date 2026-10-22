@@ -798,9 +798,10 @@ export const GitLens = forwardRef<LensControl, GitLensProps>(function GitLens(pr
   // below re-lists it and the watch set grows with the answer. The selected
   // checkout's status arrives through the store's own subscription.
   useGitWatch({
+    sessionId: scope.sessionId,
     worktrees: visible ? worktrees.map(entry => entry.path) : [],
     onInvalidate: () => { void refresh(true) },
-    // The shared socket re-opened after a drop: every notice the outage
+    // The session's socket re-opened after a drop: every notice the outage
     // swallowed is gone, so this one catch-up runs the FULL refresh.
     onReconnect: () => { void refresh(false) },
   })
