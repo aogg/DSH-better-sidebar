@@ -5,10 +5,10 @@
  * (a 2 s poll inside `changes/GitLens.tsx`) while the file tree had no git
  * data at all — so a VS Code-style "color the changed rows" feature would
  * have added a SECOND poller of the same `git status --porcelain` call. The
- * store keeps one snapshot per `sessionId + cwd + repoRoot + worktree`, one poller per
- * key while at least one VISIBLE consumer is subscribed, and one path index
- * built lazily per snapshot, so the tree (coloring) and the changes page
- * (list) read the same answer.
+ * store keeps one snapshot per `sessionId + cwd + repoRoot + worktree`, one
+ * push subscription per key while at least one VISIBLE consumer is
+ * subscribed, and one path index built lazily per snapshot, so the tree
+ * (coloring) and the changes page (list) read the same answer.
  *
  * The path index is keyed case-insensitively with '/' separators: git reports
  * repo-root-relative POSIX paths while the tree rows carry host paths (a
@@ -20,32 +20,38 @@
  * once and re-run when it settles — never dropped (the old `GitLens.refresh`
  * returned early, so a click during the poll silently did nothing).
  *
- * Cadence: the fetch behind this store is `git status --untracked-files=all`
- * plus an `ls-files --others --ignored --exclude-standard --directory` read
- * (the tree's ⊘ badges) and two `--numstat` diffs, and on a repository
- * holding a large UNIGNORED tree (a nested `node_modules`, a pnpm store) that
- * is megabytes of output and a fifth of a second of CPU. It therefore runs on
- * a SLOW baseline (30 s) and drops a tier whenever the last round trip came
- * back slow — 2x, then 6x (the
- * user's "60 s / 180 s"), and finally no automatic timer at all — so a
- * pathological repository cannot keep a git process running forever. Every
+ * Freshness is EVENT-DRIVEN (the phase-2 polling rule): the store used to
+ * re-fetch on a self-built `setInterval` ladder (30 s baseline, dropping a
+ * tier whenever a round trip came back slow, finally stopping the timer —
+ * a cost guard for pathological repositories). Every slot now subscribes,
+ * for as long as at least one visible consumer holds it, to the ONE shared
+ * `/sidebar/ws/git` push socket (`../git-push.ts`): the host watches the
+ * checkout's files and `.git` metadata and names the worktree when they
+ * move, and the notice re-pulls ONCE — no client timer drives any fetch.
+ * The old slow-tier ladder is subsumed by the notice path itself: the host
+ * debounces bursts and floors them at one notice per 2 s per worktree, so
+ * a continuously-written tree cannot keep a `git status` chain running
+ * back to back, and an idle repository costs nothing at all. The
+ * worktree identity of a slot is the linked checkout the consumer named,
+ * else the checkout root the first answer reports (`snapshot.root`) —
+ * before that first answer there is nothing to refresh anyway. Every
  * consumer keeps the event-driven refreshes (`refresh()`,
- * `invalidateGitStatus`) at full speed, and any fast answer climbs back to the
- * baseline, so the ladder is self-correcting rather than sticky.
+ * `invalidateGitStatus`) and the mount/visibility initial load.
  *
- * Two kinds of consumer exist, and the store separates them: one that WANTS
- * the timer (`poll`, the default — the file tree's ink and the changes page)
- * and one that only wants the answer (`poll: false` — the editor's gutter,
- * which refreshes on mount and after a save). A non-polling consumer can never
- * be the reason a timer runs, and it can never delay one either.
+ * One kind of consumer exists: any visible one holds both the answer and
+ * the subscription. (The old `poll: false` kind — the editor's gutter —
+ * existed so a consumer could never keep a TIMER running; with the timer
+ * gone the distinction is gone with it, and a gutter-held slot only
+ * fetches when something actually changed.)
  *
- * Idle polls are silent: a fetch that returns the same status notifies nobody.
- * Bumping the version on every tick re-rendered every consumer — the file
- * tree's rows included — once per cadence for no reason, which is what the
- * snapshot identity check above exists to prevent.
+ * Idle notices are silent: a fetch that returns the same status notifies
+ * nobody. Bumping the version on every answer re-rendered every consumer
+ * — the file tree's rows included — once per change for no reason, which
+ * is what the snapshot identity check below exists to prevent.
  */
 import { useCallback, useEffect, useSyncExternalStore } from 'react'
 import { api, type GitLineCounts, type GitStatusResult, type SessionScope } from '../api.ts'
+import { subscribeGitWatch, type GitWatchHandle } from '../git-push.ts'
 
 /** The semantic class of one changed path (drives the row's ink). */
 export type GitTone =
@@ -255,46 +261,17 @@ interface Slot {
   generation: number
   running: boolean
   pending: boolean
-  /** Consumers that want the ANSWER (any `poll` value). */
+  /** Consumers that want the ANSWER (each visible consumer holds one). */
   visible: number
-  /** Consumers that want the automatic TIMER (`poll: true`). */
-  pollers: number
-  /** The base cadence a polling consumer asked for (30 s by default). */
-  pollMs: number
-  /** Which slow tier the last round trip landed in (0 = the baseline). */
-  tier: number
-  timer: number | undefined
+  /** The push subscription while at least one consumer holds the slot. */
+  watch: GitWatchHandle | undefined
   listeners: Set<() => void>
   index: Index | null
   /** The snapshot the current index was built from (identity compare). */
   indexSource: GitStatusResult | null
 }
 
-/**
- * The baseline cadence of an automatic poll. Deliberately slow: one fetch is a
- * full `git status --untracked-files=all` (plus two `--numstat` diffs), and the
- * ink it drives is decoration — the file tree's own listing comes from
- * `fs.trees` and never waits for git. Every user-visible git action
- * (stage / commit / discard, a manual refresh, a save in the editor) refreshes
- * through `invalidateGitStatus` / `refresh()` immediately, so the cadence only
- * governs how fast an EXTERNAL change shows up.
- */
-const POLL_BASE_MS = 30_000
-
-/** Round trips slower than these drop the slot one tier (measured client-side,
- *  so it covers both git's work and the transport). */
-const SLOW_TIERS_MS = [750, 2_000, 5_000]
-
-/** The interval factor of each tier: 30 s, 60 s, 180 s, then no timer at all. */
-const TIER_FACTORS: readonly (number | null)[] = [1, 2, 6, null]
-
 const slots = new Map<string, Slot>()
-
-/** The automatic cadence of one slot; `null` = no timer (tier 3). */
-function intervalOf(slot: Slot): number | null {
-  const factor = TIER_FACTORS[slot.tier] ?? null
-  return factor === null ? null : slot.pollMs * factor
-}
 
 function slotOf(scope: SessionScope, worktree: string | undefined): Slot {
   const { sessionId, cwd, repoRoot } = scope
@@ -304,8 +281,7 @@ function slotOf(scope: SessionScope, worktree: string | undefined): Slot {
   const slot: Slot = {
     key, sessionId, cwd, repoRoot, worktree,
     snapshot: null, loading: false, error: false, version: 0, generation: 0,
-    running: false, pending: false, visible: 0, pollers: 0,
-    pollMs: POLL_BASE_MS, tier: 0, timer: undefined,
+    running: false, pending: false, visible: 0, watch: undefined,
     listeners: new Set(),
     index: null, indexSource: null,
   }
@@ -316,19 +292,6 @@ function slotOf(scope: SessionScope, worktree: string | undefined): Slot {
 function notify(slot: Slot): void {
   slot.version += 1
   for (const listener of slot.listeners) listener()
-}
-
-/**
- * Move the slot to the tier the last round trip belongs in and re-arm the
- * timer when that changed. The tier is a pure function of the most recent
- * measurement, so a repository that recovers climbs straight back to the
- * baseline — no streak counters, no stuck ladder.
- */
-function noteFetchDuration(slot: Slot, durationMs: number): void {
-  const tier = SLOW_TIERS_MS.filter(threshold => durationMs >= threshold).length
-  if (tier === slot.tier) return
-  slot.tier = tier
-  reschedule(slot)
 }
 
 /** Fetch one snapshot; a concurrent call just marks the slot dirty. */
@@ -342,22 +305,21 @@ function fetchSlot(slot: Slot): void {
   const wasLoading = slot.loading
   slot.loading = slot.snapshot === null
   if (slot.loading !== wasLoading) notify(slot)
-  // Whether this fetch changed anything a consumer can SEE. An idle poll that
-  // returns the same status must stay silent: the version counter is the
-  // `useSyncExternalStore` snapshot, so notifying re-renders every consumer —
-  // the changes list and every rendered file-tree row with it — once per
-  // cadence for nothing. The snapshot identity below is preserved for exactly
-  // this reason; the notification has to honour it too.
+  // Whether this fetch changed anything a consumer can SEE. An idle notice
+  // that returns the same status must stay silent: the version counter is
+  // the `useSyncExternalStore` snapshot, so notifying re-renders every
+  // consumer — the changes list and every rendered file-tree row with it —
+  // once per change for nothing. The snapshot identity below is preserved
+  // for exactly this reason; the notification has to honour it too.
   let changed = false
-  const startedAt = Date.now()
   const scope: SessionScope = { sessionId: slot.sessionId, cwd: slot.cwd, repoRoot: slot.repoRoot }
   api.gitStatus(scope, slot.worktree)
     .then((snapshot) => {
       if (generation !== slot.generation) return
-      // Idle polls return the same answer as a NEW object. Keeping the
+      // Idle notices return the same answer as a NEW object. Keeping the
       // previous identity when nothing changed is what lets every downstream
       // memo (the changes tree, the file tree's row model, the icon index)
-      // hold across ticks.
+      // hold across refreshes.
       if (slot.snapshot !== null && sameStatus(slot.snapshot, snapshot)) {
         if (slot.error) { slot.error = false; changed = true }
         return
@@ -365,6 +327,10 @@ function fetchSlot(slot: Slot): void {
       slot.snapshot = snapshot
       slot.error = false
       changed = true
+      // The first answer names the checkout this slot describes — exactly
+      // the worktree identity the push subscription keys on. Before it,
+      // only the consumer-named linked checkout could be subscribed.
+      ensureSlotWatch(slot)
     })
     .catch(() => {
       if (generation !== slot.generation) return
@@ -376,7 +342,6 @@ function fetchSlot(slot: Slot): void {
       const stillLoading = slot.loading
       slot.loading = false
       if (changed || stillLoading) notify(slot)
-      noteFetchDuration(slot, Date.now() - startedAt)
       if (slot.pending) {
         slot.pending = false
         fetchSlot(slot)
@@ -384,48 +349,49 @@ function fetchSlot(slot: Slot): void {
     })
 }
 
-function startTimer(slot: Slot): void {
-  if (slot.timer !== undefined) return
-  const interval = intervalOf(slot)
-  if (interval === null) return
-  slot.timer = window.setInterval(() => { fetchSlot(slot) }, interval)
-}
-
-function stopTimer(slot: Slot): void {
-  if (slot.timer === undefined) return
-  window.clearInterval(slot.timer)
-  slot.timer = undefined
+/** The worktree identity this slot's answer describes: the linked checkout
+ *  the consumer named, else the checkout root the last answer reported. */
+function watchRootsOf(slot: Slot): string[] {
+  if (slot.worktree !== undefined) return [slot.worktree]
+  const snapshot = slot.snapshot
+  const root = snapshot?.root
+  return snapshot !== null && snapshot.isRepo && typeof root === 'string' && root !== ''
+    ? [root]
+    : []
 }
 
 /**
- * Re-arm the timer after the tier moved. A cadence change means a new handle
- * (the interval is baked into the old one); a slot whose tier 3 stopped the
- * timer stays stopped, and one with no polling consumer is left alone.
+ * Subscribe the slot to the shared git push socket — once it has a worktree
+ * identity and a consumer to refresh. A notice (or the socket's reconnect)
+ * re-pulls ONE snapshot through the coalescing fetch above; the hub filters
+ * frames by the set given here, so the slot only ever hears about ITS
+ * checkout.
  */
-function reschedule(slot: Slot): void {
-  if (slot.pollers === 0) return
-  stopTimer(slot)
-  startTimer(slot)
+function ensureSlotWatch(slot: Slot): void {
+  if (slot.watch !== undefined || slot.visible === 0) return
+  const roots = watchRootsOf(slot)
+  if (roots.length === 0) return
+  const invalidate = (): void => { if (slot.visible > 0) fetchSlot(slot) }
+  slot.watch = subscribeGitWatch(roots, invalidate, invalidate)
 }
 
-function retain(slot: Slot, poll: boolean): void {
+function retain(slot: Slot): void {
   slot.visible += 1
-  if (poll) slot.pollers += 1
-  // The answer is fetched for the FIRST consumer whatever kind it is — a
-  // non-polling consumer still needs one reading, it just must not own a timer.
-  if (slot.visible === 1 && slot.snapshot === null) fetchSlot(slot)
-  if (poll && slot.pollers === 1) startTimer(slot)
+  // The answer is fetched for the FIRST consumer, and the subscription
+  // follows the same edge — the last consumer's release drops both.
+  if (slot.visible === 1) {
+    if (slot.snapshot === null) fetchSlot(slot)
+    ensureSlotWatch(slot)
+  }
 }
 
-function release(slot: Slot, poll: boolean): void {
+function release(slot: Slot): void {
   slot.visible = Math.max(0, slot.visible - 1)
-  if (poll) {
-    slot.pollers = Math.max(0, slot.pollers - 1)
-    if (slot.pollers === 0) stopTimer(slot)
-  }
   if (slot.visible === 0) {
-    stopTimer(slot)
-    slot.pollers = 0
+    if (slot.watch !== undefined) {
+      slot.watch.close()
+      slot.watch = undefined
+    }
     // No consumer left: drop the snapshot so a later mount re-reads the truth
     // instead of coloring rows from a stale answer.
     slot.snapshot = null
@@ -489,17 +455,32 @@ export interface GitStatusView {
 
 /**
  * Subscribe to the shared git status of one session (optionally of one linked
- * worktree). While `visible` is true the consumer holds the answer; while
- * `poll` is also true it holds the automatic timer (at `pollMs`, escalated by
- * the slow tiers). `poll: false` is for a consumer that wants one reading and
- * event-driven refreshes — the editor's gutter — so it can never keep a git
- * process running in the background.
+ * worktree). While `visible` is true the consumer holds the answer AND the
+ * slot's push subscription (the one shared `/sidebar/ws/git` socket): the
+ * first answer is fetched on the first visible consumer, every host notice of
+ * the slot's checkout re-pulls it once, and the last consumer's release drops
+ * both the snapshot and the subscription. No consumer can keep a timer
+ * running, because there is no timer — a held slot only fetches when
+ * something actually changed.
  */
 export function useGitStatus(
   scope: SessionScope,
-  options: { worktree?: string; visible?: boolean; pollMs?: number; poll?: boolean } = {},
+  options: {
+    worktree?: string
+    visible?: boolean
+    /**
+     * @deprecated No-op since the timer ladder was removed (the phase-2
+     *  polling rule): every visible consumer holds the push subscription,
+     *  and the removed `poll: false` kind (the editor's gutter) is subsumed
+     *  by "fetches only when something changed". Kept in the TYPE so the
+     *  not-yet-migrated specs keep typechecking.
+     */
+    poll?: boolean
+    /** @deprecated No-op with the timer gone (see {@link poll}). */
+    pollMs?: number
+  } = {},
 ): GitStatusView {
-  const { worktree, visible = true, pollMs = POLL_BASE_MS, poll = true } = options
+  const { worktree, visible = true } = options
   const slot = slotOf(scope, worktree)
   const subscribe = useCallback((listener: () => void) => {
     slot.listeners.add(listener)
@@ -511,13 +492,10 @@ export function useGitStatus(
   useSyncExternalStore(subscribe, () => slot.version, () => slot.version)
 
   useEffect(() => {
-    // Only a polling consumer states the cadence; a non-polling one must not
-    // overwrite the rhythm the timer is actually running at.
-    if (poll) slot.pollMs = pollMs
     if (!visible) return undefined
-    retain(slot, poll)
-    return () => { release(slot, poll) }
-  }, [slot, visible, pollMs, poll])
+    retain(slot)
+    return () => { release(slot) }
+  }, [slot, visible])
 
   const refresh = useCallback(() => { fetchSlot(slot) }, [slot])
   const statusOf = useCallback(

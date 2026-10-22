@@ -21,7 +21,7 @@ import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo,
 import { IconChevronRightOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { GitLogEntry, GitWorktree, SessionScope } from '../api.ts'
 import { api } from '../api.ts'
-import { usePolling } from '../use-polling.ts'
+import { useGitWatch } from '../git-push.ts'
 import { relativeTime, t } from '../locales.ts'
 import type { SidebarDiffRef } from '../state.ts'
 import { Notice, SectionHeader, StatusBadge } from '../ui/index.ts'
@@ -31,9 +31,6 @@ import css from './changes.module.css'
 
 /** How many commits one fetch asks for: the recent window, not eternity. */
 const ROUND_LOG_COUNT = 50
-
-/** The lens's own cadence (the git log answers "did it land yet"). */
-const ROUND_POLL_MS = 10_000
 
 /** Slack around the approximate round boundary (see the module doc). */
 const ROUND_WINDOW_SLACK_MS = 60_000
@@ -78,6 +75,9 @@ export const RoundCommitsLens = forwardRef<LensControl, RoundCommitsLensProps>(f
   const [loaded, setLoaded] = useState(false)
   const [failed, setFailed] = useState(false)
   const [isRepo, setIsRepo] = useState(true)
+  /** The inventory's checkout paths — the push subscription's watch set
+   *  (content-guarded: an identical answer keeps the array identity). */
+  const [watchRoots, setWatchRoots] = useState<string[]>([])
   /** The commits whose touched-file lists are disclosed (empty = all folded). */
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set())
   /** The recovered file lists for commits the host answered WITHOUT `files`
@@ -103,13 +103,18 @@ export const RoundCommitsLens = forwardRef<LensControl, RoundCommitsLensProps>(f
       ),
     ])
     if (gen !== generation.current || signal.aborted === true) return
+    // The watch set follows the inventory answer: the host names the
+    // session repository's checkouts, the lens re-pulls when one moves.
+    const roots = listed.map(entry => entry.path)
+    setWatchRoots(previous => previous.join('\u0000') === roots.join('\u0000') ? previous : roots)
     setIsRepo(listed.length > 0)
     setEntries(logSettled.view)
     setFailed(!logSettled.ok)
     setLoaded(true)
   }, [gitScope])
 
-  // Scope change: drop every derived surface before the new answers arrive.
+  // Scope change: drop every derived surface before the new answers arrive
+  // (the watch set too — the old scope's checkouts must not steer notices).
   useEffect(() => {
     generation.current += 1
     setEntries([])
@@ -118,6 +123,7 @@ export const RoundCommitsLens = forwardRef<LensControl, RoundCommitsLensProps>(f
     lazyPending.current = new Set()
     setLoaded(false)
     setFailed(false)
+    setWatchRoots([])
   }, [scopeSessionId, scopeCwd])
 
   // Load on mount, on every visibility rise, and whenever the scope changed
@@ -127,10 +133,15 @@ export const RoundCommitsLens = forwardRef<LensControl, RoundCommitsLensProps>(f
     void load(new AbortController().signal)
   }, [visible, load])
 
-  // The lens's own cadence (a stable task identity: usePolling restarts on a
-  // changing task, which would keep resetting the interval).
-  const pollLoad = useCallback((signal: AbortSignal): Promise<void> => load(signal), [load])
-  usePolling(visible, pollLoad, { intervalMs: ROUND_POLL_MS })
+  // The lens's push subscription: the host names the checkout whose git
+  // state moved (the log answers "did it land yet" — a commit the agent ran
+  // in a terminal included); one one-shot reload per notice, and one
+  // catch-up per reconnect. No timer drives any fetch here.
+  useGitWatch({
+    worktrees: visible ? watchRoots : [],
+    onInvalidate: () => { void load(new AbortController().signal) },
+    onReconnect: () => { void load(new AbortController().signal) },
+  })
 
   // The header's refresh action.
   useEffect(() => {

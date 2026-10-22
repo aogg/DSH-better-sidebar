@@ -10,8 +10,9 @@
  *  - ONE git status source, and it is READ-ONLY here: `useGitStatus` (the
  *    plugin's shared store, also behind the file tree's ink) decides WHICH
  *    files changed and whether a file is untracked; this module never starts a
- *    second poller AND never owns the shared one — it subscribes with
- *    `poll: false` and refreshes on its own events (a file open, a save). The
+ *    second fetcher AND never owns the shared one — it holds the store's
+ *    answer and refreshes on its own events (a file open, a save), while the
+ *    store's push subscription covers everything else that moves git. The
  *    line map itself comes from `git diff --no-color` through the existing
  *    unified-diff parser (`diff/rows.ts`), so a line's class is git's own
  *    answer — context rows are never marked.
@@ -327,14 +328,14 @@ export function useEditorGitGutter(options: EditorGitGutterOptions): ReadonlyMap
     [sessionId, cwd, repoRoot],
   )
   const active = enabled && visible
-  // `poll: false` — the gutter reads the shared answer but NEVER owns the
-  // timer. Passing the feature switch as `visible` (what this did before) meant
-  // that opening any file kept a `git status --untracked-files=all` running for
-  // the rest of the page's life, cadence after cadence, while the user was
-  // simply typing — megabytes of output per scan on a repository with an
-  // unignored nested `node_modules` or package-manager store. The gutter is
-  // allowed to lag; the file listing and the rest of the page are not.
-  const status = useGitStatus(scope, { visible: active, poll: false })
+  // The gutter reads the shared answer but never runs a scan of its own: the
+  // store has no timer anymore, and a slot held only by the gutter fetches on
+  // mount and then on the host's git-change notices alone (files or .git
+  // metadata moved) — megabytes of output per scan on a repository with an
+  // unignored nested `node_modules` only when something actually changed.
+  // The gutter is allowed to lag; the file listing and the rest of the page
+  // are not.
+  const status = useGitStatus(scope, { visible: active })
   const entry = active ? status.statusOf(path) : undefined
   const [kinds, setKinds] = useState<ReadonlyMap<number, GitLineKind>>(EMPTY_KINDS)
   const refresh = status.refresh

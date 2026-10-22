@@ -30,7 +30,7 @@ import {
 import type { Context } from '../../context-types.ts'
 import type { GitLogEntry, GitWorktree, SessionScope } from '../api.ts'
 import { api } from '../api.ts'
-import { usePolling } from '../use-polling.ts'
+import { useGitWatch } from '../git-push.ts'
 import { resolveSidebarPath } from '../paths.ts'
 import { t } from '../locales.ts'
 import type { SidebarStore } from '../state.ts'
@@ -47,9 +47,6 @@ import css from './changes.module.css'
 /** How many log commits the baseline scan sees: the recent window, not
  *  eternity (the same fetch shape the commits lens uses). */
 const ROUND_LOG_COUNT = 50
-
-/** The lens's own cadence (the patch follows the moving worktree). */
-const ROUND_DIFF_POLL_MS = 10_000
 
 /** Slack around the approximate round boundary (see the module doc). */
 const ROUND_DIFF_SLACK_MS = 60_000
@@ -94,6 +91,9 @@ export const RoundDiffLens = forwardRef<LensControl, RoundDiffLensProps>(functio
   const [loaded, setLoaded] = useState(false)
   const [failed, setFailed] = useState(false)
   const [isRepo, setIsRepo] = useState(true)
+  /** The inventory's checkout paths — the push subscription's watch set
+   *  (content-guarded: an identical answer keeps the array identity). */
+  const [watchRoots, setWatchRoots] = useState<string[]>([])
   /** The root the patch's repo-relative paths resolve against: the round's
    *  worktree (the inventory's current checkout, else its first entry). */
   const [worktreeRoot, setWorktreeRoot] = useState<string | undefined>(undefined)
@@ -131,6 +131,10 @@ export const RoundDiffLens = forwardRef<LensControl, RoundDiffLensProps>(functio
       ),
     ])
     if (stale()) return
+    // The watch set follows the inventory answer: the host names the
+    // session repository's checkouts, the lens re-pulls when one moves.
+    const roots = listed.map(entry => entry.path)
+    setWatchRoots(previous => previous.join('\u0000') === roots.join('\u0000') ? previous : roots)
     setIsRepo(listed.length > 0)
     // The inventory's current checkout is the root the patch's repo-relative
     // paths open against (GitLens's resolution order, minus the manual
@@ -166,7 +170,8 @@ export const RoundDiffLens = forwardRef<LensControl, RoundDiffLensProps>(functio
     setLoaded(true)
   }, [gitScope, roundStart])
 
-  // Scope change: drop every derived surface before the new answers arrive.
+  // Scope change: drop every derived surface before the new answers arrive
+  // (the watch set too — the old scope's checkouts must not steer notices).
   useEffect(() => {
     generation.current += 1
     setDiff(null)
@@ -176,6 +181,7 @@ export const RoundDiffLens = forwardRef<LensControl, RoundDiffLensProps>(functio
     setWorktreeRoot(undefined)
     setCollapsedDirs(new Set())
     setFoldCommand(undefined)
+    setWatchRoots([])
   }, [scopeSessionId, scopeCwd])
 
   // Load on mount, on every visibility rise, and whenever the scope changed
@@ -185,10 +191,15 @@ export const RoundDiffLens = forwardRef<LensControl, RoundDiffLensProps>(functio
     void load(new AbortController().signal)
   }, [visible, load])
 
-  // The lens's own cadence (a stable task identity: usePolling restarts on a
-  // changing task, which would keep resetting the interval).
-  const pollLoad = useCallback((signal: AbortSignal): Promise<void> => load(signal), [load])
-  usePolling(visible, pollLoad, { intervalMs: ROUND_DIFF_POLL_MS })
+  // The lens's push subscription: the host names the checkout whose git
+  // state moved (the patch follows the moving worktree — an edit or commit
+  // the agent made in a terminal included); one one-shot reload per notice,
+  // and one catch-up per reconnect. No timer drives any fetch here.
+  useGitWatch({
+    worktrees: visible ? watchRoots : [],
+    onInvalidate: () => { void load(new AbortController().signal) },
+    onReconnect: () => { void load(new AbortController().signal) },
+  })
 
   // The header's refresh action.
   useEffect(() => {

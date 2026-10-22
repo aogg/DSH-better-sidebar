@@ -45,6 +45,7 @@ import { decodeHtmlUrl } from './html-route.ts'
 import { isTrustedApiRequest } from './trust-fence.ts'
 import { registerBundleRoute } from './bundle-route.ts'
 import { createDirectoryWatchers, type DirectoryWatchers } from './fs-watch.ts'
+import { createGitWatchHub } from './git-push.ts'
 import { createSidechatPushHub } from './sidechat-push.ts'
 import { createSessionPushHub } from './session-push.ts'
 import { launchExternal } from './open-external.ts'
@@ -2139,6 +2140,45 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
     },
   }), 'dsh-better-sidebar: file-tree watch WebSocket')
 
+  // ── Git change push WebSocket ─────────────────────────────────────────
+  // The git-domain surfaces (the shared status store's ink, the changes
+  // tab's worktree inventory / branches / history, the round lenses' log
+  // and range diff) used to advance on client-side `usePolling` timers.
+  // This socket replaces them with the fs-watch model: the host watches
+  // each subscribed worktree's files AND its git metadata (HEAD / index /
+  // refs / logs / linked-worktree admin dirs — every branch switch,
+  // commit, stage and `git worktree add` lands there) and pushes one
+  // debounced, data-free invalidation naming the checkout; the client
+  // re-pulls the affected api one-shot. No server timer ever runs git,
+  // and the client has no polling fallback — a dropped socket is
+  // answered with reconnects and one catch-up pull.
+  const gitWss = new WebSocketServer({ noServer: true })
+  const gitPush = createGitWatchHub((message, error) => {
+    ctx.logger.warn(`dsh-better-sidebar: ${message}`)
+    if (error !== undefined) ctx.logger.warn(error)
+  })
+  ctx.effect(() => () => { gitPush.dispose() }, 'dsh-better-sidebar: git push hub')
+  ctx.effect(() => ctx.webServer.registerUpgrade({
+    path: '/sidebar/ws/git',
+    handler: (req, socket, head) => {
+      if (!fence(req)) {
+        socket.destroy()
+        return
+      }
+      gitWss.handleUpgrade(req as unknown as IncomingMessage, socket as unknown as Duplex, head as Buffer, (ws) => {
+        const url = new URL(req.url ?? '/', 'http://dsh.internal')
+        const sessionId = url.searchParams.get('sessionId')
+        if (sessionId === null) {
+          ws.close(1008, 'sessionId is required')
+          return
+        }
+        // The same cwd chain every git route resolves against, so the
+        // watched worktrees are the ones the git inventory answers with.
+        gitPush.attach(ws, async () => activeWorktreeRootOf(ctx, sessionId, await sessionCwdOf(ctx, sessionId)))
+      })
+    },
+  }), 'dsh-better-sidebar: git push WebSocket')
+
   // ── Side-chat live push WebSocket ──────────────────────────────────────
   // The side-chat transcript polls `sidechat.events`; this socket tells it
   // WHEN to pull instead, so a streaming answer, a just-claimed message and a
@@ -2231,6 +2271,7 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
     agentOpenRegistry.dispose()
     agentOpenWss.close()
     fsWatchWss.close()
+    gitWss.close()
     sidechatWss.close()
     sessionWss.close()
   }, 'dsh-better-sidebar: teardown')

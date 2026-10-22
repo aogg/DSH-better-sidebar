@@ -16,9 +16,9 @@
  *
  * The git status itself is NOT fetched here: it comes from the plugin's one
  * shared store (`ui/git-status.ts`), which the file tree also subscribes to,
- * so both surfaces color/lists the same answer from a single poller. This
- * component owns the checkout-derived surfaces a status call cannot answer
- * (worktree inventory, branch choices, history) and every mutation.
+ * so both surfaces color/lists the same answer from a single subscription.
+ * This component owns the checkout-derived surfaces a status call cannot
+ * answer (worktree inventory, branch choices, history) and every mutation.
  *
  * Two error channels, one each: the commit bar owns its single status line
  * (commit / stage / discard / revert failures), and the lens owns the top
@@ -43,7 +43,7 @@ import type { Context } from '../../context-types.ts'
 import type { GitLineCounts, GitLogEntry, GitStatusEntry, GitStatusResult, GitWorktree, SessionScope } from '../api.ts'
 import { api, SidebarApiError } from '../api.ts'
 import { builtinFileIcon, builtinFolderIcon } from '../file-icons.tsx'
-import { usePolling } from '../use-polling.ts'
+import { useGitWatch } from '../git-push.ts'
 import { baseName, relativeTo } from '../paths.ts'
 import { resolveSidebarPath } from '../paths.ts'
 import { isZh, relativeTime, t } from '../locales.ts'
@@ -180,9 +180,9 @@ function sameNames(current: readonly string[], next: readonly string[]): boolean
 }
 
 /** Whether two inventories answer the same: every row's path, branch, currency
- *  and change count must match. The 30 s poll mints a fresh array each tick —
- *  content equality, not array identity, decides whether the selectors band
- *  re-renders. */
+ *  and change count must match. Every invalidation re-list mints a fresh
+ *  array — content equality, not array identity, decides whether the
+ *  selectors band re-renders. */
 function sameWorktrees(current: readonly GitWorktree[], next: readonly GitWorktree[]): boolean {
   return current.length === next.length && current.every((entry, index) => {
     const other = next[index]!
@@ -190,12 +190,6 @@ function sameWorktrees(current: readonly GitWorktree[], next: readonly GitWorktr
       && entry.current === other.current && entry.changes === other.changes
   })
 }
-
-/** Cadence of the background worktree re-list: the shared status store already
- *  polls the selected checkout's status, so the inventory (a different call)
- *  only needs to notice a linked checkout the agent created mid-session —
- *  within ~30s, without a second git process per status tick. */
-const WORKTREE_POLL_MS = 30_000
 
 /** Commit-box growth contract: one line is 18px with 6px of padding above and
  *  below (mirrored by `changes.module.css`), and it scrolls past six lines. */
@@ -797,10 +791,19 @@ export const GitLens = forwardRef<LensControl, GitLensProps>(function GitLens(pr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathFilter])
 
-  /** The inventory poll: a linked checkout created mid-session shows up
-   *  without a manual refresh (the status poll itself belongs to the store). */
-  const pollInventory = useCallback((signal: AbortSignal): Promise<void> => refresh(true, signal), [refresh])
-  usePolling(visible, pollInventory, { intervalMs: WORKTREE_POLL_MS, mode: 'self-scheduling' })
+  // The inventory's push subscription: the host names the checkout whose git
+  // state moved (files or .git metadata), replacing the old 30 s inventory
+  // poll. A linked checkout the agent creates mid-session lands as a
+  // `.git/worktrees` event on the MAIN checkout's watch — the silent refresh
+  // below re-lists it and the watch set grows with the answer. The selected
+  // checkout's status arrives through the store's own subscription.
+  useGitWatch({
+    worktrees: visible ? worktrees.map(entry => entry.path) : [],
+    onInvalidate: () => { void refresh(true) },
+    // The shared socket re-opened after a drop: every notice the outage
+    // swallowed is gone, so this one catch-up runs the FULL refresh.
+    onReconnect: () => { void refresh(false) },
+  })
 
   /** Run one mutating git action: lock the bar, refresh the shared status and
    *  the derived surfaces on success, and report the failure in the commit
