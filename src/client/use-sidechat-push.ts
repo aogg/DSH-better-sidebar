@@ -12,12 +12,15 @@
  * "this thread's transcript is stale, re-pull `sidechat.events` with your
  * afterSeq". No event body ever crosses this socket, so the existing delta
  * pull stays the single source of transcript data and a dropped socket
- * self-heals through the same pull (plus the slow fallback poll).
+ * self-heals through the same pull: the retries never stop, and the re-open
+ * fires `onReconnect` so the view catches up on the outage — there is no
+ * polling fallback, by design.
  *
  * Lifecycle mirrors use-dir-watch: one socket for the component's lifetime,
  * a full `watch` frame re-announcing the subscription set whenever the id
- * list changes, exponential backoff (1s → 15s) on a drop, and no socket at
- * all while the list is empty.
+ * list changes, exponential backoff (1s → 15s, forever) on a drop — whose
+ * successful exit fires `onReconnect` — and no socket at all while the list
+ * is empty.
  */
 import { useEffect, useMemo, useRef } from 'react'
 import { hostWebSocketUrl } from './host-route-url.ts'
@@ -39,6 +42,13 @@ export interface SidechatPushOptions {
    * @param threadId - the thread the host named, always one of `threadIds`.
    */
   onInvalidate: (threadId: string) => void
+  /**
+   * The socket re-opened after at least one failed attempt — the FIRST open
+   * never fires this. Every frame the outage swallowed is gone, so the view
+   * re-pulls its threads instead of waiting for the next notice. Purely an
+   * event callback: the retry timers stay inside this hook.
+   */
+  onReconnect?: () => void
 }
 
 /** How long to wait before re-opening a dropped socket; failures back off to the cap. */
@@ -47,10 +57,10 @@ const RETRY_MAX_MS = 15_000
 
 /**
  * Follow the host's staleness notices for the given side-chat threads.
- * @param options - the watched ids and the invalidation callback.
+ * @param options - the watched ids and the invalidation/reconnect callbacks.
  */
 export function useSidechatPush(options: SidechatPushOptions): void {
-  const { threadIds, onInvalidate } = options
+  const { threadIds, onInvalidate, onReconnect } = options
   // The id list is a fresh array on every render, so neither the socket effect
   // nor the invalidation callback may depend on its identity. The CONTENT key
   // (NUL-joined — no session id can contain one) is what everything derives
@@ -61,6 +71,8 @@ export function useSidechatPush(options: SidechatPushOptions): void {
   wantedRef.current = wanted
   const invalidateRef = useRef(onInvalidate)
   invalidateRef.current = onInvalidate
+  const reconnectRef = useRef(onReconnect)
+  reconnectRef.current = onReconnect
   /** Set by the socket effect; re-announces the current subscription set. */
   const reconcileRef = useRef<() => void>(() => {})
   /** Stable dependency: re-open the socket only when it gains or loses every id. */
@@ -85,8 +97,13 @@ export function useSidechatPush(options: SidechatPushOptions): void {
       if (closed) return
       socket = new WebSocket(hostWebSocketUrl('sidebar/ws/sidechat').toString())
       socket.onopen = () => {
+        // A re-open after a drop: report the recovery so the view re-pulls
+        // what the outage swallowed. The first successful open is not a
+        // reconnect, so it stays silent.
+        const recovered = failures > 0
         failures = 0
         reconcile()
+        if (recovered) reconnectRef.current?.()
       }
       socket.onmessage = (event) => {
         if (typeof event.data !== 'string') return

@@ -1,8 +1,8 @@
 /**
  * The sidebar's ONE polling loop: every timed client fetch — subagent live
- * previews, side-chat transcript deltas, git status, session ops — funnels
- * here so the cancellation-safety rules are written once instead of four
- * times. The contract every poller gets:
+ * previews, git status, session ops — funnels here so the cancellation-safety
+ * rules are written once instead of four times. The contract every poller
+ * gets:
  *
  * - While `enabled`, the task runs on the chosen cadence; the loop restarts
  *   (and the old one is torn down) whenever `enabled`, the task identity, or

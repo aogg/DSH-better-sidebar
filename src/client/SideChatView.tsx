@@ -26,12 +26,14 @@
  * sidechat-transcript.ts.
  *
  * Freshness and visibility (2026-10-12): the transcript advances on the
- * host's own staleness push (use-sidechat-push.ts) with a slow fallback poll;
- * a just-sent message shows as a local echo until the host reports it in the
- * unclaimed inbox; that inbox renders as pending bubbles with a dequeue
- * button; and EVERY thread function (model route, thread menu, save-as-new-
- * session, archive) lives in the COMPOSER BAR, not a top header — the reader's
- * attention is on the input, and a header's actions went unnoticed.
+ * host's own staleness push (use-sidechat-push.ts) ONLY — a dropped socket
+ * is answered with endless retries and one catch-up pull on its re-open,
+ * never with an HTTP poll; a just-sent message shows as a local echo until
+ * the host reports it in the unclaimed inbox; that inbox renders as pending
+ * bubbles with a dequeue button; and EVERY thread function (model route,
+ * thread menu, save-as-new-session, archive) lives in the COMPOSER BAR, not
+ * a top header — the reader's attention is on the input, and a header's
+ * actions went unnoticed.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
@@ -97,7 +99,6 @@ import {
   type SidechatTranscriptRow,
 } from './sidechat-transcript.ts'
 import { api } from './api.ts'
-import { usePolling } from './use-polling.ts'
 import { useSidechatPush } from './use-sidechat-push.ts'
 import { sidechatWindows } from './sidechat-windows.ts'
 import { markSidechatThreadRead, sidechatReadStore } from './sidechat-unread.ts'
@@ -107,13 +108,6 @@ import type { SessionScope } from './api.ts'
 import type { SidebarTab } from './state.ts'
 import css from './SideChatView.module.css'
 
-/**
- * Fallback poll cadence while the selected thread is running and the tab
- * visible. The push socket is the primary refresh path (see
- * use-sidechat-push.ts); this is the safety net for a socket that cannot be
- * established at all.
- */
-const POLL_MS = 15_000
 /** Coalescing window for push notices: one pull per burst of host frames.
  *  `fetchThread` already aborts its predecessor, so a shorter window would
  *  only turn one burst into a request storm. */
@@ -149,7 +143,7 @@ export function consumeSidechatSeed(): string | undefined {
  *  StrictMode / HMR must not mint two threads for one tab). */
 const inFlightStarts = new Set<string>()
 
-/** Per-thread transcript cache: thread-own events merged by seq (polls ride
+/** Per-thread transcript cache: thread-own events merged by seq (pulls ride
  * the afterSeq delta and never re-download what they already hold). */
 interface ThreadCache {
   entries: SidebarHistoryEntry[]
@@ -679,7 +673,7 @@ export function SideChatView(props: {
   const copiedIdTimerRef = useRef<number | undefined>(undefined)
 
   const cacheRef = useRef<ThreadCache>({ entries: [], live: [], pending: [] })
-  // The previous poll's rows (see the mapping's reuse pass below).
+  // The previous pull's rows (see the mapping's reuse pass below).
   const prevRowsRef = useRef<SidechatTranscriptRow[]>([])
   const controllerRef = useRef<AbortController | null>(null)
   /** The pending push-driven pull (one per burst of host frames). */
@@ -703,8 +697,8 @@ export function SideChatView(props: {
   const running = summary?.running === true
 
   // Connection recovery state (DSH 0.1.2-alpha.2+): drives the disconnect
-  // banner and an immediate catch-up pull when the wire comes back. The poll
-  // loop itself stays silent on wire failures; absent service (older host)
+  // banner and an immediate catch-up pull when the wire comes back. The pulls
+  // themselves stay silent on wire failures; absent service (older host)
   // reads as `undefined` = never show the banner.
   const connectionState = useSyncExternalStore(
     useMemo(() => (callback: () => void) => ctx.connection?.state.subscribe(callback) ?? (() => {}), [ctx]),
@@ -776,8 +770,8 @@ export function SideChatView(props: {
   }, [summary, tab.id, tab.title, ctx, scope.sessionId, floating])
 
   /** One transcript pull: the thread's own events beyond the cached tail
-   *  (first attach = the whole seed-cut slice; polls = afterSeq deltas),
-   *  merged by seq. */
+   *  (first attach = the whole seed-cut slice; later pulls = afterSeq
+   *  deltas), merged by seq. */
   const fetchThread = useCallback(async (childId: string): Promise<void> => {
     controllerRef.current?.abort()
     const controller = new AbortController()
@@ -800,9 +794,9 @@ export function SideChatView(props: {
       }
       setRevision(value => value + 1)
       // A landed pull means the thread advanced AND the reader is attached:
-      // refresh its read watermark (push bursts and polls all come through
-      // here). Marking — a synchronous localStorage write — stays in this
-      // async success path, never in a render pass.
+      // refresh its read watermark (push bursts and catch-up pulls all come
+      // through here). Marking — a synchronous localStorage write — stays in
+      // this async success path, never in a render pass.
       markSidechatThreadRead(childId)
     } catch {
       // Aborted by a newer pull or a wire failure: keep the last rows.
@@ -845,26 +839,16 @@ export function SideChatView(props: {
     }
   }, [threadId, fetchInfo])
 
-  // One transcript pull on every input change (attach, visibility flip,
-  // run-state flip — the last one catches a thread's terminal state once it
-  // stops running).
+  // One transcript + badge pull on every input change (attach, visibility
+  // flip, run-state flip — the last one catches a thread's terminal state,
+  // and its final `info`, once it stops running).
   useEffect(() => {
     if (!visible || threadId === undefined) return
     void fetchThread(threadId)
-    // `running` is not read here, but re-triggering this pull on run-state
-    // flips is load-bearing (see above); the badge fetch rides the ticks.
-  }, [visible, threadId, running, fetchThread])
-
-  // Poll as the FALLBACK: the push socket (below) is the primary refresh
-  // path, this keeps a thread without a usable socket moving. Each pull
-  // self-guards (fetchThread aborts its predecessor; a late settle keeps the
-  // last rows).
-  const pollTick = useCallback(async (): Promise<void> => {
-    if (threadId === undefined) return
-    void fetchThread(threadId)
     void fetchInfo(threadId)
-  }, [threadId, fetchThread, fetchInfo])
-  usePolling(visible && running && threadId !== undefined, pollTick, { intervalMs: POLL_MS })
+    // `running` is not read here, but re-triggering these pulls on run-state
+    // flips is load-bearing (see above).
+  }, [visible, threadId, running, fetchThread, fetchInfo])
 
   // The host's staleness notices for the ONE thread this tab holds: coalesce
   // a burst into a single pull (fetchThread's own abort guard drops the
@@ -877,11 +861,23 @@ export function SideChatView(props: {
       void fetchInfo(childId)
     }, PUSH_DEBOUNCE_MS)
   }, [fetchThread, fetchInfo])
+  // A socket that dropped mid-watch reports its re-open: every frame the
+  // outage swallowed is gone for good, so the bound thread re-pulls at once
+  // instead of waiting for the host's next staleness notice.
+  const handleReconnect = useCallback((): void => {
+    if (threadId === undefined) return
+    void fetchThread(threadId)
+    void fetchInfo(threadId)
+  }, [threadId, fetchThread, fetchInfo])
   const watchedThreads = useMemo(
     () => (threadId === undefined ? [] : [threadId]),
     [threadId],
   )
-  useSidechatPush({ threadIds: watchedThreads, onInvalidate: handleInvalidate })
+  useSidechatPush({
+    threadIds: watchedThreads,
+    onInvalidate: handleInvalidate,
+    onReconnect: handleReconnect,
+  })
 
   // The model catalog is deployment-scoped, so one read per mount serves every
   // switch; a failed read leaves the picker on the inheritance fallback.
@@ -900,8 +896,9 @@ export function SideChatView(props: {
   }, [])
 
   // When the wire recovers (disconnected → connected), pull immediately
-  // instead of waiting for the next poll tick — or, on an idle thread that
-  // stopped polling, forever.
+  // instead of waiting for the host's next staleness push — an idle thread
+  // may never earn one. (The side-chat socket's own drops are covered by its
+  // `onReconnect` above.)
   const prevConnectionRef = useRef(connectionState)
   useEffect(() => {
     const previous = prevConnectionRef.current
@@ -912,7 +909,7 @@ export function SideChatView(props: {
     }
   }, [connectionState, threadId, fetchThread, fetchInfo])
 
-  // The previous poll's rows ride into the mapping so unchanged rows keep
+  // The previous pull's rows ride into the mapping so unchanged rows keep
   // their object identity (see reuseRows): a pull re-renders only the
   // changed tail instead of re-parsing markdown for the whole transcript.
   // The live deltas are appended AFTER the durable events (they are the
