@@ -1,8 +1,9 @@
 /**
- * Component-level regression for the Subagent page live preview polling:
- * one shared `subagents.live` request per refresh, never a per-child
- * `subagents.history` call, and never a second in-flight request while a
- * slow host is still answering.
+ * Component-level regression for the Subagent page live preview refresh: one
+ * shared `subagents.live` request per WS `ops` invalidation of the session
+ * tree (never a timer, never a per-child `subagents.history` call), and a
+ * notice landing while a slow fetch is pending overlaps freely — the answers
+ * are idempotent snapshots, so one fetch per notice is the contract.
  */
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -115,12 +116,45 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.useRealTimers()
+  opsSockets.length = 0
   for (const el of document.querySelectorAll('body > div')) el.remove()
 })
 
+/**
+ * A controllable WebSocket double: the page's live rows ride the shared
+ * session-ops socket (`/sidebar/ws/session`), so the double records the
+ * instance and lets a test deliver the host's `ops` invalidation frames —
+ * the timer-free replacement of the old 3 s poll tick.
+ */
+class OpsSocket {
+  static readonly OPEN = 1
+  readonly sent: string[] = []
+  readyState = 0
+  closed = false
+  onopen: (() => void) | null = null
+  onmessage: ((event: { data: string }) => void) | null = null
+  onclose: (() => void) | null = null
+  constructor(readonly url: string) { opsSockets.push(this) }
+  send(data: string): void { this.sent.push(data) }
+  close(): void { this.closed = true }
+}
+
+/** Every socket double of the current test. */
+const opsSockets: OpsSocket[] = []
+
+/** Deliver one `ops` invalidation frame of `sessionId` to the live socket. */
+function notifyOps(sessionId: string): void {
+  for (const socket of opsSockets) {
+    if (socket.closed || !socket.url.includes('/sidebar/ws/session')) continue
+    if (socket.readyState !== OpsSocket.OPEN) { socket.readyState = OpsSocket.OPEN; socket.onopen?.() }
+    socket.onmessage?.({ data: JSON.stringify({ kind: 'ops', sessionId, seq: 1 }) })
+  }
+}
+
 describe('SubagentView live polling', () => {
-  it('sends one subagents.live per poll and never calls per-child history', async () => {
+  it('sends one subagents.live per invalidation notice and never calls per-child history', async () => {
     vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', OpsSocket)
     const historySpy = vi.fn()
     const liveCalls: string[] = []
     vi.stubGlobal('fetch', async (url: string | URL | Request, init?: RequestInit) => {
@@ -145,7 +179,7 @@ describe('SubagentView live polling', () => {
     const { container, unmount } = renderRoot(
       createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(store, historySpy) }),
     )
-    // Initial load plus the first scheduled tick.
+    // The mount catch-up (the old poller's immediate first tick).
     await act(async () => { await Promise.resolve() })
     expect(liveCalls).toEqual(['root'])
     expect(historySpy).not.toHaveBeenCalled()
@@ -155,46 +189,68 @@ describe('SubagentView live polling', () => {
     expect(bar).not.toBeNull()
     expect(bar?.textContent).toBeTruthy()
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
+    // The cadence is gone with the poller: no timer drives a second fetch.
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+    expect(liveCalls).toEqual(['root'])
+
+    // Any session of the watched tree invalidates: one frame, one re-pull of
+    // the ROOT's whole live map (children write in their own logs).
+    notifyOps('a')
+    await act(async () => { await Promise.resolve() })
     expect(liveCalls).toEqual(['root', 'root'])
+    notifyOps('root')
+    await act(async () => { await Promise.resolve() })
+    expect(liveCalls).toEqual(['root', 'root', 'root'])
     expect(historySpy).not.toHaveBeenCalled()
     unmount()
   })
 
-  it('never starts a second request while one is in flight', async () => {
+  it('overlaps freely while a slow fetch is in flight: one fetch per notice, every answer lands', async () => {
     vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', OpsSocket)
     const historySpy = vi.fn()
     const liveCalls: string[] = []
-    let resolveFirst: ((response: Response) => void) | undefined
+    const pending: Array<(response: Response) => void> = []
     vi.stubGlobal('fetch', (url: string | URL | Request, init?: RequestInit) => {
       const method = String(url).split('/').pop()
       if (method === 'subagents.live') {
         const body = JSON.parse(String(init?.body)) as { rootSessionId?: string }
         liveCalls.push(body.rootSessionId ?? '')
-        return new Promise<Response>((resolve) => { resolveFirst = resolve })
+        return new Promise<Response>((resolve) => { pending.push(resolve) })
       }
       throw new Error(`unexpected fetch ${String(url)}`)
     })
 
     const store = makeStore(runningSnapshot())
-    const { unmount } = renderRoot(
+    const { container, unmount } = renderRoot(
       createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(store, historySpy) }),
     )
     await act(async () => { await Promise.resolve() })
     expect(liveCalls).toEqual(['root'])
-    expect(resolveFirst).toBeTypeOf('function')
+    expect(pending).toHaveLength(1)
 
-    // While the first request is pending, no timer can fire a second one.
+    // No timer can fire a second fetch — only a notice does.
     await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
     expect(liveCalls).toEqual(['root'])
 
-    // Settle the first request; only then does the next 3s tick fire.
+    // The notice lands while the mount fetch is still pending: the answers
+    // are idempotent snapshots, so an overlapping fetch is the designed
+    // behaviour (one fetch per notice, never a dropped frame).
+    notifyOps('root')
+    await act(async () => { await Promise.resolve() })
+    expect(liveCalls).toEqual(['root', 'root'])
+    expect(pending).toHaveLength(2)
+
+    // Both answers land (the newer map is what stays on screen).
     await act(async () => {
-      resolveFirst?.(jsonResponse({ ok: true, value: { live: { a: { running: true }, b: { running: true } } } }))
+      pending[0]!(jsonResponse({ ok: true, value: { live: { a: { running: true } } } }))
       await Promise.resolve()
     })
-    await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
-    expect(liveCalls).toEqual(['root', 'root'])
+    await act(async () => {
+      pending[1]!(jsonResponse({ ok: true, value: { live: { a: { running: true }, b: { running: true } } } }))
+      await Promise.resolve()
+    })
+    expect(container.querySelector('[data-graph-node="b"]')).not.toBeNull()
     expect(historySpy).not.toHaveBeenCalled()
     unmount()
   })

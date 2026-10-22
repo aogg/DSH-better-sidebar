@@ -1,23 +1,27 @@
 /**
- * The shared git-status store's CADENCE contract.
+ * The shared git-status store's PUSH contract (the phase-2 polling rule: no
+ * timer may drive a fetch — every invalidation arrives on the session's
+ * `/sidebar/ws/git` socket).
  *
  * One fetch here is `git status --untracked-files=all` plus two `--numstat`
- * diffs, so an automatic poll is real work — and it used to run every 2.5 s for
- * as long as any consumer was on screen, notified on every tick whether or not
- * anything had changed. Four behaviours are pinned:
+ * diffs, so a refresh is real work. What the store now guarantees:
  *
- *  - OWNERSHIP: only a `poll: true` consumer starts the timer. A `poll: false`
- *    consumer (the editor's gutter) reads the shared answer and refreshes on
- *    its own events, so it can never keep git running in the background.
- *  - ORDER: a non-polling consumer that arrives FIRST must not stop a polling
- *    consumer that arrives later from starting the timer.
- *  - SILENCE: an idle poll that returns an equal status notifies nobody — the
+ *  - SUBSCRIPTION: the first answer names the checkout (`snapshot.root`),
+ *    and the slot subscribes to its session's git socket with exactly that
+ *    worktree as the watch set. No consumer can keep a timer running,
+ *    because there is no timer — a held slot only fetches when the host
+ *    says something moved (the deprecated `poll`/`pollMs` options are
+ *    accepted no-ops).
+ *  - SHARING: every visible consumer of a key holds the SAME subscription;
+ *    one notice re-pulls the snapshot once, not once per consumer, and the
+ *    last consumer's release closes the socket.
+ *  - SILENCE: a notice that returns an equal status notifies nobody — the
  *    version counter is the `useSyncExternalStore` snapshot, and bumping it
- *    re-rendered every consumer (the file tree's rows included) once per
- *    cadence for nothing.
- *  - THE LADDER: the baseline is 30 s, a slow round trip drops the slot to
- *    60 s then 180 s, and a really slow one stops the automatic timer
- *    altogether; a fast answer climbs straight back to the baseline.
+ *    re-rendered every consumer (the file tree's rows included) for nothing.
+ *  - RECONNECT: the socket's re-open after a drop fires one catch-up pull
+ *    (the outage swallowed notices), and the watch set is re-announced.
+ *  - COALESING: a notice landing while a fetch is in flight queues exactly
+ *    one trailing pull; an error state recovers on the next notice.
  */
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -74,18 +78,73 @@ async function tick(ms: number): Promise<void> {
   await act(async () => { await vi.advanceTimersByTimeAsync(ms) })
 }
 
+/**
+ * A controllable WebSocket double: the store's slot subscribes through
+ * `subscribeGitWatch`, which opens the session's `/sidebar/ws/git` socket —
+ * the double records every instance so a test can open, drop and feed it.
+ */
+class GitSocket {
+  static readonly OPEN = 1
+  readonly sent: string[] = []
+  readyState = 0
+  closed = false
+  onopen: (() => void) | null = null
+  onmessage: ((event: { data: string }) => void) | null = null
+  onclose: (() => void) | null = null
+  constructor(readonly url: string) { gitSockets.push(this) }
+  send(data: string): void { this.sent.push(data) }
+  close(): void { this.closed = true }
+}
+
+/** Every socket double of the current test. */
+const gitSockets: GitSocket[] = []
+
+/** Complete every pending upgrade (the connector answers with its watch set). */
+function openGitSockets(): void {
+  for (const socket of gitSockets) {
+    if (socket.closed || socket.readyState === GitSocket.OPEN) continue
+    socket.readyState = GitSocket.OPEN
+    socket.onopen?.()
+  }
+}
+
+/** Deliver one host `git` frame naming `worktree` to every live socket. */
+async function gitFrame(worktree: string): Promise<void> {
+  openGitSockets()
+  await act(async () => {
+    for (const socket of gitSockets) {
+      if (socket.closed) continue
+      socket.onmessage?.({ data: JSON.stringify({ kind: 'git', worktree }) })
+    }
+  })
+}
+
+/** Tear every open socket down the way a dropped connection does: a dead
+ *  transport can never deliver a frame again. */
+function dropGitSockets(): void {
+  for (const socket of gitSockets) {
+    if (socket.closed || socket.readyState !== GitSocket.OPEN) continue
+    socket.readyState = 3
+    socket.onmessage = null
+    socket.onclose?.()
+  }
+}
+
 let mounted: ReturnType<typeof renderRoot> | null = null
 afterEach(() => {
   mounted?.unmount()
   mounted = null
   latest = null
   gitStatus.mockReset()
+  vi.unstubAllGlobals()
+  gitSockets.length = 0
   vi.useRealTimers()
 })
 
 describe('the shared git status store cadence', () => {
-  it('never starts a timer for a poll:false consumer', async () => {
+  it('never fetches again for a poll:false consumer without a notice', async () => {
     vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', GitSocket)
     gitStatus.mockResolvedValue(REPO)
     const commits: Counter = { value: 0 }
     mounted = renderRoot(createElement(Probe, { scope: scopeFor('poll-off'), poll: false, commits }))
@@ -97,54 +156,76 @@ describe('the shared git status store cadence', () => {
     expect(gitStatus).toHaveBeenCalledTimes(1)
   })
 
-  it('polls a poll:true consumer on the 30 s baseline', async () => {
+  it('subscribes the slot to its session git socket once the first answer names the checkout', async () => {
     vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', GitSocket)
     gitStatus.mockResolvedValue(REPO)
     const commits: Counter = { value: 0 }
     mounted = renderRoot(createElement(Probe, { scope: scopeFor('poll-on'), commits }))
     await tick(0)
     await flush()
     expect(gitStatus).toHaveBeenCalledTimes(1)
-    // Still inside the first interval: the old 2.5 s cadence would already
-    // have fired ten times here.
-    await tick(29_000)
+    // The subscription follows the first answer (it names the checkout the
+    // slot watches): ONE socket for the session, fenced by its sessionId.
+    expect(gitSockets).toHaveLength(1)
+    expect(gitSockets[0]!.url).toContain('/sidebar/ws/git')
+    expect(gitSockets[0]!.url).toContain('sessionId=poll-on')
+    openGitSockets()
+    expect(gitSockets[0]!.sent).toEqual([JSON.stringify({ op: 'watch', worktrees: ['/tmp'] })])
+
+    // The cadence is gone with the poller: no timer re-fetches anything…
+    await tick(120_000)
     expect(gitStatus).toHaveBeenCalledTimes(1)
-    await tick(2_000)
+    // …while a host notice of the checkout re-pulls ONCE.
+    await gitFrame('/tmp')
+    expect(gitStatus).toHaveBeenCalledTimes(2)
+
+    // A notice for a checkout the slot does not watch is filtered by the hub.
+    await gitFrame('/other/worktree')
     expect(gitStatus).toHaveBeenCalledTimes(2)
   })
 
-  it('starts the timer even when the non-polling consumer arrived first', async () => {
+  it('shares one subscription across every visible consumer, whatever order they arrived in', async () => {
     vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', GitSocket)
     gitStatus.mockResolvedValue(REPO)
     const commits: Counter = { value: 0 }
-    const scope = scopeFor('mixed-order')
-    // Both mount in one commit; effects run in tree order, so the non-polling
-    // consumer retains the slot first.
-    const tree = (withPolling: boolean): ReactNode => createElement('div', null,
+    const scope = scopeFor('shared-sub')
+    // Both mount in one commit; effects run in tree order, so the first
+    // consumer retains the slot before the second joins it.
+    const tree = (withSecond: boolean): ReactNode => createElement('div', null,
       createElement(Probe, { scope, poll: false, commits }),
-      withPolling ? createElement(Probe, { scope, poll: true, commits }) : null,
+      withSecond ? createElement(Probe, { scope, poll: true, commits }) : null,
     )
     mounted = renderRoot(tree(true))
     await tick(0)
     await flush()
     expect(gitStatus).toHaveBeenCalledTimes(1)
+    expect(gitSockets).toHaveLength(1)
 
-    // The polling consumer owns the timer...
-    await tick(31_000)
+    // ONE notice re-pulls the shared snapshot once — not once per consumer.
+    await gitFrame('/tmp')
     expect(gitStatus).toHaveBeenCalledTimes(2)
 
-    // ...and when it leaves, the timer goes with it while the non-polling one
-    // keeps its answer.
+    // One consumer leaves: the other still holds the answer AND the socket…
     mounted.rerender(tree(false))
     await flush()
-    const afterLeave = gitStatus.mock.calls.length
-    await tick(120_000)
-    expect(gitStatus).toHaveBeenCalledTimes(afterLeave)
     expect(latest?.snapshot).not.toBeNull()
+    await gitFrame('/tmp')
+    expect(gitStatus).toHaveBeenCalledTimes(3)
+
+    // …and the LAST consumer's release closes the socket with it: a late
+    // notice for the slot's checkout reaches nobody.
+    mounted.unmount()
+    await flush()
+    expect(gitSockets[0]!.closed).toBe(true)
+    await gitFrame('/tmp')
+    expect(gitStatus).toHaveBeenCalledTimes(3)
   })
 
-  it('stays silent when an idle poll returns the same status', async () => {
+  it('stays silent when an idle notice returns the same status', async () => {
     vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', GitSocket)
     gitStatus.mockResolvedValue(REPO)
     const commits: Counter = { value: 0 }
     mounted = renderRoot(createElement(Probe, { scope: scopeFor('idle-silent'), commits }))
@@ -153,83 +234,107 @@ describe('the shared git status store cadence', () => {
     const settled = commits.value
     expect(settled).toBeGreaterThan(0)
 
-    // One full cadence: the poll runs (a NEW object every time), the status is
-    // equal, so no consumer may be told anything. Without the guard this bumps
-    // the version and the probe commits again.
-    await tick(30_000)
+    // One notice runs (a NEW object every time), the status is equal, so no
+    // consumer may be told anything. Without the guard this bumps the
+    // version and the probe commits again.
+    await gitFrame('/tmp')
     await flush()
     expect(gitStatus).toHaveBeenCalledTimes(2)
     expect(commits.value).toBe(settled)
 
     // A real change still lands.
     gitStatus.mockResolvedValue({ ...REPO, entries: [{ path: 'a.ts', xy: ' M' }, { path: 'b.ts', xy: '??' }] })
-    await tick(30_000)
+    await gitFrame('/tmp')
     await flush()
     expect(commits.value).toBeGreaterThan(settled)
   })
 
-  it('drops to 60 s when a round trip is slow, and climbs back when it is fast', async () => {
+  it('re-pulls once when the socket re-opens after a drop (the reconnect catch-up)', async () => {
     vi.useFakeTimers()
-    gitStatus.mockImplementation(() => new Promise((resolve) => {
-      setTimeout(() => { resolve(REPO) }, 1_000)
-    }))
+    vi.stubGlobal('WebSocket', GitSocket)
+    gitStatus.mockResolvedValue(REPO)
     const commits: Counter = { value: 0 }
-    mounted = renderRoot(createElement(Probe, { scope: scopeFor('ladder-down'), commits }))
-    // The first answer takes 1 s of (fake) wall clock: tier 1, i.e. 2x.
-    await tick(1_000)
+    mounted = renderRoot(createElement(Probe, { scope: scopeFor('reconnect'), commits }))
+    await tick(0)
     await flush()
     expect(gitStatus).toHaveBeenCalledTimes(1)
+    openGitSockets()
 
-    // Past the OLD cadence and past the baseline, but inside 60 s: no tick.
-    await tick(30_000)
-    expect(gitStatus).toHaveBeenCalledTimes(1)
-    // Past 60 s from the moment the slow answer landed: one tick.
-    await tick(31_000)
+    // The connection drops; the connector backs off and retries forever.
+    dropGitSockets()
+    await tick(1_000)
+    expect(gitSockets).toHaveLength(2)
+    // The re-open re-announces the watch set…
+    openGitSockets()
+    expect(gitSockets[1]!.sent).toEqual([JSON.stringify({ op: 'watch', worktrees: ['/tmp'] })])
+    // …and fires the catch-up pull: the outage swallowed notices.
+    await flush()
     expect(gitStatus).toHaveBeenCalledTimes(2)
 
-    // A fast answer now resets the ladder to the baseline.
-    gitStatus.mockResolvedValue(REPO)
-    // t=122s: the deferred 60 s tick lands and comes back instantly.
-    await tick(60_000)
-    await flush()
-    const recovered = gitStatus.mock.calls.length
-    expect(recovered).toBeGreaterThan(2)
-    // Inside a 30 s window: nothing yet...
-    await tick(20_000)
-    expect(gitStatus).toHaveBeenCalledTimes(recovered)
-    // ...but 40 s on, the baseline cadence must have fired (a 60 s one would
-    // still be waiting, which is what makes this the ladder-down check).
-    await tick(20_000)
-    expect(gitStatus).toHaveBeenCalledTimes(recovered + 1)
+    // Fresh notices keep arriving through the new socket.
+    await gitFrame('/tmp')
+    expect(gitStatus).toHaveBeenCalledTimes(3)
   })
 
-  it('stops the automatic timer after a very slow round trip, until an event refreshes', async () => {
+  it('queues exactly one trailing pull for a notice landing mid-flight', async () => {
     vi.useFakeTimers()
-    gitStatus.mockImplementation(() => new Promise((resolve) => {
-      setTimeout(() => { resolve(REPO) }, 6_000)
-    }))
+    vi.stubGlobal('WebSocket', GitSocket)
+    // The mount answer lands (it opens the subscription); the manual refresh
+    // that follows is held in flight, and the notice lands while it runs.
+    let release: ((value: GitStatusResult) => void) | undefined
+    gitStatus
+      .mockResolvedValueOnce(REPO)
+      .mockImplementation(() => new Promise<GitStatusResult>(resolve => { release = resolve }))
     const commits: Counter = { value: 0 }
-    mounted = renderRoot(createElement(Probe, { scope: scopeFor('ladder-stop'), commits }))
-    await tick(6_000)
+    mounted = renderRoot(createElement(Probe, { scope: scopeFor('mid-flight'), commits }))
+    await tick(0)
     await flush()
     expect(gitStatus).toHaveBeenCalledTimes(1)
 
-    // Tier 3: no timer at all, so ten minutes of idling cost nothing.
-    await tick(600_000)
+    await act(async () => { latest?.refresh() })
+    expect(gitStatus).toHaveBeenCalledTimes(2)
+
+    // The notice lands while the (slow) refresh is still in flight: it must
+    // neither start a second concurrent fetch nor get lost.
+    await gitFrame('/tmp')
+    expect(gitStatus).toHaveBeenCalledTimes(2)
+
+    await act(async () => { release?.(REPO) })
+    await flush()
+    // The trailing pull ran — exactly one.
+    expect(gitStatus).toHaveBeenCalledTimes(3)
+  })
+
+  it('recovers an error state on the next notice', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', GitSocket)
+    gitStatus
+      .mockResolvedValueOnce(REPO)
+      .mockRejectedValueOnce(new Error('status route down'))
+      .mockResolvedValue({ ...REPO, entries: [{ path: 'a.ts', xy: ' M' }, { path: 'b.ts', xy: '??' }] })
+    const commits: Counter = { value: 0 }
+    mounted = renderRoot(createElement(Probe, { scope: scopeFor('error-recovery'), commits }))
+    await tick(0)
+    await flush()
     expect(gitStatus).toHaveBeenCalledTimes(1)
 
-    // An event-driven refresh still runs — and a fast answer restores polling.
-    gitStatus.mockResolvedValue(REPO)
-    await tick(1_000)
-    await act(async () => { latest?.refresh() })
+    await gitFrame('/tmp')
     await flush()
     expect(gitStatus).toHaveBeenCalledTimes(2)
-    await tick(30_000)
+    expect(latest?.error).toBe(true)
+
+    // The next notice answers again: the error flag clears and the changed
+    // snapshot lands.
+    await gitFrame('/tmp')
+    await flush()
     expect(gitStatus).toHaveBeenCalledTimes(3)
+    expect(latest?.error).toBe(false)
+    expect(latest?.snapshot?.entries).toHaveLength(2)
   })
 
   it('does not fetch at all for a hidden consumer, and starts when it shows', async () => {
     vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', GitSocket)
     gitStatus.mockResolvedValue(REPO)
     const commits: Counter = { value: 0 }
     const scope = scopeFor('visibility')
@@ -251,6 +356,7 @@ describe('the shared git status store ignore index (the ⊘ vocabulary)', () => 
   /** Mount one probe on a snapshot and return its settled view. */
   async function viewOf(id: string, snapshot: GitStatusResult): Promise<GitStatusView> {
     vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', GitSocket)
     gitStatus.mockResolvedValue(snapshot)
     mounted = renderRoot(createElement(Probe, { scope: scopeFor(id), commits: { value: 0 } }))
     await tick(0)
@@ -286,8 +392,9 @@ describe('the shared git status store ignore index (the ⊘ vocabulary)', () => 
     expect(nothing.isIgnored('/tmp/node_modules')).toBe(false)
   })
 
-  it('keeps idle polls silent while the ignore set is equal, and notifies when it moves', async () => {
+  it('keeps idle notices silent while the ignore set is equal, and notifies when it moves', async () => {
     vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', GitSocket)
     const WITH_IGNORE: GitStatusResult = { ...REPO, ignored: ['node_modules/'] }
     gitStatus.mockResolvedValue(WITH_IGNORE)
     const commits: Counter = { value: 0 }
@@ -297,15 +404,15 @@ describe('the shared git status store ignore index (the ⊘ vocabulary)', () => 
     const settled = commits.value
 
     // A NEW object with the SAME ignore set (plus truncation flag): equal,
-    // so the idle poll must not re-render the tree's rows.
+    // so the idle notice must not re-render the tree's rows.
     gitStatus.mockResolvedValue({ ...WITH_IGNORE })
-    await tick(30_000)
+    await gitFrame('/tmp')
     await flush()
     expect(commits.value).toBe(settled)
 
     // A different ignore set is a real answer change — the ⊘ badges move.
     gitStatus.mockResolvedValue({ ...REPO, ignored: [] })
-    await tick(30_000)
+    await gitFrame('/tmp')
     await flush()
     expect(commits.value).toBeGreaterThan(settled)
   })

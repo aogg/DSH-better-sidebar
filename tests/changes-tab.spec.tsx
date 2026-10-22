@@ -2,8 +2,9 @@
  * The unified changes tab shell: the 36px header's lens switcher swaps the
  * Git lens for the session lens, a Git-lens file row opens the shared preview
  * pane (loaded through the mocked git API, rendered by the shared DiffFiles
- * stack), and the session ops ride the mocked `changes.ops` poll — the event
- * poll, the op fold and the badge cache all live in the tab.
+ * stack), and the session ops ride the mocked `changes.ops` fetch — driven by
+ * WS `ops` invalidation frames now, never a timer: the event pull, the op
+ * fold and the badge cache all live in the tab.
  *
  * The copy assertions below pin the zh strings (the test environment's
  * navigator may be a real Node one with an en locale), so a bare substring
@@ -36,9 +37,16 @@ function writeEvents(seq: number, path: string): Array<{ type: string; seq: numb
   ]
 }
 
+/** One STABLE session-list snapshot: the tab resolves its ops watch set (the
+ *  session tree) from the list through useSyncExternalStore, and a fresh
+ *  object per getSnapshot call would loop React's snapshot check into an
+ *  update-depth crash. The tree is empty — the session itself is the set. */
+const sessionsSnapshot = { byId: {} }
+
 function fakeContext(): Context {
   return {
     get: () => undefined,
+    sessions: { list: { subscribe: () => () => {}, getSnapshot: () => sessionsSnapshot } },
   } as unknown as Context
 }
 
@@ -78,6 +86,37 @@ async function flushEffects(): Promise<void> {
   await act(async () => { await Promise.resolve() })
 }
 
+/** A controllable WebSocket double: every push connector the tab mounts
+ *  (the shared session-ops socket, the git lenses' git socket) builds its
+ *  socket through the global, so the double records the instances and lets a
+ *  test deliver host frames the way the host would. */
+class PushSocket {
+  static readonly OPEN = 1
+  readyState = 0
+  closed = false
+  onopen: (() => void) | null = null
+  onmessage: ((event: { data: string }) => void) | null = null
+  onclose: (() => void) | null = null
+  constructor(readonly url: string) { pushSockets.push(this) }
+  send(): void {}
+  close(): void { this.closed = true }
+}
+
+/** Every socket double of the current test. */
+const pushSockets: PushSocket[] = []
+
+/** Deliver one `ops` invalidation frame of `sessionId` on the session socket. */
+async function deliverOps(sessionId: string): Promise<void> {
+  await act(async () => {
+    for (const socket of pushSockets) {
+      if (socket.closed || !socket.url.includes('/sidebar/ws/session')) continue
+      if (socket.readyState !== PushSocket.OPEN) { socket.readyState = 1; socket.onopen?.() }
+      socket.onmessage?.({ data: JSON.stringify({ kind: 'ops', sessionId, seq: 1 }) })
+    }
+    await Promise.resolve()
+  })
+}
+
 /** The session lens folds every file history by default: disclose one group
  *  (whose header carries the path) before its op rows exist in the DOM. */
 async function expandFileGroup(container: HTMLElement, pathPart: string): Promise<void> {
@@ -90,10 +129,13 @@ async function expandFileGroup(container: HTMLElement, pathPart: string): Promis
 
 beforeEach(() => {
   Object.defineProperty(globalThis.navigator, 'language', { value: 'zh-CN', configurable: true })
+  pushSockets.length = 0
+  vi.stubGlobal('WebSocket', PushSocket)
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
   document.body.innerHTML = ''
 })
 
@@ -225,7 +267,7 @@ describe('ChangesTab', () => {
     expect(block!).not.toMatch(/font-size:\s*[\d.]+px/)
   })
 
-  it('folds the polled session events into session-lens rows and the badge cache', async () => {
+  it('folds the session events into session-lens rows and the badge cache', async () => {
     mockGit([])
     const ops = vi.spyOn(api, 'changesOps')
       .mockResolvedValue({ events: [...writeEvents(1, 'src/a.ts'), ...writeEvents(3, 'src/b.ts')], lastSeq: 4 })
@@ -371,6 +413,12 @@ describe('ChangesTab', () => {
     mockGit([])
     vi.spyOn(api, 'changesOps')
       // The call starts running: no result yet, so the write has no payload.
+      // The mount pull AND the session-lens entry catch-up both see this
+      // running state (entering an event-backed lens is itself one pull).
+      .mockResolvedValueOnce({
+        events: [{ type: 'tool/call', seq: 1, time: 1, data: { name: 'write', callId: 'w1', arguments: JSON.stringify({ file_path: 'notes.txt' }) } }],
+        lastSeq: 1,
+      })
       .mockResolvedValueOnce({
         events: [{ type: 'tool/call', seq: 1, time: 1, data: { name: 'write', callId: 'w1', arguments: JSON.stringify({ file_path: 'notes.txt' }) } }],
         lastSeq: 1,
@@ -664,7 +712,7 @@ describe('ChangesTab', () => {
     }
   })
 
-  it('polls the session events while an event-backed lens is on screen only', async () => {
+  it('invalidates the session events while an event-backed lens is on screen only', async () => {
     vi.useFakeTimers()
     mockGit([])
     const ops = vi.spyOn(api, 'changesOps').mockResolvedValue({ events: [], lastSeq: 0 })
@@ -678,22 +726,40 @@ describe('ChangesTab', () => {
       // Opening the tab is one catch-up pull (the badge count follows it).
       expect(ops).toHaveBeenCalledTimes(1)
       await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
-      // The git lens has no use for the session event log: no cadence at all.
+      // The cadence is gone with the poller: no timer drives a second pull…
+      expect(ops).toHaveBeenCalledTimes(1)
+      // …and the git lens holds no ops subscription at all, so a host
+      // invalidation frame of the session is not even heard.
+      await deliverOps('session')
       expect(ops).toHaveBeenCalledTimes(1)
 
       const commitsTab = lensTab(container, t('changesCommitsLensShort'))
       await act(async () => { commitsTab!.click() })
-      await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
-      // The commits lens folds its add evidence from the SAME window: the
-      // 2.5s delta cadence runs for it too.
-      expect(ops.mock.calls.length).toBeGreaterThan(1)
-      const commitsCalls = ops.mock.calls.length
+      await flushEffects()
+      // Entering an event-backed lens is itself one catch-up pull (the old
+      // poll's first tick used to serve this)…
+      expect(ops).toHaveBeenCalledTimes(2)
+      // …and the live subscription answers the host's invalidation frame with
+      // exactly one more delta pull.
+      await deliverOps('session')
+      expect(ops).toHaveBeenCalledTimes(3)
 
       const sessionTab = lensTab(container, t('changesSessionLens'))
       await act(async () => { sessionTab!.click() })
-      await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
-      // On screen: the cadence keeps running.
-      expect(ops.mock.calls.length).toBeGreaterThan(commitsCalls)
+      await flushEffects()
+      // On screen: the switch catch-up pulls, and the subscription stays live.
+      expect(ops).toHaveBeenCalledTimes(4)
+      await deliverOps('session')
+      expect(ops).toHaveBeenCalledTimes(5)
+
+      // Back on the git lens the subscription is dropped again: neither the
+      // switch nor the frame pulls anything (the git lens folds nothing from
+      // the session log).
+      const gitTab = lensTab(container, t('changesGitLens'))
+      await act(async () => { gitTab!.click() })
+      await flushEffects()
+      await deliverOps('session')
+      expect(ops).toHaveBeenCalledTimes(5)
     } finally {
       act(() => { root.unmount() })
       container.remove()
@@ -846,10 +912,10 @@ function chevron(container: HTMLElement, hashFull: string): HTMLButtonElement | 
 /**
  * The tab strip's loading mark (tab-loading.ts): the tab reports itself
  * loading until its FIRST event pull settles — the span in which the page
- * shows nothing but a loading Notice. The steady-state 2.5s poll afterwards
- * is not a load and never reports; a session switch re-arms the report for
- * the fresh session's first pull. The registry is module-level, so these
- * cases read it directly (the strip side is pinned in
+ * shows nothing but a loading Notice. The steady-state invalidation pulls
+ * afterwards are not loads and never report; a session switch re-arms the
+ * report for the fresh session's first pull. The registry is module-level,
+ * so these cases read it directly (the strip side is pinned in
  * tab-bar-loading.spec.tsx).
  */
 describe('ChangesTab tab-loading report', () => {
@@ -892,7 +958,7 @@ describe('ChangesTab tab-loading report', () => {
     }
   })
 
-  it('never reports again once the first pull is in (the 2.5s poll is not a load)', async () => {
+  it('never reports again once the first pull is in (a later invalidation pull is not a load)', async () => {
     mockGit([])
     const pull = vi.spyOn(api, 'changesOps').mockResolvedValue({ events: [], lastSeq: 0 })
     const container = document.createElement('div')

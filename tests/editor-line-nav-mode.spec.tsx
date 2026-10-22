@@ -31,6 +31,9 @@ vi.mock('../src/client/api.ts', () => ({
   api: {
     fsRead: (...args: unknown[]) => fsRead(...args),
     mediaUrl: () => '',
+    // The editor's file-op stream pulls this once per WS invalidation (and
+    // once on leader election); an empty delta keeps the stream quiet here.
+    changesOps: async () => ({ events: [], lastSeq: 0 }),
   },
 }))
 
@@ -69,9 +72,13 @@ function harness(): Harness {
     component: TextEditor,
   })
   store.setSession(SESSION)
+  // One STABLE snapshot: the file-op stream reads the list through
+  // useSyncExternalStore, and a fresh object per getSnapshot call would loop
+  // React's snapshot check into an update-depth crash.
+  const sessionsSnapshot = { byId: { [SESSION]: { cwd: '/tmp' } } }
   const ctx = {
     betterSidebar: service,
-    sessions: { list: { subscribe: () => () => {}, getSnapshot: () => ({ byId: { [SESSION]: { cwd: '/tmp' } } }) } },
+    sessions: { list: { subscribe: () => () => {}, getSnapshot: () => sessionsSnapshot } },
     get: (name: string) => name === 'betterSidebar' ? service : undefined,
   } as unknown as Context
   return {

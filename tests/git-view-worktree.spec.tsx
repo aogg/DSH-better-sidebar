@@ -55,10 +55,53 @@ function logFor(target?: string, index = 0): GitLogEntry[] {
   }]
 }
 
+/** A deferred promise pair (the slow-host doubles below hand answers by hand). */
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolvePromise!: (value: T) => void
   const promise = new Promise<T>((resolve) => { resolvePromise = resolve })
   return { promise, resolve: resolvePromise }
+}
+
+/**
+ * A controllable WebSocket double: the lens's inventory (and the shared
+ * status store) ride the session's `/sidebar/ws/git` push socket, so the
+ * double records the instance and lets a test open it and deliver the
+ * host's `git` frames — the timer-free replacement of the old 30 s
+ * inventory poll.
+ */
+class GitPushSocket {
+  static readonly OPEN = 1
+  readonly sent: string[] = []
+  readyState = 0
+  closed = false
+  onopen: (() => void) | null = null
+  onmessage: ((event: { data: string }) => void) | null = null
+  onclose: (() => void) | null = null
+  constructor(readonly url: string) { gitSockets.push(this) }
+  send(data: string): void { this.sent.push(data) }
+  close(): void { this.closed = true }
+}
+
+/** Every socket double of the current test. */
+const gitSockets: GitPushSocket[] = []
+
+/** Complete every pending git upgrade (the watch set follows). */
+function openGitSockets(): void {
+  for (const socket of gitSockets) {
+    if (socket.closed || !socket.url.includes('/sidebar/ws/git')) continue
+    if (socket.readyState === GitPushSocket.OPEN) continue
+    socket.readyState = GitPushSocket.OPEN
+    socket.onopen?.()
+  }
+}
+
+/** Deliver one host `git` frame naming `worktree` to every live git socket. */
+function gitFrame(worktree: string): void {
+  openGitSockets()
+  for (const socket of gitSockets) {
+    if (socket.closed || !socket.url.includes('/sidebar/ws/git')) continue
+    socket.onmessage?.({ data: JSON.stringify({ kind: 'git', worktree }) })
+  }
 }
 
 async function flushEffects(): Promise<void> {
@@ -100,7 +143,11 @@ function makeRoot(): { container: HTMLDivElement; root: Root } {
   return { container, root: createRoot(container) }
 }
 
-afterEach(() => { vi.restoreAllMocks() })
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+  gitSockets.length = 0
+})
 
 describe('GitLens (changes tab, git lens) linked-worktree consistency', () => {
   it('refreshes status, branches and history together on auto and manual selection', async () => {
@@ -370,8 +417,9 @@ describe('GitLens (changes tab, git lens) linked-worktree consistency', () => {
     }
   })
 
-  it('hands the inventory poll its AbortSignal and stops it when hidden', async () => {
+  it('re-lists the inventory on a git frame and drops the subscription when hidden', async () => {
     vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', GitPushSocket)
     const worktrees = vi.spyOn(api, 'gitWorktrees').mockResolvedValue(inventories)
     vi.spyOn(api, 'gitStatus').mockImplementation(async (_scope, target) => statusFor(target))
     vi.spyOn(api, 'gitBranch').mockImplementation(async (_scope, target) => ({
@@ -388,20 +436,41 @@ describe('GitLens (changes tab, git lens) linked-worktree consistency', () => {
       await flushEffects()
       expect(worktrees).toHaveBeenCalledTimes(1)
 
-      // The 30s inventory cadence fires and carries the poller's signal.
-      await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+      // The inventory's push subscription follows the first listing: the
+      // session's git socket, watching every checkout of the repository.
+      const socket = gitSockets.find(candidate => candidate.url.includes('/sidebar/ws/git'))
+      expect(socket).toBeDefined()
+      expect(socket!.url).toContain('sessionId=session')
+      socket!.readyState = GitPushSocket.OPEN
+      socket!.onopen?.()
+      // The watch set names every checkout of the repository (its order is
+      // not a contract — the SET is).
+      const watch = JSON.parse(socket!.sent[0]!) as { op: string; worktrees: string[] }
+      expect(watch.op).toBe('watch')
+      expect([...watch.worktrees].sort()).toEqual([AGENT, MAIN].sort())
+
+      // A frame naming the MAIN checkout (files or .git metadata moved)
+      // silently re-lists the inventory — a linked checkout the agent
+      // created mid-session shows up without a manual refresh.
+      act(() => { gitFrame(MAIN) })
       await flushEffects()
       expect(worktrees.mock.calls.length).toBe(2)
-      const signal = worktrees.mock.calls[1]![1]
-      expect(signal).toBeInstanceOf(AbortSignal)
 
-      // Hiding the tab tears the poll down and aborts its signal: a slow host
-      // answer can no longer publish state.
+      // A frame for an unwatched checkout is filtered by the hub.
+      act(() => { gitFrame('C:/elsewhere') })
+      await flushEffects()
+      expect(worktrees.mock.calls.length).toBe(2)
+
+      // Hiding the tab parks the lens: the watch set empties, the session's
+      // socket closes with its last subscriber, and no timer-driven fetch
+      // exists to fire while hidden.
       mountGit(root, { visible: false })
       await flushEffects()
-      expect((signal as AbortSignal).aborted).toBe(true)
+      expect(socket!.closed).toBe(true)
       const callsWhileHidden = worktrees.mock.calls.length
       await act(async () => { await vi.advanceTimersByTimeAsync(120_000) })
+      act(() => { gitFrame(MAIN) })
+      await flushEffects()
       expect(worktrees.mock.calls.length).toBe(callsWhileHidden)
     } finally {
       act(() => { root.unmount() })
@@ -766,17 +835,20 @@ describe('GitLens (changes tab, git lens) change tree', () => {
 
     it('republishes the numbers when only the counts moved (same paths, same porcelain)', async () => {
       vi.useFakeTimers()
+      vi.stubGlobal('WebSocket', GitPushSocket)
       const { container, root } = makeRoot()
       try {
         vi.spyOn(api, 'gitWorktrees').mockResolvedValue([{ path: MAIN, branch: 'main', current: true, changes: 1 }])
         // Two answers with the SAME path and the SAME porcelain code: only the
         // line counts moved (more lines appended to an already-modified file).
+        // Both carry the checkout root — the field the store's push
+        // subscription keys its watch set on.
         vi.spyOn(api, 'gitStatus')
           .mockResolvedValueOnce({
-            isRepo: true, branch: 'main', entries: [{ path: 'src/a.ts', xy: ' M', counts: { additions: 1, deletions: 0 } }],
+            isRepo: true, branch: 'main', root: MAIN, entries: [{ path: 'src/a.ts', xy: ' M', counts: { additions: 1, deletions: 0 } }],
           })
           .mockResolvedValue({
-            isRepo: true, branch: 'main', entries: [{ path: 'src/a.ts', xy: ' M', counts: { additions: 7, deletions: 0 } }],
+            isRepo: true, branch: 'main', root: MAIN, entries: [{ path: 'src/a.ts', xy: ' M', counts: { additions: 7, deletions: 0 } }],
           })
         vi.spyOn(api, 'gitBranch').mockResolvedValue({ current: 'main', names: ['main'] })
         vi.spyOn(api, 'gitLog').mockResolvedValue([])
@@ -785,10 +857,12 @@ describe('GitLens (changes tab, git lens) change tree', () => {
         await flushEffects()
         expect(counted(container, '[data-path="src/a.ts"] [data-lines="count"]').added).toBe('1')
 
-        // Past the store's automatic cadence (a 30 s baseline; see
-        // docs/plans/2026-10-13-git-poll-ladder-and-idle-notify.md) — that
-        // tick is what makes the second answer arrive at all.
+        // A host `git` frame of the checkout is what makes the second answer
+        // arrive at all now — the old 30 s cadence is gone with the poller.
+        // (Advancing the clock first proves no timer fetch sneaks in.)
         await act(async () => { await vi.advanceTimersByTimeAsync(31_000) })
+        expect(api.gitStatus).toHaveBeenCalledTimes(1)
+        act(() => { gitFrame(MAIN) })
         await flushEffects()
         // Both caches had to notice: the store's field-by-field snapshot
         // compare AND the lens's content key. Either one ignoring the counts

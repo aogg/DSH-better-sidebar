@@ -69,6 +69,9 @@ vi.mock('../src/client/api.ts', () => ({
     },
     // The shared git-status store polls this; a non-repo answer keeps rows plain.
     gitStatus: async () => ({ isRepo: false, entries: [] }),
+    // The editor's file-op stream pulls this once per WS invalidation (and
+    // once on leader election); an empty delta keeps the stream quiet here.
+    changesOps: async () => ({ events: [], lastSeq: 0 }),
     archiveBuild: async () => ({ id: 'ar-1', entries: 1 }),
     archiveStatus: async () => ({ state: 'ready', bytes: 1 }),
     // The host's fs.read route (a viewer with `fetchStrategy: 'fsRead'`). No
@@ -1135,6 +1138,11 @@ describe('EditorHost native-tab context-menu actions', { timeout: 35_000 }, () =
  * 禁用时整个动作不发生（isTabEnabled 门控，与调用方的子菜单隐藏同形）。
  */
 describe('EditorHost add-to-search redirect', { timeout: 35_000 }, () => {
+  /** One STABLE session-list snapshot: the editor's file-op stream reads the
+   *  list through useSyncExternalStore, and a fresh object per getSnapshot
+   *  call would loop React's snapshot check into an update-depth crash. */
+  const sessionsSnapshot = { byId: { 'editor-home-session': { cwd: '/tmp' } }, current: 'editor-home-session' }
+
   /** The search descriptor the way the builtins mint it: createTab consumes
    *  the REAL one-shot seed, so the store's minted tab carries the chips. */
   function serviceWithSearchTab(store: ReturnType<typeof createSidebarStore>): {
@@ -1258,7 +1266,7 @@ describe('EditorHost add-to-search redirect', { timeout: 35_000 }, () => {
     const ctx = {
       betterSidebar: service,
       get: (name: string) => name === 'betterSidebar' ? service : undefined,
-      sessions: { list: { subscribe: () => () => {}, getSnapshot: () => ({ byId: { 'editor-home-session': { cwd: '/tmp' } }, current: 'editor-home-session' }) } },
+      sessions: { list: { subscribe: () => () => {}, getSnapshot: () => sessionsSnapshot } },
     } as unknown as Context
     const { container, unmount } = await mountWithTree(ctx, store, homeTabOf(store))
     try {
@@ -1288,7 +1296,7 @@ describe('EditorHost add-to-search redirect', { timeout: 35_000 }, () => {
     const ctx = {
       betterSidebar: service,
       get: (name: string) => name === 'betterSidebar' ? service : undefined,
-      sessions: { list: { subscribe: () => () => {}, getSnapshot: () => ({ byId: { 'editor-home-session': { cwd: '/tmp' } }, current: 'editor-home-session' }) } },
+      sessions: { list: { subscribe: () => () => {}, getSnapshot: () => sessionsSnapshot } },
     } as unknown as Context
     const { container, unmount } = await mountWithTree(ctx, store, homeTabOf(store))
     try {
@@ -1317,7 +1325,7 @@ describe('EditorHost add-to-search redirect', { timeout: 35_000 }, () => {
     const ctx = {
       betterSidebar: service,
       get: (name: string) => name === 'betterSidebar' ? service : undefined,
-      sessions: { list: { subscribe: () => () => {}, getSnapshot: () => ({ byId: { 'editor-home-session': { cwd: '/tmp' } }, current: 'editor-home-session' }) } },
+      sessions: { list: { subscribe: () => () => {}, getSnapshot: () => sessionsSnapshot } },
     } as unknown as Context
     service.openTab({
       type: 'editor', title: 'src', path: '/work/src', id: 'editor:/work/src', meta: { dir: true },
@@ -1348,7 +1356,7 @@ describe('EditorHost add-to-search redirect', { timeout: 35_000 }, () => {
     const ctx = {
       betterSidebar: service,
       get: (name: string) => name === 'betterSidebar' ? service : undefined,
-      sessions: { list: { subscribe: () => () => {}, getSnapshot: () => ({ byId: { 'editor-home-session': { cwd: '/tmp' } }, current: 'editor-home-session' }) } },
+      sessions: { list: { subscribe: () => () => {}, getSnapshot: () => sessionsSnapshot } },
     } as unknown as Context
     const { container, unmount } = await mountWithTree(ctx, store, homeTabOf(store))
     try {
@@ -1376,7 +1384,7 @@ describe('EditorHost add-to-search redirect', { timeout: 35_000 }, () => {
     const ctx = {
       betterSidebar: service,
       get: (name: string) => name === 'betterSidebar' ? service : undefined,
-      sessions: { list: { subscribe: () => () => {}, getSnapshot: () => ({ byId: { 'editor-home-session': { cwd: '/tmp' } }, current: 'editor-home-session' }) } },
+      sessions: { list: { subscribe: () => () => {}, getSnapshot: () => sessionsSnapshot } },
     } as unknown as Context
     const { container, unmount } = await mountWithTree(ctx, store, homeTabOf(store))
     try {

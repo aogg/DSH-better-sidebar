@@ -21,7 +21,12 @@
  * (first-window-wins, its own timer map beside cwd's): the reply-settled
  * signal open editor tabs refresh on — filtered by the watch set, never
  * pushed on a (re)subscription, dropped with an un-watch mid-window, and
- * gone once the socket closes or the hub disposes.
+ * gone once the socket closes or the hub disposes. EVERY durable row (any
+ * type) also schedules one coalesced `ops` invalidation 250ms out — the
+ * changes-tab / editor / Tasks re-pull signal — on its OWN timer map beside
+ * cwd's and turn's: first-window-wins, a burst only raises the seq the frame
+ * carries, un-watch drops a pending window, and a (re)subscription pushes
+ * no fabricated notice.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSessionPushHub, type SessionCwdAnswer } from '../src/session-push.ts'
@@ -39,6 +44,8 @@ interface HubFrame {
   cwd?: unknown
   root?: unknown
   parent?: unknown
+  /** The `ops` invalidation's diagnostic payload: the window's newest seq. */
+  seq?: unknown
 }
 
 /** A context exposing just the `on` table the hub subscribes through. */
@@ -113,18 +120,20 @@ describe('session push hub', () => {
     const socket = new FakeSocket()
     watch(hub, socket, ['t1'])
 
-    emit('session/event', { id: 't1' }, { type: 'user/message' })
+    emit('session/event', { id: 't1' }, { type: 'user/message', seq: 5 })
     expect(socket.frames()).toEqual([{ kind: 'phase', sessionId: 't1', blank: false }])
 
     // The blank flip is one-shot: further message rows (the rest of the turn)
     // must not spam the client's entry flip. Each durable assistant/message
     // row rides its own coalesced turn beat (the reply-settled signal); a
-    // user/message carries none.
-    emit('session/event', { id: 't1' }, { type: 'assistant/message' })
-    emit('session/event', { id: 't1' }, { type: 'user/message' })
+    // user/message carries none. Every row joins the ops window armed by the
+    // first one — one invalidation frame for the burst, the max seq aboard.
+    emit('session/event', { id: 't1' }, { type: 'assistant/message', seq: 6 })
+    emit('session/event', { id: 't1' }, { type: 'user/message', seq: 7 })
     vi.advanceTimersByTime(1_000)
     expect(socket.frames()).toEqual([
       { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'ops', sessionId: 't1', seq: 7 },
       { kind: 'turn', sessionId: 't1' },
     ])
     hub.dispose()
@@ -230,29 +239,47 @@ describe('session push hub', () => {
     const socket = new FakeSocket()
     watch(hub, socket, ['t1'])
 
-    emit('session/event', { id: 't1' }, { type: 'tool/call' })
+    emit('session/event', { id: 't1' }, { type: 'tool/call', seq: 1 })
     vi.advanceTimersByTime(249)
     expect(socket.frames()).toEqual([])
     vi.advanceTimersByTime(1)
-    expect(socket.frames()).toEqual([{ kind: 'cwd', sessionId: 't1' }])
+    // Every durable row also arms the ops window; its timer was scheduled
+    // first (the handler invalidates before it notifies cwd), so its frame
+    // leaves the socket first.
+    expect(socket.frames()).toEqual([
+      { kind: 'ops', sessionId: 't1', seq: 1 },
+      { kind: 'cwd', sessionId: 't1' },
+    ])
 
     // A burst within the FIRST trigger's window never postpones it: 20 calls
     // over 190ms, still inside the window armed at t=0.
     for (let index = 0; index < 20; index++) {
-      emit('session/event', { id: 't1' }, { type: 'tool/call' })
+      emit('session/event', { id: 't1' }, { type: 'tool/call', seq: index + 2 })
       vi.advanceTimersByTime(10)
     }
-    expect(socket.frames()).toEqual([{ kind: 'cwd', sessionId: 't1' }])
+    expect(socket.frames()).toEqual([
+      { kind: 'ops', sessionId: 't1', seq: 1 },
+      { kind: 'cwd', sessionId: 't1' },
+    ])
     vi.advanceTimersByTime(60)
-    // The window armed by the FIRST call fires exactly once for the burst.
-    expect(socket.frames()).toEqual([{ kind: 'cwd', sessionId: 't1' }, { kind: 'cwd', sessionId: 't1' }])
+    // The window armed by the FIRST call fires exactly once for the burst —
+    // both schedules, each carrying the burst's newest seq where it has one.
+    expect(socket.frames()).toEqual([
+      { kind: 'ops', sessionId: 't1', seq: 1 },
+      { kind: 'cwd', sessionId: 't1' },
+      { kind: 'ops', sessionId: 't1', seq: 21 },
+      { kind: 'cwd', sessionId: 't1' },
+    ])
 
     // A window that has fired may fire again for the next trigger.
-    emit('session/event', { id: 't1' }, { type: 'tool/call' })
+    emit('session/event', { id: 't1' }, { type: 'tool/call', seq: 22 })
     vi.advanceTimersByTime(250)
     expect(socket.frames()).toEqual([
+      { kind: 'ops', sessionId: 't1', seq: 1 },
       { kind: 'cwd', sessionId: 't1' },
+      { kind: 'ops', sessionId: 't1', seq: 21 },
       { kind: 'cwd', sessionId: 't1' },
+      { kind: 'ops', sessionId: 't1', seq: 22 },
       { kind: 'cwd', sessionId: 't1' },
     ])
     hub.dispose()
@@ -263,17 +290,21 @@ describe('session push hub', () => {
     const hub = createSessionPushHub(ctx)
     const socket = new FakeSocket()
     watch(hub, socket, ['t1', 't2'])
-    emit('session/event', { id: 't1' }, { type: 'tool/call' })
+    emit('session/event', { id: 't1' }, { type: 'tool/call', seq: 1 })
 
     // Re-watch with t2 only BEFORE t1's window fires: the notice goes away
-    // together with the watch entry it was scheduled for.
+    // together with the watch entry it was scheduled for (the ops window
+    // drops with it — an unwatched session hears no late invalidation).
     socket.receive({ op: 'watch', sessionIds: ['t2'] })
     vi.advanceTimersByTime(1_000)
     expect(socket.frames()).toEqual([])
 
-    emit('session/event', { id: 't2' }, { type: 'tool/call' })
+    emit('session/event', { id: 't2' }, { type: 'tool/call', seq: 4 })
     vi.advanceTimersByTime(250)
-    expect(socket.frames()).toEqual([{ kind: 'cwd', sessionId: 't2' }])
+    expect(socket.frames()).toEqual([
+      { kind: 'ops', sessionId: 't2', seq: 4 },
+      { kind: 'cwd', sessionId: 't2' },
+    ])
     hub.dispose()
   })
 
@@ -355,11 +386,12 @@ describe('session push hub with a cwd resolver', () => {
     expect(socket.frames()).toEqual([{ kind: 'cwd', sessionId: 't1', cwd: '/wt-before', root: '/wt-before', parent: null }])
 
     current = '/wt-after'
-    emit('session/event', { id: 't1' }, { type: 'tool/call' })
-    emit('session/event', { id: 't1' }, { type: 'tool/call' })
+    emit('session/event', { id: 't1' }, { type: 'tool/call', seq: 11 })
+    emit('session/event', { id: 't1' }, { type: 'tool/call', seq: 12 })
     await vi.advanceTimersByTimeAsync(250)
     expect(socket.frames()).toEqual([
       { kind: 'cwd', sessionId: 't1', cwd: '/wt-before', root: '/wt-before', parent: null },
+      { kind: 'ops', sessionId: 't1', seq: 12 },
       { kind: 'cwd', sessionId: 't1', cwd: '/wt-after', root: '/wt-after', parent: null },
     ])
     // One resolution per pushed frame (watch + window): no client re-asks.
@@ -381,9 +413,13 @@ describe('session push hub with a cwd resolver', () => {
     expect(socket.frames()).toEqual([{ kind: 'cwd', sessionId: 't1' }])
 
     // Same for a window whose answer fails.
-    emit('session/event', { id: 't1' }, { type: 'tool/call' })
+    emit('session/event', { id: 't1' }, { type: 'tool/call', seq: 3 })
     await vi.advanceTimersByTimeAsync(250)
-    expect(socket.frames()).toEqual([{ kind: 'cwd', sessionId: 't1' }, { kind: 'cwd', sessionId: 't1' }])
+    expect(socket.frames()).toEqual([
+      { kind: 'cwd', sessionId: 't1' },
+      { kind: 'ops', sessionId: 't1', seq: 3 },
+      { kind: 'cwd', sessionId: 't1' },
+    ])
     hub.dispose()
   })
 
@@ -439,13 +475,15 @@ describe('session push hub with a phase resolver', () => {
 
     // The watch answer joined the one-shot set: the message rows that follow
     // must not push the flip a second time. The assistant/message row still
-    // schedules its turn beat (a reply step settled), 400ms on.
-    emit('session/event', { id: 't1' }, { type: 'user/message' })
-    emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+    // schedules its turn beat (a reply step settled), 400ms on — and the
+    // burst's ops window (both rows inside it) fires one invalidation first.
+    emit('session/event', { id: 't1' }, { type: 'user/message', seq: 5 })
+    emit('session/event', { id: 't1' }, { type: 'assistant/message', seq: 6 })
     vi.advanceTimersByTime(1_000)
     expect(socket.frames()).toEqual([
       { kind: 'cwd', sessionId: 't1', cwd: '/wt', root: 'wt', parent: null },
       { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'ops', sessionId: 't1', seq: 6 },
       { kind: 'turn', sessionId: 't1' },
     ])
     expect(resolvePhase).toHaveBeenCalledTimes(1)
@@ -677,15 +715,20 @@ describe('session push hub: turn frames', () => {
     vi.advanceTimersByTime(1_000)
     expect(socket.frames().filter(frame => frame.kind === 'turn')).toEqual([])
 
-    emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+    emit('session/event', { id: 't1' }, { type: 'assistant/message', seq: 3 })
     // The same row is the session's first message, so the one-shot phase
-    // flip leaves immediately; the turn beat rides its own 400ms window.
+    // flip leaves immediately; the turn beat rides its own 400ms window (the
+    // ops invalidation lands between the two, on its own 250ms schedule).
     expect(socket.frames()).toEqual([{ kind: 'phase', sessionId: 't1', blank: false }])
     vi.advanceTimersByTime(399)
-    expect(socket.frames()).toEqual([{ kind: 'phase', sessionId: 't1', blank: false }])
+    expect(socket.frames()).toEqual([
+      { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'ops', sessionId: 't1', seq: 3 },
+    ])
     vi.advanceTimersByTime(1)
     expect(socket.frames()).toEqual([
       { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'ops', sessionId: 't1', seq: 3 },
       { kind: 'turn', sessionId: 't1' },
     ])
     hub.dispose()
@@ -715,27 +758,35 @@ describe('session push hub: turn frames', () => {
 
     // A multi-step turn settles row after row; every row inside the window
     // armed by the FIRST one joins it — one beat, not one per row. The
-    // first row also spends the phase flip (one frame, ever).
+    // first row also spends the phase flip (one frame, ever). The ops
+    // schedule coalesces the same way (its own 250ms window, first-wins).
     for (let index = 0; index < 5; index++) {
-      emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+      emit('session/event', { id: 't1' }, { type: 'assistant/message', seq: index + 1 })
       vi.advanceTimersByTime(70)
     }
-    // 5 rows × 70ms = 350ms: still inside the window armed at t=0.
-    expect(socket.frames()).toEqual([{ kind: 'phase', sessionId: 't1', blank: false }])
+    // 5 rows × 70ms = 350ms: still inside both windows armed at t=0 — the
+    // ops frame fired at 250ms with the four rows it swallowed.
+    expect(socket.frames()).toEqual([
+      { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'ops', sessionId: 't1', seq: 4 },
+    ])
     vi.advanceTimersByTime(50)
     expect(socket.frames()).toEqual([
       { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'ops', sessionId: 't1', seq: 4 },
       { kind: 'turn', sessionId: 't1' },
     ])
 
     // A window that has fired may fire again for the NEXT settled row — each
     // beat lands 400ms after ITS row, so a multi-step turn stays fresh and
     // the last row's beat is the completion signal.
-    emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+    emit('session/event', { id: 't1' }, { type: 'assistant/message', seq: 6 })
     vi.advanceTimersByTime(400)
     expect(socket.frames()).toEqual([
       { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'ops', sessionId: 't1', seq: 4 },
       { kind: 'turn', sessionId: 't1' },
+      { kind: 'ops', sessionId: 't1', seq: 6 },
       { kind: 'turn', sessionId: 't1' },
     ])
     hub.dispose()
@@ -749,9 +800,13 @@ describe('session push hub: turn frames', () => {
     watch(hub, a, ['t1'])
     watch(hub, b, ['t1'])
 
-    emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+    emit('session/event', { id: 't1' }, { type: 'assistant/message', seq: 9 })
     vi.advanceTimersByTime(400)
-    const beat = [{ kind: 'phase', sessionId: 't1', blank: false }, { kind: 'turn', sessionId: 't1' }]
+    const beat = [
+      { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'ops', sessionId: 't1', seq: 9 },
+      { kind: 'turn', sessionId: 't1' },
+    ]
     expect(a.frames()).toEqual(beat)
     expect(b.frames()).toEqual(beat)
     hub.dispose()
@@ -776,10 +831,11 @@ describe('session push hub: turn frames', () => {
     watch(hub, socket, ['t1'])
 
     // A settled row, its beat delivered (and the phase flip with it)…
-    emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+    emit('session/event', { id: 't1' }, { type: 'assistant/message', seq: 2 })
     vi.advanceTimersByTime(400)
     expect(socket.frames()).toEqual([
       { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'ops', sessionId: 't1', seq: 2 },
       { kind: 'turn', sessionId: 't1' },
     ])
 
@@ -791,6 +847,7 @@ describe('session push hub: turn frames', () => {
     vi.advanceTimersByTime(1_000)
     expect(socket.frames()).toEqual([
       { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'ops', sessionId: 't1', seq: 2 },
       { kind: 'turn', sessionId: 't1' },
     ])
     hub.dispose()
@@ -801,22 +858,24 @@ describe('session push hub: turn frames', () => {
     const hub = createSessionPushHub(ctx)
     const socket = new FakeSocket()
     watch(hub, socket, ['t1', 't2'])
-    emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+    emit('session/event', { id: 't1' }, { type: 'assistant/message', seq: 1 })
     // t1's first row also flips the phase; the TURN beat it scheduled…
     expect(socket.frames()).toEqual([{ kind: 'phase', sessionId: 't1', blank: false }])
 
     socket.receive({ op: 'watch', sessionIds: ['t2'] })
     vi.advanceTimersByTime(1_000)
-    // …is gone with the watch entry (the phase frame above is all t1 left).
+    // …is gone with the watch entry (the phase frame above is all t1 left —
+    // the pending ops window dropped with it too).
     expect(socket.frames()).toEqual([{ kind: 'phase', sessionId: 't1', blank: false }])
 
     // The dropped window does not poison the next one: t2's own row beats
     // (and flips t2's phase — its first message).
-    emit('session/event', { id: 't2' }, { type: 'assistant/message' })
+    emit('session/event', { id: 't2' }, { type: 'assistant/message', seq: 4 })
     vi.advanceTimersByTime(400)
     expect(socket.frames()).toEqual([
       { kind: 'phase', sessionId: 't1', blank: false },
       { kind: 'phase', sessionId: 't2', blank: false },
+      { kind: 'ops', sessionId: 't2', seq: 4 },
       { kind: 'turn', sessionId: 't2' },
     ])
     hub.dispose()
@@ -852,22 +911,128 @@ describe('session push hub: turn frames', () => {
     watch(hub, socket, ['t1'])
 
     // Both schedules arm for the same session — separate timer maps, so the
-    // cwd beat at 250ms and the turn beat at 400ms BOTH land. The
+    // ops and cwd beats at 250ms and the turn beat at 400ms ALL land. The
     // assistant/message row also flips the phase on arrival.
-    emit('session/event', { id: 't1' }, { type: 'tool/call' })
-    emit('session/event', { id: 't1' }, { type: 'assistant/message' })
+    emit('session/event', { id: 't1' }, { type: 'tool/call', seq: 8 })
+    emit('session/event', { id: 't1' }, { type: 'assistant/message', seq: 9 })
     expect(socket.frames()).toEqual([{ kind: 'phase', sessionId: 't1', blank: false }])
     vi.advanceTimersByTime(250)
     expect(socket.frames()).toEqual([
       { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'ops', sessionId: 't1', seq: 9 },
       { kind: 'cwd', sessionId: 't1' },
     ])
     vi.advanceTimersByTime(150)
     expect(socket.frames()).toEqual([
       { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'ops', sessionId: 't1', seq: 9 },
       { kind: 'cwd', sessionId: 't1' },
       { kind: 'turn', sessionId: 't1' },
     ])
+    hub.dispose()
+  })
+})
+
+describe('session push hub: ops frames', () => {
+  it('invalidates once per 250ms window for ANY durable row kind, the max seq riding the frame', () => {
+    const { ctx, emit } = fakeCtx()
+    const hub = createSessionPushHub(ctx)
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+
+    // Message rows, tool calls and foreign kinds alike: every consumer folds
+    // its OWN subset of the log, so the hub must not pre-filter. One window
+    // swallows the burst of three rows and leaves ONE frame, newest seq.
+    emit('session/event', { id: 't1' }, { type: 'user/message', seq: 3 })
+    emit('session/event', { id: 't1' }, { type: 'tool/call', seq: 4 })
+    emit('session/event', { id: 't1' }, { type: 'assistant/message', seq: 5 })
+    vi.advanceTimersByTime(249)
+    // The phase flip is synchronous; the coalesced window is not due yet.
+    expect(socket.frames()).toEqual([{ kind: 'phase', sessionId: 't1', blank: false }])
+    vi.advanceTimersByTime(1)
+    expect(socket.frames()).toEqual([
+      { kind: 'phase', sessionId: 't1', blank: false },
+      { kind: 'ops', sessionId: 't1', seq: 5 },
+      { kind: 'cwd', sessionId: 't1' },
+    ])
+    hub.dispose()
+  })
+
+  it('folds a burst into one frame and re-arms for the next row (first window wins)', () => {
+    const { ctx, emit } = fakeCtx()
+    const hub = createSessionPushHub(ctx)
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+
+    // 20 rows over 190ms: all inside the window armed at t=0 — ONE frame
+    // carrying the newest seq, never one per row.
+    for (let index = 0; index < 20; index++) {
+      emit('session/event', { id: 't1' }, { type: 'tool/result', seq: index + 1 })
+      vi.advanceTimersByTime(10)
+    }
+    vi.advanceTimersByTime(60)
+    expect(socket.frames()).toEqual([{ kind: 'ops', sessionId: 't1', seq: 20 }])
+
+    // The window has fired: the next row arms a fresh one.
+    emit('session/event', { id: 't1' }, { type: 'tool/result', seq: 21 })
+    vi.advanceTimersByTime(250)
+    expect(socket.frames()).toEqual([
+      { kind: 'ops', sessionId: 't1', seq: 20 },
+      { kind: 'ops', sessionId: 't1', seq: 21 },
+    ])
+    hub.dispose()
+  })
+
+  it('re-subscribing (the reconnect case) pushes no fabricated ops frame', () => {
+    const { ctx, emit } = fakeCtx()
+    const hub = createSessionPushHub(ctx)
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1'])
+
+    emit('session/event', { id: 't1' }, { type: 'tool/result', seq: 7 })
+    vi.advanceTimersByTime(250)
+    expect(socket.frames()).toEqual([{ kind: 'ops', sessionId: 't1', seq: 7 }])
+
+    // A reconnect re-sends the whole watch set on a fresh socket: it must
+    // not conjure an invalidation — the client catches up through its own
+    // reconnect pull, and a fabricated notice would only duplicate it.
+    socket.receive({ op: 'watch', sessionIds: [] })
+    socket.receive({ op: 'watch', sessionIds: ['t1'] })
+    vi.advanceTimersByTime(1_000)
+    expect(socket.frames()).toEqual([{ kind: 'ops', sessionId: 't1', seq: 7 }])
+    hub.dispose()
+  })
+
+  it('drops a pending ops window when the session is un-watched mid-window', () => {
+    const { ctx, emit } = fakeCtx()
+    const hub = createSessionPushHub(ctx)
+    const socket = new FakeSocket()
+    watch(hub, socket, ['t1', 't2'])
+
+    emit('session/event', { id: 't1' }, { type: 'tool/result', seq: 1 })
+    socket.receive({ op: 'watch', sessionIds: ['t2'] })
+    vi.advanceTimersByTime(1_000)
+    expect(socket.frames()).toEqual([])
+
+    emit('session/event', { id: 't2' }, { type: 'tool/result', seq: 2 })
+    vi.advanceTimersByTime(250)
+    expect(socket.frames()).toEqual([{ kind: 'ops', sessionId: 't2', seq: 2 }])
+    hub.dispose()
+  })
+
+  it('per-socket windows: two watched sockets each get their own invalidation', () => {
+    const { ctx, emit } = fakeCtx()
+    const hub = createSessionPushHub(ctx)
+    const a = new FakeSocket()
+    const b = new FakeSocket()
+    watch(hub, a, ['t1'])
+    watch(hub, b, ['t1'])
+
+    emit('session/event', { id: 't1' }, { type: 'tool/result', seq: 6 })
+    vi.advanceTimersByTime(250)
+    const notice = [{ kind: 'ops', sessionId: 't1', seq: 6 }]
+    expect(a.frames()).toEqual(notice)
+    expect(b.frames()).toEqual(notice)
     hub.dispose()
   })
 })

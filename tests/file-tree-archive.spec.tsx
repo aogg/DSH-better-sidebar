@@ -2,24 +2,28 @@
  * FileTree "zip and download" over the host's ASYNC archive route.
  *
  * The menu row starts a job (`api.archiveBuild(scope, paths, stem)` →
- * `{id, name, entries}`), the tree polls `api.archiveStatus` every 250ms while
- * the host's system `zip`/`tar` packs the selection into a temp file, and a
- * `ready` status clicks a plain `<a download href={archiveDownloadUrl}>` on the
- * route URL, which the browser streams straight to disk. The client names a
- * STEM and uses the FINAL name the host returned — the host appends the
- * extension of the tool it actually has (a tar-only host really does produce a
- * `.tar.gz`), so building the name locally would lie. Deliberately NOT
- * `fetch → blob → objectURL` any more: a Blob holds the whole archive in the
- * tab's memory, which is exactly what the host change removed. There is no
- * per-entry progress either (a child process reports none), so the strip shows
- * the plain `loading` line and nothing else.
+ * `{id, name, entries}`), the job id rides the session's shared `fs-jobs`
+ * push socket (`/sidebar/ws/fs-jobs`) while the host's system `zip`/`tar`
+ * packs the selection into a temp file, and a `ready` frame clicks a plain
+ * `<a download href={archiveDownloadUrl}>` on the route URL, which the
+ * browser streams straight to disk. One one-shot `archiveStatus` fetch at
+ * the start covers a build that settled before the subscription landed; no
+ * timer ever polls. The client names a STEM and uses the FINAL name the host
+ * returned — the host appends the extension of the tool it actually has (a
+ * tar-only host really does produce a `.tar.gz`), so building the name
+ * locally would lie. Deliberately NOT `fetch → blob → objectURL` any more: a
+ * Blob holds the whole archive in the tab's memory, which is exactly what
+ * the host change removed. There is no per-entry progress either (a child
+ * process reports none), so the strip shows the plain `loading` line and
+ * nothing else.
  *
  * Every failure path lands in the error strip with `zipFailed`: a build
- * rejection, a status `error` state, a status rejection. The ONE exception is a
- * build refused with the wire code `unavailable` — neither `zip` nor `tar` is
- * installed — which renders `archiveToolMissing`, the sentence the user can act
- * on, instead of the host's English wire message. A repeated pick while one job
- * runs never starts a second job.
+ * rejection, a status `error` state (frame or one-shot fetch), a status
+ * rejection. The ONE exception is a build refused with the wire code
+ * `unavailable` — neither `zip` nor `tar` is installed — which renders
+ * `archiveToolMissing`, the sentence the user can act on, instead of the
+ * host's English wire message. A repeated pick while one job runs never
+ * starts a second job.
  *
  * Appearance gates stay as they were: ≥2 selected rows archive together, a
  * LONE directory archives its own subtree, a lone FILE shows no archive row
@@ -73,9 +77,6 @@ vi.mock('../src/client/api.ts', () => ({
   SidebarApiError,
   isOutsideWorkspaceMessage: () => false,
 }))
-
-/** The poll cadence the tree uses; advancing less than this must not poll. */
-const POLL_MS = 250
 
 interface Harness {
   container: HTMLDivElement
@@ -156,7 +157,11 @@ async function flush(): Promise<void> {
   })
 }
 
-/** Let the poll timer fire and its promise chain settle. */
+/** The poll cadence the tree USED to run; advancing past it must be a
+ *  no-op now (no timer may drive a status request any more). */
+const POLL_MS = 250
+
+/** Advance the fake clock past the old poll cadence and settle the chain. */
 async function poll(): Promise<void> {
   await act(async () => {
     vi.advanceTimersByTime(POLL_MS)
@@ -164,6 +169,46 @@ async function poll(): Promise<void> {
     await Promise.resolve()
     await Promise.resolve()
   })
+}
+
+/** One archive status frame the host's `fs-jobs` socket pushes. */
+function archiveFrame(id: string, state: 'building' | 'ready' | 'error', bytes = 0, error?: string): void {
+  for (const socket of jobSockets) {
+    if (socket.closed) continue
+    socket.onmessage?.({ data: JSON.stringify({ kind: 'archive', id, state, bytes, ...(error === undefined ? {} : { error }) }) })
+  }
+}
+
+/**
+ * A controllable WebSocket double: the tree's archive strip follows its job
+ * on the session's `fs-jobs` push socket, so the double records every
+ * instance (filtering by URL — the tree also keeps its fs-watch socket) and
+ * lets a test open and feed it exactly like the host would.
+ */
+class JobSocket {
+  static readonly OPEN = 1
+  readonly sent: string[] = []
+  readyState = 0
+  closed = false
+  onopen: (() => void) | null = null
+  onmessage: ((event: { data: string }) => void) | null = null
+  onclose: (() => void) | null = null
+  constructor(readonly url: string) { jobSockets.push(this) }
+  send(data: string): void { this.sent.push(data) }
+  close(): void { this.closed = true }
+}
+
+/** Every socket double of the current test. */
+const jobSockets: JobSocket[] = []
+
+/** Complete every pending fs-jobs upgrade (the watch set follows). */
+function openJobSockets(): void {
+  for (const socket of jobSockets) {
+    if (socket.closed || !socket.url.includes('/sidebar/ws/fs-jobs')) continue
+    if (socket.readyState === JobSocket.OPEN) continue
+    socket.readyState = JobSocket.OPEN
+    socket.onopen?.()
+  }
 }
 
 /** A `ready` status row (`bytes` only — no `done`/`total` any more). */
@@ -180,6 +225,8 @@ const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementati
 
 beforeEach(() => {
   vi.useFakeTimers()
+  vi.stubGlobal('WebSocket', JobSocket)
+  jobSockets.length = 0
   archiveBuild.mockReset()
   archiveBuild.mockResolvedValue({ id: 'job-1', name: 'archive.zip', entries: 2 })
   archiveStatus.mockReset()
@@ -191,17 +238,19 @@ beforeEach(() => {
 afterEach(() => {
   harness.unmount()
   document.body.innerHTML = ''
+  vi.unstubAllGlobals()
   vi.useRealTimers()
 })
 
 describe('FileTree zip and download', () => {
   it('starts a job with a stem, shows the packing line, then downloads the ready archive', async () => {
-    // The first status is held open so the packing phase is observable: the
-    // poller runs its first tick immediately.
+    // The one-shot status read is held open so the packing phase is
+    // observable: it runs as soon as the job starts (a build that settled
+    // before the subscription frame could land is its whole job).
     let releaseStatus: (status: { state: 'building'; bytes: number }) => void = () => {}
     archiveStatus
       .mockImplementationOnce(async () => await new Promise<{ state: 'building'; bytes: number }>(resolve => { releaseStatus = resolve }))
-      .mockResolvedValueOnce(readyStatus())
+      .mockResolvedValue(readyStatus())
     harness = await mountTree()
     click(rowByName(harness.container, 'a.ts'), { ctrlKey: true })
     click(rowByName(harness.container, 'b.ts'), { ctrlKey: true })
@@ -215,22 +264,32 @@ describe('FileTree zip and download', () => {
     expect(archiveBuild).toHaveBeenCalledWith({ sessionId: 's1', cwd: '/tmp' }, ['/tmp/a.ts', '/tmp/b.ts'], 'archive')
     // …the packing line is up while the job runs…
     expect(progressLine(harness.container)?.textContent).toBe(t('loading'))
-    // …a first poll that is still `building` keeps it, with no counts to show…
+    // …and the job id rides the session's fs-jobs socket, watch set and all.
+    openJobSockets()
+    const jobSocket = jobSockets.find(socket => socket.url.includes('/sidebar/ws/fs-jobs'))
+    expect(jobSocket).toBeDefined()
+    expect(jobSocket!.url).toContain('sessionId=s1')
+    expect(jobSocket!.sent).toEqual([JSON.stringify({ op: 'watch', jobs: ['job-1'] })])
+
+    // …a one-shot read that is still `building` keeps the line, with no
+    // counts to show…
     await act(async () => {
       releaseStatus({ state: 'building', bytes: 0 })
       await Promise.resolve()
       await Promise.resolve()
     })
     expect(progressLine(harness.container)?.textContent).toBe(t('loading'))
-
-    // …and the next poll reports ready: the anchor hands the route URL to the
-    // browser (which streams it to disk) and the line clears.
+    // …and advancing the old poll cadence must not fetch again: no timer
+    // drives a status request any more, the READY frame does.
     await poll()
+    expect(archiveStatus).toHaveBeenCalledTimes(1)
+
+    archiveFrame('job-1', 'ready', 128)
     await flush()
     expect(downloads).toEqual(['/sidebar/archive/job-1|archive.zip'])
     expect(progressLine(harness.container)).toBeNull()
-    // The poll carries the session scope: the host requires BOTH keys on
-    // `archive.status`, so a bare `{ id }` is refused with a 400.
+    // The one-shot read carried the session scope: the host requires BOTH
+    // keys on `archive.status`, so a bare `{ id }` is refused with a 400.
     expect(archiveStatus).toHaveBeenCalledWith({ sessionId: 's1', cwd: '/tmp' }, 'job-1')
   })
 
@@ -382,18 +441,21 @@ describe('FileTree zip and download', () => {
     await act(async () => { release({ id: 'job-2', name: 'sub.zip', entries: 1 }) })
     await flush()
     expect(progressLine(harness.container)?.textContent).toBe(t('loading'))
-    await poll()
-    // Still building: the line stays and the guard still holds.
+    // The job rides the fs-jobs socket; a `building` frame keeps the line.
+    openJobSockets()
+    archiveFrame('job-2', 'building')
+    await flush()
     expect(progressLine(harness.container)).not.toBeNull()
     pick()
     await flush()
     expect(archiveBuild).toHaveBeenCalledTimes(1)
 
-    // Finish the job: the download runs, the line clears, the guard releases.
-    archiveStatus.mockResolvedValue(readyStatus())
-    await poll()
+    // Finish the job with a `ready` frame: the download runs, the line
+    // clears, the guard releases.
+    archiveFrame('job-2', 'ready', 128)
     await flush()
     expect(downloads).toEqual(['/sidebar/archive/job-2|sub.zip'])
+    archiveStatus.mockResolvedValue(readyStatus())
     archiveBuild.mockResolvedValue({ id: 'job-3', name: 'sub.zip', entries: 1 })
     pick()
     await flush()

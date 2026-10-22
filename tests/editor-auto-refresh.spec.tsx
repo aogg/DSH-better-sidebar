@@ -5,12 +5,14 @@
  * The signal is the plugin's own `changes.ops` delta stream, so every test
  * drives `api.changesOps` (the host route is not part of this layer) and
  * counts `api.fsRead` — the number IS the "did the preview re-read" evidence.
- * Fake timers drive the shared 2.5s cadence: the tests can therefore also prove
- * the absence of an fsRead poller and that N editor tabs of one session share
- * ONE delta request.
+ * The stream is WS-driven (no timer): a fake WebSocket records the shared
+ * session-push socket and the tests push `ops` invalidation frames through it
+ * — the timer-free replacement of the old 2.5s cadence tick, which lets them
+ * still prove the absence of an fsRead poller and that N editor tabs of one
+ * session share ONE delta request per invalidation.
  */
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createElement, useEffect, useState } from 'react'
 import { act } from 'react-dom/test-utils'
 import { renderRoot, setupReactAct } from './test-utils.ts'
@@ -164,9 +166,14 @@ function harness(sessionId: string): Harness {
     }),
   })
   store.setSession(sessionId)
+  // One STABLE snapshot: the file-op stream resolves its tree watch set from
+  // the list through useSyncExternalStore, and a fresh object per
+  // getSnapshot call would loop React's snapshot check into an update-depth
+  // crash.
+  const sessionsSnapshot = { byId: { [sessionId]: { cwd: '/tmp' } } }
   const ctx = {
     betterSidebar: service,
-    sessions: { list: { subscribe: () => () => {}, getSnapshot: () => ({ byId: { [sessionId]: { cwd: '/tmp' } } }) } },
+    sessions: { list: { subscribe: () => () => {}, getSnapshot: () => sessionsSnapshot } },
     get: (name: string) => name === 'betterSidebar' ? service : undefined,
   } as unknown as Context
   return {
@@ -221,10 +228,49 @@ function type(container: HTMLElement, text: string): void {
   })
 }
 
-/** Advance the shared 2.5s cadence by `ticks` deltas and settle the answers. */
-async function tick(ticks = 1): Promise<void> {
-  for (let index = 0; index < ticks; index += 1) {
-    await act(async () => { await vi.advanceTimersByTimeAsync(2_500) })
+/**
+ * A controllable WebSocket double: the ops stream's shared push socket
+ * (`/sidebar/ws/session`) is created by the first subscriber, so the double
+ * records every instance and lets a test open it and push frames exactly the
+ * way the host would.
+ */
+class FakeWebSocket {
+  static readonly OPEN = 1
+  readonly sent: string[] = []
+  readyState = 0
+  closed = false
+  onopen: (() => void) | null = null
+  onmessage: ((event: { data: string }) => void) | null = null
+  onclose: (() => void) | null = null
+  constructor(readonly url: string) { sockets.push(this) }
+  send(data: string): void { this.sent.push(data) }
+  close(): void { this.closed = true }
+  /** The host accepted the upgrade (the connector answers with its watch set). */
+  open(): void { this.readyState = 1; this.onopen?.() }
+  /** One host frame inbound. */
+  frame(payload: unknown): void { this.onmessage?.({ data: JSON.stringify(payload) }) }
+}
+
+/** Every live socket double of the current test. */
+const sockets: FakeWebSocket[] = []
+
+/**
+ * Deliver `times` `ops` invalidation frames of `sessionId` to every session
+ * push socket — the timer-free replacement of the old 2.5s cadence tick: one
+ * frame drives exactly one one-shot `changes.ops` delta pull per session.
+ */
+async function notifyOps(sessionId: string, times = 1): Promise<void> {
+  for (const socket of sockets) {
+    if (socket.closed || !socket.url.includes('/sidebar/ws/session')) continue
+    if (socket.readyState !== FakeWebSocket.OPEN) socket.open()
+  }
+  for (let index = 0; index < times; index += 1) {
+    await act(async () => {
+      for (const socket of sockets) {
+        if (socket.closed || !socket.url.includes('/sidebar/ws/session')) continue
+        socket.frame({ kind: 'ops', sessionId, seq: 1 })
+      }
+    })
   }
   await settle()
 }
@@ -233,6 +279,8 @@ let contentVersion = 0
 
 beforeEach(() => {
   vi.useFakeTimers()
+  vi.stubGlobal('WebSocket', FakeWebSocket)
+  sockets.length = 0
   contentVersion = 0
   fsRead.mockReset()
   // Every read answers a NEW body: a re-read is visible in the DOM, and a
@@ -242,6 +290,10 @@ beforeEach(() => {
   fsRead.mockImplementation(async () => ({ kind: 'text', content: `body-${++contentVersion}`, size: 1 }))
   changesOps.mockReset()
   changesOps.mockResolvedValue(delta([], 0))
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })
 
 describe('editor preview auto-refresh (#855)', () => {
@@ -254,7 +306,7 @@ describe('editor preview auto-refresh (#855)', () => {
       expect(draftOf(view.container)).toBe('body-1')
 
       changesOps.mockResolvedValue(delta(writePair(11, '/tmp/a.ts'), 12))
-      await tick()
+      await notifyOps('session-a')
 
       expect(reads()).toBe(2)
       expect(draftOf(view.container)).toBe('body-2')
@@ -272,7 +324,7 @@ describe('editor preview auto-refresh (#855)', () => {
       expect(reads()).toBe(1)
 
       changesOps.mockResolvedValue(delta(editPair(11, 'a.ts'), 12))
-      await tick()
+      await notifyOps('session-a-rel')
 
       expect(reads()).toBe(2)
       expect(draftOf(view.container)).toBe('body-2')
@@ -290,7 +342,7 @@ describe('editor preview auto-refresh (#855)', () => {
     const view = mount(ctx, 'session-a-baseline', tabOf('/tmp/a.ts'))
     try {
       await settle()
-      await tick(3)
+      await notifyOps('session-a-baseline', 3)
 
       expect(reads()).toBe(1)
       expect(draftOf(view.container)).toBe('body-1')
@@ -309,7 +361,7 @@ describe('editor preview auto-refresh (#855)', () => {
 
       // A call with no result yet (the file is still being written) ...
       changesOps.mockResolvedValue(delta([writePair(11, '/tmp/a.ts', 'w11')[0]!], 11))
-      await tick(1)
+      await notifyOps('session-a-settle')
       expect(reads()).toBe(1)
 
       // ... and one whose result reported an error (nothing was written).
@@ -322,7 +374,7 @@ describe('editor preview auto-refresh (#855)', () => {
           data: { message: { role: 'tool', source: { kind: 'tool', callId: 'w21' }, isError: true, content: [{ type: 'text', text: 'permission denied' }] } },
         },
       ], 22))
-      await tick(1)
+      await notifyOps('session-a-settle')
       expect(reads()).toBe(1)
 
       // The same call settling cleanly is the write that must refresh.
@@ -332,7 +384,7 @@ describe('editor preview auto-refresh (#855)', () => {
         time: 23,
         data: { message: { role: 'tool', source: { kind: 'tool', callId: 'w21' }, content: [{ type: 'text', text: 'ok' }] } },
       }], 23))
-      await tick(1)
+      await notifyOps('session-a-settle')
       expect(reads()).toBe(2)
       expect(draftOf(view.container)).toBe('body-2')
     } finally {
@@ -349,7 +401,7 @@ describe('editor preview auto-refresh (#855)', () => {
       expect(reads()).toBe(1)
 
       changesOps.mockResolvedValue(delta(writePair(11, '/tmp/b.ts'), 12))
-      await tick(3)
+      await notifyOps('session-b', 3)
 
       expect(reads()).toBe(1)
       expect(draftOf(view.container)).toBe('body-1')
@@ -371,7 +423,7 @@ describe('editor preview auto-refresh (#855)', () => {
       // Only a mutation that lets `kind === 'read'` through the stream's filter
       // can make this reload (see the CHANGELOG's mutation list).
       changesOps.mockResolvedValue(delta(readPair(11, '/tmp/a.ts'), 12))
-      await tick(3)
+      await notifyOps('session-b-read', 3)
 
       expect(reads()).toBe(1)
       expect(draftOf(view.container)).toBe('body-1')
@@ -391,7 +443,7 @@ describe('editor preview auto-refresh (#855)', () => {
       expect(draftOf(view.container)).toBe('my unsaved draft')
 
       changesOps.mockResolvedValue(delta(writePair(11, '/tmp/a.ts'), 12))
-      await tick(2)
+      await notifyOps('session-c', 2)
 
       // The user's input survives: no reload, no remount, no fsRead.
       expect(draftOf(view.container)).toBe('my unsaved draft')
@@ -420,7 +472,8 @@ describe('editor preview auto-refresh (#855)', () => {
       changesOps.mockImplementation(async (scope: { sessionId: string }) => scope.sessionId === 'session-d-a'
         ? delta(writePair(11, '/tmp/b.ts'), 12)
         : delta(writePair(21, '/tmp/a.ts'), 22))
-      await tick(2)
+      await notifyOps('session-d-a')
+      await notifyOps('session-d-b')
 
       expect(readsOf('/tmp/a.ts')).toBe(1)
       expect(readsOf('/tmp/b.ts')).toBe(1)
@@ -432,7 +485,7 @@ describe('editor preview auto-refresh (#855)', () => {
       changesOps.mockImplementation(async (scope: { sessionId: string }) => scope.sessionId === 'session-d-a'
         ? delta(writePair(31, '/tmp/a.ts', 'w31'), 32)
         : delta([], 0))
-      await tick(1)
+      await notifyOps('session-d-a')
 
       expect(readsOf('/tmp/a.ts')).toBe(2)
       expect(readsOf('/tmp/b.ts')).toBe(1)
@@ -451,9 +504,10 @@ describe('editor preview auto-refresh (#855)', () => {
       expect(reads()).toBe(1)
       const pullsAfterMount = changesOps.mock.calls.length
 
-      await tick(4)
+      await notifyOps('session-e', 4)
 
-      // The stream really did tick (so the timer is not simply dead)...
+      // The stream really did pull (so the invalidation path is not simply
+      // dead)...
       expect(changesOps.mock.calls.length).toBeGreaterThan(pullsAfterMount)
       // ...and nothing on disk was probed for it.
       expect(reads()).toBe(1)
@@ -463,7 +517,7 @@ describe('editor preview auto-refresh (#855)', () => {
     }
   })
 
-  it('F: N editor tabs of one session share exactly ONE delta request per tick', async () => {
+  it('F: N editor tabs of one session share exactly ONE delta request per invalidation', async () => {
     const { ctx, tabOf } = harness('session-f')
     const views = [
       mount(ctx, 'session-f', tabOf('/tmp/a.ts')),
@@ -474,7 +528,7 @@ describe('editor preview auto-refresh (#855)', () => {
       await settle()
       expect(changesOps.mock.calls.length).toBe(1)
 
-      await tick(2)
+      await notifyOps('session-f', 2)
 
       expect(changesOps.mock.calls.length).toBe(3)
     } finally {
@@ -483,13 +537,13 @@ describe('editor preview auto-refresh (#855)', () => {
     }
   })
 
-  it('F: the delta poll stops when the last editor tab goes away', async () => {
+  it('F: the invalidation subscription stops when the last editor tab goes away', async () => {
     const { ctx, tabOf } = harness('session-f-stop')
     const view = mount(ctx, 'session-f-stop', tabOf('/tmp/a.ts'))
     await settle()
     const pulls = changesOps.mock.calls.length
     view.unmount()
-    await tick(3)
+    await notifyOps('session-f-stop', 3)
     expect(changesOps.mock.calls.length).toBe(pulls)
     vi.useRealTimers()
   })
@@ -504,17 +558,17 @@ describe('editor preview auto-refresh (#855)', () => {
       const pullsWhileVisible = changesOps.mock.calls.length
 
       // The tab goes away (another tab of the same session, or its panel
-      // closed): the shared poller stops...
+      // closed): the shared subscription stops...
       view.rerender(editorElement(ctx, 'session-h', tab, false))
       changesOps.mockResolvedValue(delta(writePair(11, '/tmp/a.ts'), 12))
-      await tick(2)
+      await notifyOps('session-h', 2)
       expect(changesOps.mock.calls.length).toBe(pullsWhileVisible)
       expect(reads()).toBe(1)
 
       // ...and coming back resumes the cursor: the missed write is folded then
       // (the stream record outlives its members), so the tab is not stale.
       view.rerender(editorElement(ctx, 'session-h', tab, true))
-      await tick(1)
+      await notifyOps('session-h')
       expect(reads()).toBe(2)
       expect(draftOf(view.container)).toBe('body-2')
     } finally {
@@ -535,7 +589,7 @@ describe('editor preview auto-refresh (#855)', () => {
       // The model writes B while this tab shows A. The touch is PUBLISHED now
       // (revision 1) and matches nothing yet.
       changesOps.mockResolvedValue(delta(writePair(11, '/tmp/b.ts'), 12))
-      await tick(1)
+      await notifyOps('session-i')
       expect(readsOf('/tmp/b.ts')).toBe(0)
 
       // The user retargets this very tab onto B (merged mode's in-place switch):
@@ -548,7 +602,7 @@ describe('editor preview auto-refresh (#855)', () => {
       // ...so the touch published BEFORE the retarget must not reload it again
       // (opBaseline's per-path revision: without it this is a second read and a
       // remount that throws away scroll position for identical bytes).
-      await tick(3)
+      await notifyOps('session-i', 3)
       expect(readsOf('/tmp/b.ts')).toBe(1)
       expect(draftOf(view.container)).toBe('body-2')
     } finally {
@@ -575,9 +629,12 @@ describe('editor preview auto-refresh (#855)', () => {
     })
     const sessionId = 'session-g'
     store.setSession(sessionId)
+    // One STABLE snapshot (see harness): a fresh object per getSnapshot call
+    // would loop React's snapshot check into an update-depth crash.
+    const sessionsSnapshot = { byId: { [sessionId]: { cwd: '/tmp' } } }
     const ctx = {
       betterSidebar: service,
-      sessions: { list: { subscribe: () => () => {}, getSnapshot: () => ({ byId: { [sessionId]: { cwd: '/tmp' } } }) } },
+      sessions: { list: { subscribe: () => () => {}, getSnapshot: () => sessionsSnapshot } },
       get: (name: string) => name === 'betterSidebar' ? service : undefined,
     } as unknown as Context
     const view = mount(ctx, sessionId, (() => {
@@ -590,7 +647,7 @@ describe('editor preview auto-refresh (#855)', () => {
       expect(view.container.querySelector('[data-testid="mode"]')!.textContent).toBe('mode-edit')
 
       changesOps.mockResolvedValue(delta(writePair(11, '/tmp/a.ts'), 12))
-      await tick(2)
+      await notifyOps('session-g', 2)
 
       // No reload while the mode toggle says "edit"; the existing edit→preview
       // edge and the header's refresh button remain the entry points.

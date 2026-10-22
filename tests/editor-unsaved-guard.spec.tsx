@@ -45,11 +45,20 @@ vi.mock('../src/client/api.ts', async (importOriginal) => {
   }
 })
 
-/** jsdom has no WebSocket; the sidebar's agent-terminals effect builds one. */
+/** A stand-in WebSocket: the sidebar's agent-terminals effect builds one, and
+ *  the ws-push connectors (session ops / git / fs-jobs) build theirs. The
+ *  readyState/send pair matters: `sendWatch` guards on
+ *  `readyState === WebSocket.OPEN`, and an undefined-readyState double made
+ *  that guard pass on an instance with no `send`. CONNECTING keeps every
+ *  connector quiet — these scenarios never drive frames. */
 class FakeWebSocket {
+  static readonly OPEN = 1
+  readyState = 0
+  onopen: (() => void) | null = null
   onmessage: ((event: { data: unknown }) => void) | null = null
   onclose: (() => void) | null = null
   onerror: (() => void) | null = null
+  send = (): void => {}
   close = (): void => {}
   constructor(_url: string) {}
 }

@@ -126,6 +126,8 @@ describe('host plugin smoke', () => {
     expect(upgrades.map(route => route.path)).toEqual([
       '/sidebar/ws/agent-opens',
       '/sidebar/ws/fs-watch',
+      '/sidebar/ws/git',
+      '/sidebar/ws/fs-jobs',
       '/sidebar/ws/sidechat',
       '/sidebar/ws/session',
     ])

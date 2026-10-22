@@ -144,9 +144,13 @@ function harness(sessionId: string, initialMode: 'preview' | 'edit' = 'preview')
     }),
   })
   store.setSession(sessionId)
+  // One STABLE snapshot: the editor's file-op stream reads the list through
+  // useSyncExternalStore, and a fresh object per getSnapshot call would loop
+  // React's snapshot check into an update-depth crash.
+  const sessionsSnapshot = { byId: { [sessionId]: { cwd: '/tmp' } } }
   const ctx = {
     betterSidebar: service,
-    sessions: { list: { subscribe: () => () => {}, getSnapshot: () => ({ byId: { [sessionId]: { cwd: '/tmp' } } }) } },
+    sessions: { list: { subscribe: () => () => {}, getSnapshot: () => sessionsSnapshot } },
     get: (name: string) => name === 'betterSidebar' ? service : undefined,
   } as unknown as Context
   const mint = (tab: SidebarTab): SidebarTab => {
