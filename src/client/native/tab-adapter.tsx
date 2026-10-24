@@ -706,15 +706,17 @@ export function NativeTabTitle(props: NativeTitleInjected & NativeBodyFrameworkP
   ) : glyph === undefined || glyph === null ? null : (
     <span className={css.chipIcon} aria-hidden="true">{glyph}</span>
   )
-  if (leading === null) {
-    return unread ? <>{title}<UnreadDot /></> : title
-  }
+  // The whole content rides in ONE span carrying the native `title` tooltip
+  // (the full tab title). The strip patch keeps every chip at its full title
+  // width (strip-compression.ts), so the tooltip is only the fallback for the
+  // rare title wider than the patch's `60cqw` per-chip ceiling — where the
+  // host's clipped-fade masks the tail and hovering must still read the name.
   return (
-    <>
+    <span title={title}>
       {leading}
       {title}
       {unread ? <UnreadDot /> : null}
-    </>
+    </span>
   )
 }
 

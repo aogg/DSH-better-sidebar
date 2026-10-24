@@ -1,32 +1,36 @@
 /**
- * Compression patch for the HOST tab strip's chips (the native right-Sidebar's
- * top tab bar).
+ * Adaptive-width patch for the HOST tab strip's chips (the native right-
+ * Sidebar's top tab bar).
  *
  * Why the plugin patches the host's strip at all: that strip is rendered by
  * DSH's dockkit — the plugin only supplies the chip content — and its stock
  * chip (`._tab_`: `flex: 0 1 auto; min-width: 80px; max-width: 170px;
- * padding: 0 10px; white-space: nowrap`) overflows the column as soon as a
- * few tabs are open. On every active-tab change the host runs one layout
- * effect that scrolls the ACTIVE chip into view, so activating a right-side
- * chip (opening the changes page appends its chip at the row's end and
- * activates it) scrolls every chip left of it out of sight — the scrollbar
- * itself is hidden (`scrollbar-width: none`, fade masks at the edges only),
- * which reads as "switching to 文件变动 loses the other tabs, switching to
- * anything else restores them".
+ * padding: 0 10px; white-space: nowrap`) hard-clips a long title at 170px and
+ * squeezes EVERY chip towards its 80px floor once several tabs are open —
+ * with the title box `overflow: hidden`, a squeezed chip degrades to its
+ * glyph only. The product contract is the opposite: every tab title shows in
+ * full, no matter how many tabs are open.
  *
- * The patch gives the row room to fit WITHOUT scrolling: chips may shrink
- * below the host's 80px floor, waste less padding, and below a 480px column
- * the decorative chip glyph hides too. The host already styles truncated
- * titles (`data-dockkit-tab-clipped` fade mask), so a shrunken chip is the
- * host's own designed compact look. When the row still cannot fit, the
- * host's scroll-on-activate keeps working exactly as before — no regression.
+ * The patch therefore replaces the strip's "compress to fit" semantics with
+ * "content-adaptive + scroll": each chip takes its title's full width
+ * (`flex: 0 0 auto` — the stock `flex-shrink: 1` is what shrinks chips below
+ * their content) and never shrinks again, so the icon-only degradation is
+ * gone. When the row runs out of room it overflows into the host's own
+ * horizontal scroll (`data-dockkit-strip-tabs` already ships `overflow-x:
+ * auto` with scroll-on-activate) — no scrollbar styles invented here. One
+ * extreme ceiling stays: a single pathological title must not own the whole
+ * row, so a chip caps at `60cqw` (container-query units against the
+ * `container-type: inline-size` strip row). Within the cap a chip is as wide
+ * as its content; past it the host's own `data-dockkit-tab-clipped` fade
+ * marks the rare clipped title, and the chip content's native `title`
+ * tooltip (tab-adapter.tsx) carries the full name on hover.
  *
- * The ACTIVE chip needed one more fix: the host's close button (`×`) is
+ * The ACTIVE chip keeps its fix: the host's close button (`×`) is
  * absolutely positioned over the chip's right edge (`right: 4px`, 20px
  * square) and the host's only "make room" measure is a fade mask over the
  * active title's last 30px. On a content-sized chip with a CJK title the
  * title box hugs the text, so the mask erases the trailing glyphs outright
- * and the × covers them — 「文件变动」 renders as 「文件变 ×」. The patch
+ * and the × covers them — 「文件变动」 would render as 「文件变 ×」. The patch
  * reserves the ×'s overlay area with REAL padding on the active closable
  * chip, and undoes the host's active fade mask: once the space is real
  * padding the title box still hugs the text, so the mask would keep erasing
@@ -44,21 +48,29 @@
  */
 
 import type { Context } from '../../context-types.ts'
-import css from '../sidebar.module.css'
 
 /**
  * The patch's rules — layout only, no colors. One dockkit mechanism per rule:
  *
  * - `container-type: inline-size` on the strip ROW turns the fixed-width flex
- *   row into the query container for the `@container` rule below. It MUST sit
- *   on `[data-dockkit-strip]`, never on `[data-dockkit-strip-tabs]`: the tabs
- *   row is `flex: 0 1 auto`, and an inline-size container's contents
+ *   row into the query container for the chip ceiling's `cqw` units below. It
+ *   MUST sit on `[data-dockkit-strip]`, never on `[data-dockkit-strip-tabs]`:
+ *   the tabs row is `flex: 0 1 auto`, and an inline-size container's contents
  *   contribute nothing to its own width — containing the tabs row would size
  *   it to zero and collapse the whole strip.
- * - `min-width: 0` undoes the host's per-chip 80px floor — the floor is what
- *   forces the row to overflow — and the host's own
- *   `data-dockkit-tab-clipped` fade mask covers the truncated title.
- * - the 6px side padding (host: 10px) saves 8px per chip.
+ * - `flex: 0 0 auto` on every chip: the `auto` basis sizes the chip to its
+ *   content (the full, un-clipped title — the host's 170px ceiling is
+ *   overridden below) and `flex-shrink: 0` retires the stock `flex: 0 1
+ *   auto` squeeze, so a chip can never shrink below its title again — the
+ *   row simply overflows into the host's own horizontal scroll.
+ * - `max-width: 60cqw` is the ONE extreme ceiling, in container-query units
+ *   against the strip row above (so it scales with the column, not the
+ *   viewport): a pathological title cannot own the whole row — 60% always
+ *   leaves the rest of the row visible — while virtually every real title
+ *   stays under it and shows in full. Past the ceiling the host's
+ *   `data-dockkit-tab-clipped` fade marks the clipped title and the chip's
+ *   native `title` tooltip (tab-adapter.tsx) carries the full name.
+ * - the 6px side padding (host: 10px) keeps chips compact.
  * - the ACTIVE, closable chip (`aria-selected="true"`; `data-dockkit-tab-quiet`
  *   chips excluded — a single unclosable tab renders no ×) reserves the ×'s
  *   overlay area with `padding-right: 24px` (20px button + 4px `right`
@@ -71,24 +83,16 @@ import css from '../sidebar.module.css'
  *   (the title box hugs the text, so the fade lands ON the text). A
  *   genuinely clipped title (the host sets `data-dockkit-tab-clipped`)
  *   keeps the fade as its truncation hint.
- * - inside a ≤480px container the decorative chip glyph hides (an
- *   `aria-hidden` span by contract, so the chip's accessible name keeps the
- *   title), saving ~20px more per chip. The class hash comes from the SAME
- *   css module the chip renders with (`tab-adapter.tsx`), so dev and built
- *   bundle agree on the name.
  */
-const STRIP_COMPRESSION_CSS = `
+const STRIP_ADAPTIVE_CSS = `
 [data-dockkit-strip] { container-type: inline-size; }
-[data-dockkit-strip-tabs] [data-dockkit-tab] { min-width: 0; padding-left: 6px; padding-right: 6px; }
+[data-dockkit-strip-tabs] [data-dockkit-tab] { flex: 0 0 auto; max-width: 60cqw; padding-left: 6px; padding-right: 6px; }
 [data-dockkit-strip-tabs] [data-dockkit-tab][aria-selected="true"]:not([data-dockkit-tab-quiet]) { padding-right: 24px; }
 [data-dockkit-strip-tabs] [data-dockkit-tab][aria-selected="true"]:not([data-dockkit-tab-quiet]) > [data-dockkit-tab-title]:not([data-dockkit-tab-clipped]) { mask-image: none; }
-@container (max-width: 480px) {
-  [data-dockkit-strip-tabs] [data-dockkit-tab] .${css.chipIcon} { display: none; }
-}
 `
 
 /**
- * Inject the host-strip compression stylesheet for the caller's effect
+ * Inject the host-strip adaptive-width stylesheet for the caller's effect
  * lifetime.
  * @param _ctx - the client context. Unused — the patch is static CSS scoped
  *   to the host's own `data-dockkit-*` attributes — and kept in the signature
@@ -101,7 +105,7 @@ export function registerStripCompression(_ctx: Context): () => void {
   // the source identity so the running patch is inspectable in DevTools.
   const tag = document.createElement('style')
   tag.setAttribute('data-dsh-strip-compression', '')
-  tag.textContent = STRIP_COMPRESSION_CSS
+  tag.textContent = STRIP_ADAPTIVE_CSS
   document.head.appendChild(tag)
   return () => {
     if (tag.isConnected) tag.remove()

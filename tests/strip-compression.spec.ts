@@ -1,20 +1,18 @@
 // @vitest-environment jsdom
 /**
- * The host tab-strip compression patch (src/client/native/strip-compression.ts):
+ * The host tab-strip adaptive-width patch (src/client/native/strip-compression.ts):
  * `registerStripCompression` injects ONE tagged stylesheet into document.head
  * for the caller's effect lifetime — a fixed-width `container-type` on the
- * host's strip row, chip rules that undo the host's 80px min-width floor and
- * thin the padding, and a ≤480px container query that hides the plugin's own
- * decorative chip glyph (its class hash comes from the same
- * sidebar.module.css the chip renders with), and active-chip rules that
- * reserve the host close button's absolute overlay area with real padding
- * and undo the host's active-title fade mask. jsdom has no layout or
- * container queries, so this spec pins the STRING and DOM contract only —
- * never the visual outcome.
+ * host's strip row (the `cqw` anchor), chip rules that make every chip
+ * content-sized and never-shrinking (`flex: 0 0 auto`) under the one `60cqw`
+ * extreme ceiling, the thin 6px paddings, and active-chip rules that reserve
+ * the host close button's absolute overlay area with real padding and undo
+ * the host's active-title fade mask. jsdom has no layout or container
+ * queries, so this spec pins the STRING and DOM contract only — never the
+ * visual outcome.
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import { registerStripCompression } from '../src/client/native/strip-compression.ts'
-import css from '../src/client/sidebar.module.css'
 import type { Context } from '../src/context-types.ts'
 
 /** The patch's injected tag(s) currently in the head. */
@@ -38,7 +36,7 @@ describe('registerStripCompression', () => {
     }
   })
 
-  it('puts container-type on the strip row and the chip min-width/padding rules on the tabs row', () => {
+  it('puts container-type on the strip row and the content-adaptive chip rules on the tabs row', () => {
     const dispose = registerStripCompression({} as Context)
     try {
       const text = injected()[0]!.textContent ?? ''
@@ -46,10 +44,17 @@ describe('registerStripCompression', () => {
       expect(text).toMatch(/\[data-dockkit-strip\]\s*\{\s*container-type:\s*inline-size;?\s*\}/)
       // ...never the flex tabs row: containing it would size the row to zero.
       expect(text).not.toMatch(/\[data-dockkit-strip-tabs\][^{]*\{[^}]*container-type/)
-      // The chip rule undoes the host's 80px floor and thins both paddings.
+      // The chip rule is content-adaptive + scroll: the `auto` basis sizes the
+      // chip to its full title and `flex-shrink: 0` retires the squeeze — no
+      // `min-width` tier may come back (the old `min-width: 0` is what let a
+      // chip degrade to its glyph).
       const chipRule = text.match(/\[data-dockkit-strip-tabs\]\s+\[data-dockkit-tab\]\s*\{([^}]*)\}/)
       expect(chipRule).not.toBeNull()
-      expect(chipRule![1]).toMatch(/min-width:\s*0/)
+      expect(chipRule![1]).toMatch(/flex:\s*0\s+0\s+auto/)
+      expect(chipRule![1]).not.toMatch(/min-width/)
+      // The ONE extreme ceiling is in container units against the strip row,
+      // so a pathological title cannot own the whole row.
+      expect(chipRule![1]).toMatch(/max-width:\s*60cqw/)
       expect(chipRule![1]).toMatch(/padding-left:\s*6px/)
       expect(chipRule![1]).toMatch(/padding-right:\s*6px/)
     } finally {
@@ -77,28 +82,27 @@ describe('registerStripCompression', () => {
       )
       expect(maskRule, 'the active-title mask rule must exist').not.toBeNull()
       expect(maskRule![1]).toMatch(/mask-image:\s*none/)
-      // Both rules are unconditional layout fixes and sit BEFORE the
-      // @container block — the small-column query stays icon-only.
-      const containerStart = text.indexOf('@container')
-      expect(containerStart).toBeGreaterThan(0)
-      expect(text.slice(0, containerStart)).toContain('[data-dockkit-tab][aria-selected="true"]:not([data-dockkit-tab-quiet]) { padding-right: 24px; }')
-      expect(text.slice(0, containerStart)).toContain('> [data-dockkit-tab-title]:not([data-dockkit-tab-clipped]) { mask-image: none; }')
-      expect(text.slice(containerStart), 'no active-tab rules inside @container').not.toContain('aria-selected')
+      // Both rules are unconditional layout fixes — the old ≤480px hide-icon
+      // container query is gone with the compression semantics: full titles
+      // at every column width, the row scrolls instead.
+      expect(text, 'no container query may remain').not.toContain('@container')
+      expect(text).toContain('[data-dockkit-tab][aria-selected="true"]:not([data-dockkit-tab-quiet]) { padding-right: 24px; }')
+      expect(text).toContain('> [data-dockkit-tab-title]:not([data-dockkit-tab-clipped]) { mask-image: none; }')
     } finally {
       dispose()
     }
   })
 
-  it('hides the css-module-hashed chip icon inside the ≤480px container query', () => {
+  it('keeps the compression tiers out of the adaptive patch', () => {
     const dispose = registerStripCompression({} as Context)
     try {
       const text = injected()[0]!.textContent ?? ''
-      const block = text.match(/@container \(max-width: 480px\)\s*\{([\s\S]*)\}\s*$/)?.[1] ?? ''
-      expect(block, 'the @container block must exist').not.toBe('')
-      // The selector carries the class hash from the SAME module the chip
-      // renders with, so dev and built bundle agree on the name.
-      expect(block).toContain(String(css.chipIcon))
-      expect(block).toMatch(new RegExp(`\\.${String(css.chipIcon)}\\s*\\{\\s*display:\\s*none`))
+      // No icon-hiding container query (the "icon-only" degradation) and no
+      // shrinking of any kind: the patch's contract is full titles + the
+      // host's own overflow-x scroll.
+      expect(text).not.toContain('@container')
+      expect(text).not.toContain('display: none')
+      expect(text).not.toContain('min-width')
     } finally {
       dispose()
     }
