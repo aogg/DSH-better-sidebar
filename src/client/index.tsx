@@ -22,6 +22,7 @@ import { createNativeTabRecords } from './native/tab-adapter.tsx'
 import { registerNativeSurface } from './native/index.ts'
 import { registerStripCompression } from './native/strip-compression.ts'
 import { registerStripAddButton } from './native/strip-add-button.ts'
+import { registerStripWheel } from './native/strip-wheel.ts'
 import { registerBottomToggle } from './sidebar/bottom-toggle.tsx'
 import { registerStartLinks } from './sidebar/start-links.tsx'
 import { createNativeSurface } from './native/surface.ts'
@@ -213,6 +214,18 @@ export function apply(ctx: Context): void {
   ctx.effect(
     () => registerStripAddButton(ctx),
     'dsh-better-sidebar: native strip add button stand-in',
+  )
+  // The HOST strip's plain-wheel → horizontal scroll: the tab row ships
+  // `overflow-x: auto` with its scrollbar hidden, so once the adaptive-width
+  // patch above lets chips take their full width an overflowing row could
+  // only be scrolled by shift+wheel or a trackpad. The strip is dockkit DOM
+  // with no ref to hold, so ONE delegated non-passive wheel listener on
+  // document translates plain wheel deltas into scrollLeft — guarded to
+  // `[data-dockkit-strip-tabs]` rows that actually overflow, modifier keys
+  // untouched (see strip-wheel.ts).
+  ctx.effect(
+    () => registerStripWheel(ctx),
+    'dsh-better-sidebar: native strip wheel scroll',
   )
   // The bottom workbench's expand/collapse button in DSH's session header
   // (the header's corner seat belongs to the native sidebar's own control).
