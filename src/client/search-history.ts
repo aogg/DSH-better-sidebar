@@ -5,10 +5,11 @@
  * -find-in-files-page.md §4.3).
  *
  * Rules (all pinned by `tests/search-history.spec.ts`):
- * - Entries are `{ query, include, exclude, at }`; ONLY an actual submit is
- *   recorded (toggle states never ride the history).
- * - Dedup key = `query + include + exclude` (arrays in order, joined with
- *   `\0`): a re-submit deletes the old entry and re-inserts at the top.
+ * - Entries are `{ query, include, exclude, gitFrom?, at }`; ONLY an actual
+ *   submit is recorded (toggle states never ride the history).
+ * - Dedup key = `query + include + exclude + gitFrom` (arrays in order, joined
+ *   with `\0`; an absent/empty gitFrom keys as '' — old entries dedup
+ *   unchanged): a re-submit deletes the old entry and re-inserts at the top.
  * - Newest first, capped at {@link SEARCH_HISTORY_MAX} (20); the tail is lost.
  * - Every write dispatches a synthetic `storage` event on `window` so
  *   already-open dropdowns in THIS document refresh; real `storage` events
@@ -23,11 +24,15 @@ export const SEARCH_HISTORY_KEY = 'dsh-sidebar:search-history:v1'
 /** Newest-first entry cap: the tail is dropped beyond this. */
 export const SEARCH_HISTORY_MAX = 20
 
-/** One recorded submit: the three form fields + the commit timestamp. */
+/** One recorded submit: the three form fields + the commit timestamp.
+ *  `gitFrom` is the「git 起点」the submit ran with (''/absent = not
+ *  enabled); it is OPTIONAL so stored entries from before the field exist
+ *  keep reading — absence IS "not enabled", never a corrupt row. */
 export interface SearchHistoryEntry {
   query: string
   include: string[]
   exclude: string[]
+  gitFrom?: string
   at: number
 }
 
@@ -36,11 +41,13 @@ let memoryFallback: SearchHistoryEntry[] = []
 
 /**
  * The dedup key of one entry (also the remove identity together with `at`):
- * the query plus both chip lists in their exact order, `\0`-joined so no
- * realistic query/chip text can forge a collision.
+ * the query plus both chip lists in their exact order plus the git 起点,
+ * `\0`-joined so no realistic query/chip text can forge a collision. An
+ * entry without `gitFrom` keys identically to one with `''` — old and new
+ * shapes dedup as the same "not enabled" submit.
  */
-export function historyKeyOf(entry: Pick<SearchHistoryEntry, 'query' | 'include' | 'exclude'>): string {
-  return `${entry.query}\u0000${entry.include.join('\u0000')}\u0000${entry.exclude.join('\u0000')}`
+export function historyKeyOf(entry: Pick<SearchHistoryEntry, 'query' | 'include' | 'exclude' | 'gitFrom'>): string {
+  return `${entry.query}\u0000${entry.include.join('\u0000')}\u0000${entry.exclude.join('\u0000')}\u0000${entry.gitFrom ?? ''}`
 }
 
 /** Shape-check one parsed entry (corrupt rows are dropped, not trusted). */
@@ -50,10 +57,14 @@ function entryOf(value: unknown): SearchHistoryEntry | undefined {
   if (typeof candidate.query !== 'string' || candidate.query === '') return undefined
   if (!Array.isArray(candidate.include) || !candidate.include.every(item => typeof item === 'string')) return undefined
   if (!Array.isArray(candidate.exclude) || !candidate.exclude.every(item => typeof item === 'string')) return undefined
+  // A non-string (or empty) gitFrom reads as "not enabled" — the field is
+  // simply absent from the parsed entry, exactly like the pre-gitFrom rows.
+  const gitFrom = typeof candidate.gitFrom === 'string' && candidate.gitFrom !== '' ? candidate.gitFrom : undefined
   return {
     query: candidate.query,
     include: candidate.include,
     exclude: candidate.exclude,
+    ...(gitFrom === undefined ? {} : { gitFrom }),
     at: typeof candidate.at === 'number' && Number.isFinite(candidate.at) ? candidate.at : 0,
   }
 }
@@ -85,12 +96,23 @@ function writeSearchHistory(entries: SearchHistoryEntry[]): void {
 
 /**
  * Record one submit: dedup by {@link historyKeyOf}, move to front, cap the
- * tail. Returns the resulting list.
+ * tail. Returns the resulting list. An empty `gitFrom` (or none) is stored
+ * as "field absent" so the entry reads identically to the pre-gitFrom shape.
  */
-export function upsertSearchHistory(entry: Pick<SearchHistoryEntry, 'query' | 'include' | 'exclude'>): SearchHistoryEntry[] {
+export function upsertSearchHistory(entry: Pick<SearchHistoryEntry, 'query' | 'include' | 'exclude' | 'gitFrom'>): SearchHistoryEntry[] {
   const key = historyKeyOf(entry)
   const rest = readSearchHistory().filter(candidate => historyKeyOf(candidate) !== key)
-  const next = [{ query: entry.query, include: [...entry.include], exclude: [...entry.exclude], at: Date.now() }, ...rest]
+  const gitFrom = entry.gitFrom ?? ''
+  const next = [
+    {
+      query: entry.query,
+      include: [...entry.include],
+      exclude: [...entry.exclude],
+      ...(gitFrom === '' ? {} : { gitFrom }),
+      at: Date.now(),
+    },
+    ...rest,
+  ]
   writeSearchHistory(next.slice(0, SEARCH_HISTORY_MAX))
   return readSearchHistory()
 }

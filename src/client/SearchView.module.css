@@ -237,6 +237,20 @@
   gap: 4px;
 }
 
+/* 「git 起点」行：输入框 + × 清除按钮同行（有值才出现按钮，与查询框的
+ * × 同一 iconButton 形制）；输入框吃满剩余宽度、可收缩。 */
+.gitRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.gitRow .chipInput {
+  flex: 1 1 auto;
+  width: auto;
+}
+
 .chip {
   display: inline-flex;
   align-items: center;

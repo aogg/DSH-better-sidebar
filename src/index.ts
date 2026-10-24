@@ -40,6 +40,7 @@ import { ensureWorkspacePath, pathExists, resolveTargetCompat } from './path-sec
 import { workspaceDirPrefixRemainder } from './workspace-prefix.ts'
 import { searchFiles } from './fs-search.ts'
 import { contentSearch } from './fs-content-search.ts'
+import { resolveGitScope } from './git-scope.ts'
 import { compileExcludePatterns, EXCLUDE_PATTERN_LIMIT, EXCLUDE_PATTERN_MAX_LENGTH } from './exclude-patterns.ts'
 import { decodeHtmlUrl } from './html-route.ts'
 import { isTrustedApiRequest } from './trust-fence.ts'
@@ -844,6 +845,7 @@ function buildApi(
         caseSensitive?: unknown
         wholeWord?: unknown
         regex?: unknown
+        gitFrom?: unknown
       }
       const query = requireString(payload, 'query')
       if (query.length > EXCLUDE_PATTERN_MAX_LENGTH) {
@@ -864,10 +866,19 @@ function buildApi(
           throw new SidebarError('bad-request', '"query" is not a valid regular expression')
         }
       }
+      // 可选「git 起点」：字符串 trim 后非空才生效（其余类型按宽松风格忽
+      // 略）。解析失败（非 git 仓库 / 无法识别为提交或日期）是干净的
+      // bad-request；解析出的 cwd 相对差异文件集经 gitFiles 叠进两个引擎。
+      // 空 query 时 contentSearch 本就不触引擎，git 解析也一并省去。
+      const gitFrom = typeof record.gitFrom === 'string' ? record.gitFrom.trim() : ''
+      const gitFiles = gitFrom === '' || query.trim() === ''
+        ? undefined
+        : (await resolveGitScope(cwd, gitFrom)).files
       return contentSearch(cwd, query, {
         include: sidebarEntryListOf(record.include),
         exclude: sidebarEntryListOf(record.exclude),
         prefExclude: compileExcludePatterns(record.prefExclude, cwd),
+        gitFiles,
         ...match,
       })
     },

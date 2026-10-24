@@ -115,6 +115,13 @@ export interface ContentSearchOptions extends ContentSearchMatchOptions {
   maxHitsPerFile?: number
   /** Hits kept across the whole search (default 2000). */
   maxTotalHits?: number
+  /** Optional「git 起点」candidate set — cwd-relative, '/'-separated paths
+   *  git reports as different between the user's baseline commit and the
+   *  current worktree (see git-scope.ts). When present it is an extra AND
+   *  on top of the include/exclude/prefExclude verdicts, applied by BOTH
+   *  engines identically (rg skips the file at its `begin` event — the
+   *  earliest possible cut; the walk skips it before reading). */
+  gitFiles?: ReadonlySet<string>
 }
 
 /** One search's include/exclude entries after host-side classification. */
@@ -548,6 +555,10 @@ async function rgContentSearch(
         const text = data?.path?.text
         const fileRel = text === undefined ? undefined : relOf(root, text)
         if (fileRel === undefined) break // bytes path or the root itself: skip
+        // The git-scope gate: a file git reports as unchanged since the
+        // baseline never opens — the earliest possible cut (no state, no
+        // events assembled). Same verdict the walk's scanFile applies.
+        if (opts.gitFiles !== undefined && !opts.gitFiles.has(fileRel)) break
         active = {
           rel: fileRel,
           count: 0,
@@ -718,6 +729,10 @@ export async function searchContentPlain(
     // the cap-filling file/hit landed).
     if (truncated) return
     if (filter.excluded(absolute) || !filter.included(absolute, name)) return
+    // The git-scope gate rides AFTER the chip verdicts (include/exclude and
+    // the pref stack still narrow first): a file outside the changed set is
+    // skipped BEFORE the read, exactly like the rg pass's `begin` cut.
+    if (opts.gitFiles !== undefined && !opts.gitFiles.has(relative(root, absolute).split(sep).join('/'))) return
     const lines = await readSearchableLines(absolute)
     if (lines === undefined) return
     let count = 0

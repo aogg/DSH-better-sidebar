@@ -1,19 +1,22 @@
 /**
  * 「搜索」页（type: 'search'，多实例）：PhpStorm 式的 Find in Files——查询框
  * + 三开关（区分大小写 Aa / 全词 W / 正则 .*）+ include/exclude chips +
- * 历史下拉；结果按文件分组，块 = 命中行高亮 + 上下各 2 行（全部带行号），
- * 块尾「查看」/ 双击 / Enter 在编辑器打开该行（docs/plans/2026-10-21
- * -find-in-files-page.md §4）。
+ * 「git 起点」输入框（提交 hash/ref 或日期：候选文件集限定为该基线到当前
+ * 工作树之间 git 有差异的文件，内容仍搜工作树）+ 历史下拉；结果按文件分
+ * 组，块 = 命中行高亮 + 上下各 2 行（全部带行号），块尾「查看」/ 双击 /
+ * Enter 在编辑器打开该行（docs/plans/2026-10-21-find-in-files-page.md §4）。
  *
  * 状态分层（§4.8）：
  * - `tab.meta`（随布局持久化；updateTab 的 meta 是整体替换 → 读-改-写一次
- *   patch）：committed query、三开关、include/exclude chips、runId（显式
- *   提交计数，Enter 每次自增——历史回填不增，是「回填 ≠ 运行」的实现抓手）。
- *   种子预填的 chips 由 createTab 铸进 meta（search-seed.ts）。
- * - 组件态（不持久化）：结果、错误、运行中、折叠文件、选中块、草稿输入、
- *   历史下拉。挂载时 committed query 非空自动重跑；chips / 开关 /
- *   explorerExclude 偏好变化在有 committed query 时自动重跑
- *   （AbortController：下一次运行 / 卸载中止在途）；查询词草稿变化绝不自动跑。
+ *   patch）：committed query、三开关、include/exclude chips、gitFrom
+ *   （'' = 未启用）、runId（显式提交计数，Enter 每次自增——历史回填不增，
+ *   是「回填 ≠ 运行」的实现抓手）。种子预填的 chips 由 createTab 铸进
+ *   meta（search-seed.ts）。
+ * - 组件态（不持久化）：结果、错误、运行中、折叠文件、选中块、草稿输入
+ *   （查询词 + git 起点）、历史下拉。挂载时 committed query 非空自动重跑；
+ *   chips / 开关 / git 起点 / explorerExclude 偏好变化在有 committed query
+ *   时自动重跑（AbortController：下一次运行 / 卸载中止在途）；查询词草稿
+ *   变化绝不自动跑。
  * - `visible === false`（tab 停靠后台）：不发起新搜索、不打断进行中的
  *   （重跑闸按 runKey 记账，reveal 回来只补跑「欠着的那一次」）。
  *
@@ -77,6 +80,11 @@ function flagOf(meta: Record<string, unknown>, field: string): boolean {
   return meta[field] === true
 }
 
+/** The persisted「git 起点」（'' = 未启用；坏类型一律读作未启用）。 */
+function gitFromOf(meta: Record<string, unknown>): string {
+  return typeof meta.gitFrom === 'string' ? meta.gitFrom : ''
+}
+
 /** The explicit-submit counter (Enter bumps it; history backfill does not). */
 function runIdOf(meta: Record<string, unknown>): number {
   return typeof meta.runId === 'number' && Number.isSafeInteger(meta.runId) ? meta.runId : 0
@@ -94,8 +102,8 @@ function titleQueryOf(query: string): string {
   return query.length > TITLE_QUERY_MAX ? `${query.slice(0, TITLE_QUERY_MAX)}…` : query
 }
 
-/** 一次请求的完整身份：会话/cwd + runId + 开关 + chips + 偏好排除（值的拼接，
- *  数组身份 churn 不影响比较——跑没跑过只看内容）。 */
+/** 一次请求的完整身份：会话/cwd + runId + 开关 + chips + 偏好排除 + git 起
+ *  点（值的拼接，数组身份 churn 不影响比较——跑没跑过只看内容）。 */
 function runKeyOf(
   sessionId: string,
   cwd: string | undefined,
@@ -104,9 +112,10 @@ function runKeyOf(
   include: readonly string[],
   exclude: readonly string[],
   prefExcludeKey: string,
+  gitFrom: string,
 ): string {
   return `${sessionId}\u0000${cwd ?? ''}\u0000${runId}\u0000${matchKey}\u0000` +
-    `${include.join('\u0000')}\u0000${exclude.join('\u0000')}\u0000${prefExcludeKey}`
+    `${include.join('\u0000')}\u0000${exclude.join('\u0000')}\u0000${prefExcludeKey}\u0000${gitFrom}`
 }
 
 /** 结果区一份文件的整体视图：host 分组 + 客户端合并块。 */
@@ -148,9 +157,11 @@ export function SearchView(props: {
   const caseSensitive = flagOf(meta, 'caseSensitive')
   const wholeWord = flagOf(meta, 'wholeWord')
   const regexOn = flagOf(meta, 'regex')
+  const gitFrom = gitFromOf(meta)
 
   // 组件态（不持久化）：草稿、结果、错误、运行中、折叠、选中块、历史下拉。
   const [draft, setDraft] = useState(committed)
+  const [gitFromDraft, setGitFromDraft] = useState(gitFrom)
   const [results, setResults] = useState<ContentSearchResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
@@ -181,8 +192,8 @@ export function SearchView(props: {
   const matchKey = `${caseSensitive ? '1' : '0'}${wholeWord ? '1' : '0'}${regexOn ? '1' : '0'}`
   const prefExcludeKey = prefExclude.join('\u0000')
   const runKey = useMemo(
-    () => runKeyOf(sessionId, cwd, runIdOf(meta), matchKey, include, exclude, prefExcludeKey),
-    [sessionId, cwd, meta, matchKey, include, exclude, prefExcludeKey],
+    () => runKeyOf(sessionId, cwd, runIdOf(meta), matchKey, include, exclude, prefExcludeKey, gitFrom),
+    [sessionId, cwd, meta, matchKey, include, exclude, prefExcludeKey, gitFrom],
   )
 
   // 正则预校验（开启 .* 时）：new RegExp 抛错 → 输入框标红 + 行内提示，提交
@@ -200,6 +211,8 @@ export function SearchView(props: {
   // 草稿跟随 committed：Enter 提交（值相等，无感）、Esc 清空、历史回填时输入
   // 框落到回填词。打字只动草稿（committed 不变），永不互抢。
   useEffect(() => { setDraft(committed) }, [committed])
+  // git 起点草稿同样跟随 committed（历史回填 / × 清除落盘后输入框归位）。
+  useEffect(() => { setGitFromDraft(gitFrom) }, [gitFrom])
 
   // 历史的跨 tab / 跨会话同步：真实 storage 事件（他文档写入）+ 本模块写后
   // 派发的合成 storage 事件（同文档）都汇到这一个监听。
@@ -240,6 +253,8 @@ export function SearchView(props: {
       exclude,
       prefExcludeKey === '' ? undefined : prefExcludeKey.split('\u0000'),
       { caseSensitive, wholeWord, regex: regexOn },
+      // '' = 未启用：不发 wire 字段（宿主按未启用搜索）。
+      gitFrom === '' ? undefined : gitFrom,
       controller.signal,
     ).then((found) => {
       if (controller.signal.aborted) return
@@ -303,7 +318,8 @@ export function SearchView(props: {
   }, [ctx, scope.sessionId, cwd])
 
   /** Enter 提交：写 meta（query + runId 自增，读-改-写一次 patch）、改记录
-   *  标题、记历史；运行本身交给上面的运行闸（单一请求发起点）。 */
+   *  标题、记历史；运行本身交给上面的运行闸（单一请求发起点）。git 起点
+   *  记的是 committed 值（自己的输入框 Enter 另行提交）。 */
   const commitRun = (): void => {
     const next = draft.trim()
     if (next === '' || cwd === undefined) return
@@ -313,7 +329,7 @@ export function SearchView(props: {
       title: t('searchTitleQuery', { query: titleQueryOf(next) }),
       meta: { ...meta, query: next, runId: rid },
     }, sessionId)
-    setHistory(upsertSearchHistory({ query: next, include, exclude }))
+    setHistory(upsertSearchHistory({ query: next, include, exclude, gitFrom }))
     setHistoryOpen(false)
     setHistoryIndex(-1)
   }
@@ -331,15 +347,31 @@ export function SearchView(props: {
     }
   }
 
-  /** 历史回填：三项进表单、不自动执行——先把「回填后的 runKey」钉进跳过
-   *  清单，再一次 patch 写入 query + 两列 chips（runId 不动）。开关保持页面
-   *  当前值（不在回填范围内）。 */
+  /** 历史回填：四项进表单、不自动执行——先把「回填后的 runKey」钉进跳过
+   *  清单，再一次 patch 写入 query + 两列 chips + git 起点（runId 不动）。
+   *  开关保持页面当前值（不在回填范围内）。旧条目无 gitFrom → ''（未启用）。 */
   const backfillHistory = (entry: SearchHistoryEntry): void => {
-    skipKeyRef.current = runKeyOf(sessionId, cwd, runIdOf(meta), matchKey, entry.include, entry.exclude, prefExcludeKey)
-    patchMeta(ctx, tab, sessionId, { query: entry.query, include: [...entry.include], exclude: [...entry.exclude] })
+    const nextGitFrom = entry.gitFrom ?? ''
+    skipKeyRef.current = runKeyOf(sessionId, cwd, runIdOf(meta), matchKey, entry.include, entry.exclude, prefExcludeKey, nextGitFrom)
+    patchMeta(ctx, tab, sessionId, { query: entry.query, include: [...entry.include], exclude: [...entry.exclude], gitFrom: nextGitFrom })
     setHistoryOpen(false)
     setHistoryIndex(-1)
     setSelected(-1)
+  }
+
+  /** git 起点落盘（Enter 提交）：runKey 随内容变化，已有 committed query 时
+   *  由运行闸自动重跑（与 chips 同一套模式）。 */
+  const commitGitFrom = (): void => {
+    const next = gitFromDraft.trim()
+    setGitFromDraft(next)
+    if (next !== gitFrom) patchMeta(ctx, tab, sessionId, { gitFrom: next })
+  }
+
+  /** git 起点 × 清除：清草稿；已落盘的 committed 值一并清（runKey 随变，
+   *  自动重跑）。 */
+  const clearGitFrom = (): void => {
+    setGitFromDraft('')
+    if (gitFrom !== '') patchMeta(ctx, tab, sessionId, { gitFrom: '' })
   }
 
   /** chips 落盘（增/删同一条路）：runKey 随内容变化，已有 committed query 时
@@ -538,6 +570,9 @@ export function SearchView(props: {
                     {entry.exclude.length > 0 && (
                       <span className={css.historyBadge}>{t('searchHistoryExcludeCount', { count: entry.exclude.length })}</span>
                     )}
+                    {(entry.gitFrom ?? '') !== '' && (
+                      <span className={css.historyBadge} title={entry.gitFrom}>{t('searchHistoryGitFrom')}</span>
+                    )}
                     <button
                       type="button"
                       className={css.historyDelete}
@@ -630,6 +665,37 @@ export function SearchView(props: {
               ))}
             </div>
           )}
+        </div>
+        <div className={css.chipGroup}>
+          <div className={css.gitRow}>
+            <input
+              className={css.chipInput}
+              value={gitFromDraft}
+              placeholder={t('searchGitFromPlaceholder')}
+              spellCheck={false}
+              disabled={disabled}
+              aria-label={t('searchGitFromLabel')}
+              title={t('searchGitFromLabel')}
+              onChange={(event) => { setGitFromDraft(event.target.value) }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  commitGitFrom()
+                }
+              }}
+            />
+            {gitFromDraft !== '' && (
+              <button
+                type="button"
+                className={css.iconButton}
+                aria-label={t('searchGitFromClear')}
+                title={t('searchGitFromClear')}
+                onClick={clearGitFrom}
+              >
+                <IconCloseOutlineRegular size={14} />
+              </button>
+            )}
+          </div>
         </div>
       </div>
       {cwd === undefined ? (

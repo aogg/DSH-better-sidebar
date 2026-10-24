@@ -1204,6 +1204,56 @@ describe('session cwd resolution over the API route', () => {
     }
   })
 
+  // The「git 起点」route contract: a non-string gitFrom is IGNORED (the
+  // route's loose style — only a trimmed non-empty string arms the scope),
+  // an unusable string (or a non-git workspace) is a clean bad-request
+  // raised BEFORE the search, and a real commit scopes the answer to the
+  // files git reports as changed between it and the worktree.
+  it('fs.contentSearch rides gitFrom: loose types disabled, unusable input rejected, a commit scopes the run', async () => {
+    const plain = mkdtempSync(join(tmpdir(), 'dsh-sidebar-content-nogit-'))
+    try {
+      mkdirSync(join(plain, 'src'), { recursive: true })
+      writeFileSync(join(plain, 'src', 'a.ts'), 'const answer = 42\n')
+      const route = mount({ sessions: { get: () => ({ header: { cwd: plain } }) } })
+      // A number (or any non-string) never arms the scope — the unscoped search.
+      const loose = await invoke(route, 'fs.contentSearch', { sessionId: 's-git', query: 'answer', gitFrom: 42 })
+      expect(loose.ok).toBe(true)
+      expect((loose.value as unknown as { matches: unknown[] }).matches).toHaveLength(1)
+      // A real string on a NON-GIT workspace is the documented bad-request.
+      const notRepo = await invoke(route, 'fs.contentSearch', { sessionId: 's-git', query: 'answer', gitFrom: 'HEAD' })
+      expect(notRepo).toMatchObject({ ok: false, status: 400, error: { code: 'bad-request' } })
+      expect(notRepo.error!.message).toContain('not a git repository')
+    } finally {
+      rmSync(plain, { recursive: true, force: true })
+    }
+    const repo = mkdtempSync(join(tmpdir(), 'dsh-sidebar-content-gitscope-'))
+    try {
+      gitRun(repo, ['init', '-q'])
+      gitRun(repo, ['checkout', '-q', '-b', 'main'])
+      writeFileSync(join(repo, 'keep.txt'), 'the answer stays\n')
+      gitRun(repo, ['add', '-A'])
+      gitRun(repo, ['commit', '-q', '-m', 'base'])
+      const base = gitRun(repo, ['rev-parse', 'HEAD']).trim()
+      writeFileSync(join(repo, 'moved.txt'), 'the answer moved here\n')
+      gitRun(repo, ['add', '-A'])
+      gitRun(repo, ['commit', '-q', '-m', 'second'])
+      const route = mount({ sessions: { get: () => ({ header: { cwd: repo } }) } })
+      const unscoped = await invoke(route, 'fs.contentSearch', { sessionId: 's-git2', query: 'answer' })
+      expect((unscoped.value as unknown as { matches: Array<{ path: string }> }).matches.map(file => file.path).sort())
+        .toEqual(['keep.txt', 'moved.txt'])
+      // The commit 起点 narrows the SAME query to its changed files only.
+      const scoped = await invoke(route, 'fs.contentSearch', { sessionId: 's-git2', query: 'answer', gitFrom: base })
+      expect(scoped.ok).toBe(true)
+      expect((scoped.value as unknown as { matches: Array<{ path: string }> }).matches.map(file => file.path))
+        .toEqual(['moved.txt'])
+      // An unusable string is a bad-request, never a silent unscoped search.
+      const bogus = await invoke(route, 'fs.contentSearch', { sessionId: 's-git2', query: 'answer', gitFrom: 'definitely-not-a-ref' })
+      expect(bogus).toMatchObject({ ok: false, status: 400, error: { code: 'bad-request' } })
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
   it('fs.trees rejects an empty list and an oversized batch', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-sidebar-fs-trees-guard-'))
     const workspace = join(root, 'workspace')

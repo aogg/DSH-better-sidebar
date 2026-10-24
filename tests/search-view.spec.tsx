@@ -87,7 +87,7 @@ interface Deferred {
   signal: AbortSignal
 }
 function pendingImplementation(deferrals: Deferred[]): void {
-  fsContentSearch.mockImplementation((_scope, _query, _include, _exclude, _pref, _match, signal) =>
+  fsContentSearch.mockImplementation((_scope, _query, _include, _exclude, _pref, _match, _gitFrom, signal) =>
     new Promise<Result>((resolve) => {
       deferrals.push({ resolve, signal: signal! })
     }))
@@ -204,7 +204,7 @@ describe('SearchView 分组渲染与打开', () => {
     fsContentSearch.mockResolvedValue(RESULT)
     harness = mountView({ query: 'answer', runId: 1 })
     expect(fsContentSearch).toHaveBeenCalledTimes(1)
-    const [scope, query, include, exclude, prefExclude, match, signal] = fsContentSearch.mock.calls[0]!
+    const [scope, query, include, exclude, prefExclude, match, gitFrom, signal] = fsContentSearch.mock.calls[0]!
     expect(scope).toEqual({ sessionId: 's1', cwd: '/tmp' })
     expect(query).toBe('answer')
     expect(include).toEqual([])
@@ -213,6 +213,8 @@ describe('SearchView 分组渲染与打开', () => {
     // probe the tree and the name search carry).
     expect(prefExclude).toEqual(['.DS_Store', 'Thumbs.db'])
     expect(match).toEqual({ caseSensitive: false, wholeWord: false, regex: false })
+    // No persisted git 起点 → no wire field ('' = 未启用).
+    expect(gitFrom).toBeUndefined()
     expect(signal).toBeInstanceOf(AbortSignal)
     await flushResults()
     // Grouped by file in the host's (path-sorted) order.
@@ -333,9 +335,10 @@ describe('SearchView 自动重跑规则', () => {
     const item = panel!.querySelector('[role="option"]')
     expect(item?.textContent).toContain('legacy')
     await act(async () => { item!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
-    // The three form fields landed; runId did NOT move (回填 ≠ 运行)…
+    // The four form fields landed (a legacy entry backfills gitFrom as ''
+    // = 未启用); runId did NOT move (回填 ≠ 运行)…
     const patch = harness.updateTab.mock.calls.at(-1)![1] as { meta: Record<string, unknown> }
-    expect(patch.meta).toEqual({ query: 'legacy', runId: 1, include: ['src'], exclude: ['dist'] })
+    expect(patch.meta).toEqual({ query: 'legacy', runId: 1, include: ['src'], exclude: ['dist'], gitFrom: '' })
     applyLastUpdate(harness)
     // …and the pinned form change never auto-ran.
     expect(fsContentSearch).toHaveBeenCalledTimes(1)
@@ -346,6 +349,7 @@ describe('SearchView 自动重跑规则', () => {
     expect(fsContentSearch.mock.calls[1]![1]).toBe('legacy')
     expect(fsContentSearch.mock.calls[1]![2]).toEqual(['src'])
     expect(fsContentSearch.mock.calls[1]![3]).toEqual(['dist'])
+    expect(fsContentSearch.mock.calls[1]![6]).toBeUndefined()
   })
 })
 
@@ -422,5 +426,75 @@ describe('SearchView meta 持久化与清空', () => {
     await flushResults()
     expect(fsContentSearch).toHaveBeenCalledTimes(1) // the empty query never fires
     expect(harness.container.querySelector('[data-dsh-search-file]')).toBeNull()
+  })
+})
+
+describe('SearchView git 起点', () => {
+  const gitInputOf = (container: HTMLElement): HTMLInputElement =>
+    [...container.querySelectorAll<HTMLInputElement>('input')]
+      .find(input => input.getAttribute('aria-label') === 'Git from (commit or date)')!
+
+  it('a persisted gitFrom rides the mount request; the input commits on Enter and reruns', async () => {
+    fsContentSearch.mockResolvedValue({ matches: [], truncated: false })
+    harness = mountView({ query: 'answer', runId: 1, gitFrom: 'HEAD~2' })
+    expect(fsContentSearch).toHaveBeenCalledTimes(1)
+    expect(fsContentSearch.mock.calls[0]![6]).toBe('HEAD~2')
+    // Typing the draft never fires (chips 模式：Enter 落盘，运行闸接管).
+    await typeInto(gitInputOf(harness.container), 'v1.2.0')
+    expect(fsContentSearch).toHaveBeenCalledTimes(1)
+    await pressKey(gitInputOf(harness.container), 'Enter')
+    const patch = harness.updateTab.mock.calls.at(-1)![1] as { meta: Record<string, unknown> }
+    expect(patch.meta.gitFrom).toBe('v1.2.0')
+    // The git 起点 rides its own runKey slot — the explicit-submit counter
+    // (runId) does NOT move (it belongs to the query's Enter).
+    expect(patch.meta.runId).toBe(1)
+    applyLastUpdate(harness)
+    expect(fsContentSearch).toHaveBeenCalledTimes(2)
+    expect(fsContentSearch.mock.calls[1]![6]).toBe('v1.2.0')
+  })
+
+  it('the × clear button resets the committed gitFrom to 未启用 and reruns unscoped', async () => {
+    fsContentSearch.mockResolvedValue({ matches: [], truncated: false })
+    harness = mountView({ query: 'answer', runId: 1, gitFrom: 'abc1234' })
+    expect(fsContentSearch).toHaveBeenCalledTimes(1)
+    await clickButton(harness.container, 'Clear git-from scope')
+    const patch = harness.updateTab.mock.calls.at(-1)![1] as { meta: Record<string, unknown> }
+    expect(patch.meta.gitFrom).toBe('')
+    applyLastUpdate(harness)
+    expect(fsContentSearch).toHaveBeenCalledTimes(2)
+    expect(fsContentSearch.mock.calls[1]![6]).toBeUndefined()
+  })
+
+  it('a history entry with gitFrom shows a badge, backfills it without running, and Enter runs with it', async () => {
+    window.localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify([
+      { query: 'legacy', include: [], exclude: [], gitFrom: 'v1.2.0', at: 5 },
+    ]))
+    fsContentSearch.mockResolvedValue({ matches: [], truncated: false })
+    harness = mountView({ query: 'answer', runId: 1 })
+    await flushResults()
+    await clickButton(harness.container, 'Search history')
+    const item = harness.container.querySelector('[data-dsh-search-history] [role="option"]')!
+    expect(item.textContent).toContain('git from')
+    await act(async () => { item.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    const patch = harness.updateTab.mock.calls.at(-1)![1] as { meta: Record<string, unknown> }
+    expect(patch.meta).toEqual({ query: 'legacy', runId: 1, include: [], exclude: [], gitFrom: 'v1.2.0' })
+    applyLastUpdate(harness)
+    // 回填 ≠ 运行：the pinned form change never auto-ran…
+    expect(fsContentSearch).toHaveBeenCalledTimes(1)
+    // …and Enter (runId 自增) runs it WITH the backfilled git 起点.
+    await pressKey(queryInput(harness.container), 'Enter')
+    applyLastUpdate(harness)
+    expect(fsContentSearch).toHaveBeenCalledTimes(2)
+    expect(fsContentSearch.mock.calls[1]![1]).toBe('legacy')
+    expect(fsContentSearch.mock.calls[1]![6]).toBe('v1.2.0')
+  })
+
+  it('a submit records the committed gitFrom into the history entry', async () => {
+    fsContentSearch.mockResolvedValue({ matches: [], truncated: false })
+    harness = mountView({ query: 'old', runId: 1, gitFrom: 'HEAD~5' })
+    await typeInto(queryInput(harness.container), 'fresh')
+    await pressKey(queryInput(harness.container), 'Enter')
+    const stored = JSON.parse(window.localStorage.getItem(SEARCH_HISTORY_KEY)!) as Array<Record<string, unknown>>
+    expect(stored[0]).toMatchObject({ query: 'fresh', gitFrom: 'HEAD~5' })
   })
 })

@@ -531,6 +531,15 @@ export const api = {
    * file's `count` stays the true total, `truncated` marks the cut), ≤2000
    * hits kept per search, ≤200 files listed — any budget cutting the answer
    * raises the top-level `truncated`.
+   *
+   * `gitFrom` narrows the candidate set to the files git reports as changed
+   * between a baseline and the current worktree (committed + staged +
+   * unstaged; untracked files sit in no baseline and stay outside). The
+   * value is a commit hash/ref (`abc1234`, `HEAD~5`, `v1.2.0`) or a date
+   * (`2026-10-01`, `2026-10-01 12:00`); the host resolves it and answers
+   * `bad-request` when it is neither (or the workspace is not a git repo).
+   * Empty/undefined sends no wire field — the unscoped search, byte-identical
+   * to the pre-gitFrom payload.
    */
   fsContentSearch: (
     scope: SessionScope,
@@ -539,6 +548,7 @@ export const api = {
     exclude: readonly string[],
     prefExclude?: readonly string[],
     match?: ContentSearchMatchOptions,
+    gitFrom?: string,
     signal?: AbortSignal,
   ) =>
     call<ContentSearchResult>('fs.contentSearch', scopePayload(scope, {
@@ -549,6 +559,7 @@ export const api = {
       ...(match?.caseSensitive === true ? { caseSensitive: true } : {}),
       ...(match?.wholeWord === true ? { wholeWord: true } : {}),
       ...(match?.regex === true ? { regex: true } : {}),
+      ...(gitFrom !== undefined && gitFrom !== '' ? { gitFrom } : {}),
     }), signal),
   fsRead: (scope: SessionScope, path: string, signal?: AbortSignal) =>
     call<FsReadResult>('fs.read', scopePayload(scope, { path }), signal),

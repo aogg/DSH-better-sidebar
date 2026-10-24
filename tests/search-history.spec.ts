@@ -108,6 +108,40 @@ describe('search-history storage contract', () => {
       .not.toBe(historyKeyOf({ query: 'a', include: [], exclude: ['b'] }))
   })
 
+  it('gitFrom rides the dedup key; an absent field and \'\' key identically (backward compatible)', () => {
+    const plain = { query: 'q', include: [], exclude: [] }
+    expect(historyKeyOf(plain)).toBe(historyKeyOf({ ...plain, gitFrom: '' }))
+    expect(historyKeyOf(plain)).not.toBe(historyKeyOf({ ...plain, gitFrom: 'HEAD~1' }))
+    // Same query + chips, different 起点 → three DISTINCT entries.
+    upsertSearchHistory({ query: 'q', include: [], exclude: [], gitFrom: 'HEAD~1' })
+    upsertSearchHistory({ query: 'q', include: [], exclude: [], gitFrom: 'v1.2.0' })
+    upsertSearchHistory({ query: 'q', include: [], exclude: [] })
+    expect(readSearchHistory().map(item => item.gitFrom)).toEqual([undefined, 'v1.2.0', 'HEAD~1'])
+    // Re-submitting one shape moves THAT entry to the front only.
+    upsertSearchHistory({ query: 'q', include: [], exclude: [], gitFrom: 'HEAD~1' })
+    expect(readSearchHistory().map(item => item.gitFrom)).toEqual(['HEAD~1', undefined, 'v1.2.0'])
+  })
+
+  it('a stored gitFrom survives the read; a corrupt (non-string) one reads as absent', () => {
+    seedStorage([
+      { query: 'ok', include: [], exclude: [], gitFrom: 'abc1234', at: 1 },
+      { query: 'bad', include: [], exclude: [], gitFrom: 42, at: 2 },
+      { query: 'legacy', include: [], exclude: [], at: 3 },
+    ])
+    expect(readSearchHistory()).toEqual([
+      { query: 'ok', include: [], exclude: [], gitFrom: 'abc1234', at: 1 },
+      { query: 'bad', include: [], exclude: [], at: 2 },
+      { query: 'legacy', include: [], exclude: [], at: 3 },
+    ])
+  })
+
+  it('upsert with an empty gitFrom stores the field ABSENT (the pre-gitFrom shape)', () => {
+    window.localStorage.setItem(SEARCH_HISTORY_KEY, '[]')
+    upsertSearchHistory({ query: 'q', include: [], exclude: [], gitFrom: '' })
+    const raw = JSON.parse(window.localStorage.getItem(SEARCH_HISTORY_KEY)!) as Array<Record<string, unknown>>
+    expect('gitFrom' in raw[0]!).toBe(false)
+  })
+
   it('caps at 20 entries and drops the tail', () => {
     for (let index = 0; index < 25; index += 1) {
       upsertSearchHistory({ query: `q${index}`, include: [], exclude: [] })
