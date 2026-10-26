@@ -200,6 +200,18 @@ describe('side card preferences', () => {
     expect((await loadPrefs(wire({ rightbarOpenOnNewSession: 0 }))).rightbarOpenOnNewSession).toBe(true)
   })
 
+  it('defaults tocPinned to false; only a real boolean flips it (md outline 固定展开)', async () => {
+    expect((await loadPrefs(wire({}))).tocPinned).toBe(false)
+    expect((await loadPrefs(wire({ tocPinned: true }))).tocPinned).toBe(true)
+    expect((await loadPrefs(wire({ tocPinned: false }))).tocPinned).toBe(false)
+  })
+
+  it('falls back tocPinned to false when the stored value is malformed', async () => {
+    expect((await loadPrefs(wire({ tocPinned: 'yes' }))).tocPinned).toBe(false)
+    expect((await loadPrefs(wire({ tocPinned: 1 }))).tocPinned).toBe(false)
+    expect((await loadPrefs(wire({ tocPinned: null }))).tocPinned).toBe(false)
+  })
+
   it('IGNORES the retired title-bar keys: a stored document that still carries them parses', async () => {
     // The whole title-bar strip mechanism (and its four preference keys) was
     // removed. A settings document written by an older version still carries
