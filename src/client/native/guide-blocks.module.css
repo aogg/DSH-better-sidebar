@@ -5,17 +5,25 @@
  * `tests/theme.spec.ts` 抓 `color:` 的令牌解析。宿主 guide 的原生入口列表被
  * 隐藏（见 guide-blocks.tsx 注入的那条规则），罗盘 hero 保留，本组件在 guide
  * 根末尾 portal 出「块 → tile」的分组结构：块是留白卡片（16px 圆角 +
- * layer-2 填充），tile 是放大版入口按钮（58px 高、20px 图标、13px 标签），
- * hover/focus 态用插件的交互令牌（写法对齐 sidebar/start-links.module.css）。
+ * layer-2 填充），auto-fill minmax(140px) 让块在窄侧栏并排两列（更宽自动
+ * 三列），奇数落单的末块跨满整行；tile 是放大版入口按钮（46px 高、20px
+ * 图标、13px 标签），块内为纵向列表行（一行一个、占满块宽），间隔刻度
+ * 6/8/12。hover/focus 态用插件的交互令牌（写法对齐 sidebar/start-links.module.css）。
  */
 
 .container {
   width: 100%;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  gap: 14px;
+  /* 140px 下限：~400px 侧栏并排两列，侧栏更宽时自动升三列。 */
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
   align-content: center;
   padding: 4px 0 8px;
+}
+
+/* 奇数落单的末块跨满整行，避免 3 块时右侧留出空位。 */
+.container > :last-child:nth-child(odd) {
+  grid-column: 1 / -1;
 }
 
 .block {
@@ -30,24 +38,26 @@
   font-weight: 600;
   letter-spacing: 0.05em;
   color: var(--dsw-alias-label-tertiary);
-  padding: 2px 4px 10px;
+  padding: 2px 4px 8px;
 }
 
+/* 纵向列表行：tile 一行一个、占满块宽（窄块下两列并排才放得下）。 */
 .blockGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
-  gap: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .tile {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 10px;
-  min-height: 58px;
-  /* grid item 默认 min-width:auto 会撑破轨道——和 .pill 一样收为 0，
-     让 .tileLabel 的省略号有机会生效。 */
+  width: 100%;
+  min-height: 46px;
+  /* flex item 同样收 min-width，让 .tileLabel 的省略号有机会生效。 */
   min-width: 0;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-3);
@@ -82,7 +92,7 @@
 }
 
 /* 宿主 ShortcutKeys 的 unboxed 键帽行（kbd 由 primitive 自带上色）：
-   大 tile 里右缘对齐，标签过长省略时也不挤压键帽。 */
+   推到列表行行尾，标签过长省略时也不挤压键帽。 */
 .tileKeys {
   margin-left: auto;
 }
