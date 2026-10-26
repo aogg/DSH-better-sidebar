@@ -1,18 +1,19 @@
 /*
- * Hero 快捷入口行（src/client/sidebar/start-links.tsx）。
+ * Hero 快捷入口网格（src/client/sidebar/start-links.tsx）。
  *
  * 皮肤契约（指南 §12）：颜色一律走 `--dsw-alias-*` 令牌，本模块零字面量；
- * `tests/theme.spec.ts` 抓 `color:` 的令牌解析。胶囊几何对齐宿主 guide 卡片
- * 的大圆角观感（R20 族），hover/focus 态用插件的交互令牌。
+ * `tests/theme.spec.ts` 抓 `color:` 的令牌解析。入口铺成自适应卡片网格
+ * （auto-fill + minmax 轨道，窄面板自动增列、不再折行堆叠），整宽对齐下方
+ * 设置卡片的 720px 上限并居中；tile 保留按钮 DNA，圆角收紧为 14px 的卡片
+ * 观感，hover/focus 态用插件的交互令牌。
  */
 
 .row {
-  display: flex;
-  flex: none;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
   gap: 8px;
+  width: min(720px, 100%);
+  margin: 0 auto;
   padding: 12px 16px 24px;
   font-size: 12px;
   line-height: 1.4;
@@ -21,10 +22,12 @@
 .pill {
   display: inline-flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 6px;
-  padding: 6px 14px;
+  min-width: 0;
+  padding: 8px 12px;
   border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 20px;
+  border-radius: 14px;
   background: var(--dsw-alias-bg-layer-3);
   color: var(--dsw-alias-label-secondary);
   font: inherit;
@@ -55,6 +58,8 @@
 }
 
 .label {
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -64,7 +69,7 @@
 }
 
 /* ── 开始页里的设置页（data-dsh-start-settings）────────────────────────────
-   入口行下方的设置卡片：几何对齐插件卡片观感（16px 族 + layer-3 填充），
+   入口网格下方的设置卡片：几何对齐插件卡片观感（16px 族 + layer-3 填充），
    内容是 SideCardSection 本体，头部带「打开宿主设置」降级出口与关闭按钮。 */
 
 .settings {

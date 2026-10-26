@@ -1,14 +1,14 @@
 /**
- * 开始页面（hero）末尾的快捷入口行 + 内置设置页。
+ * 开始页面（hero）末尾的快捷入口网格 + 内置设置页。
  *
  * DSH web 在主区没有会话内容时渲染 hero 开始页：宿主把相位打在
  * ConversationRoot 的 `data-phase` 上（"settling" | "hero" | "active"，宿主
- * ConversationMainPanel），`hero` 即开始页。本模块在该根元素**末尾**追加一行
- * 胶囊入口（portal 挂载，行落在输入框 `[data-composer-seat]` 之下），相位离开
- * hero 或宿主 DOM 被替换时整体移除。
+ * ConversationMainPanel），`hero` 即开始页。本模块在该根元素**末尾**追加一组
+ * 入口网格 tile（portal 挂载，网格落在输入框 `[data-composer-seat]` 之下），
+ * 相位离开 hero 或宿主 DOM 被替换时整体移除。
  *
  * 「设置」胶囊打开的是**开始页里的设置页**（`data-dsh-start-settings`）：同一
- * portal 宿主内、入口行下方渲染一张设置卡片，内容直接复用宿主设置壳的
+ * portal 宿主内、入口网格下方渲染一张设置卡片，内容直接复用宿主设置壳的
  * SideCardSection（侧边卡片全部配置项 + 各功能的齿轮弹窗 + 添加插件弹窗，
  * 读写走同一条插件 settings 路由，两处所见即同一份数据）。Esc / 关闭按钮 /
  * 再次点击胶囊 / 相位离开 hero 都会收起。宿主设置壳没有公开打开 API，卡片头
@@ -155,7 +155,7 @@ function settingsStartIcon(size: number): React.ReactNode {
 }
 
 /**
- * 开始页里的设置页（`data-dsh-start-settings`）：入口行下方的设置卡片，内容
+ * 开始页里的设置页（`data-dsh-start-settings`）：入口网格下方的设置卡片，内容
  * 就是宿主设置壳的 Side card 分区本体（同一组件、同一 store、同一条 settings
  * 路由）。Esc 关闭；「打开宿主设置」是宿主设置壳的降级出口（探测链静默）。
  */
@@ -188,7 +188,7 @@ function StartSettingsPanel(props: { ctx: Context; service: BetterSidebarService
   )
 }
 
-/** 入口行本身（portal 内容；「设置」胶囊开关同一 portal 内的内置设置页）。 */
+/** 入口网格本身（portal 内容；「设置」入口开关同一 portal 内的内置设置页）。 */
 export function StartLinks(props: { ctx: Context; service: BetterSidebarService; store?: SidebarStore; keys?: readonly string[]; aria?: string }) {
   const { ctx, service, store } = props
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -269,9 +269,9 @@ export function StartLinks(props: { ctx: Context; service: BetterSidebarService;
 }
 
 /**
- * 注册 hero 快捷入口行（+ 内置设置页）：监听 `[data-slot="main.conversation"]`
+ * 注册 hero 快捷入口网格（+ 内置设置页）：监听 `[data-slot="main.conversation"]`
  * 内的 `data-phase` 属性变更（含子树增删，SPA 导航 / HMR 的 DOM 替换一并覆盖），
- * 仅 `hero` 时把入口行 portal 到相位根元素末尾。`store` 是共享偏好 store：
+ * 仅 `hero` 时把入口网格 portal 到相位根元素末尾。`store` 是共享偏好 store：
  * 注入后「设置」胶囊打开内置设置页（SideCardSection 需要），缺席时退回
  * 「打开宿主设置」。返回清理 disposer。
  */
@@ -306,7 +306,7 @@ export function registerStartLinks(ctx: Context, service: BetterSidebarService, 
     }
     if (root !== undefined && phaseRoot === attachedTo) return
     unmount()
-    // 追加到相位根**末尾**：composer seat 在会话内容槽里，行自然落在输入框下方。
+    // 追加到相位根**末尾**：composer seat 在会话内容槽里，网格自然落在输入框下方。
     host = doc.createElement('div')
     host.setAttribute('data-dsh-start-links-host', '')
     phaseRoot.appendChild(host)
