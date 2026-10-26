@@ -811,6 +811,10 @@ export const tr: Record<string, string> = {
 // 「命令」keys (config page + cmd-run tab; zh is the source of truth).
   commandsPage: 'Komutlar',
   guideDescCommands: 'Komutları ve betikleri yapılandırın; tıklayınca yeni sekmede çalışır',
+  // guide 起始页分块标题（native/guide-blocks.tsx）。
+  guideBlockWorkspace: 'Çalışma alanı',
+  guideBlockSession: 'Oturumlar ve görevler',
+  guideBlockMore: 'Eklentiler ve ayarlar',
   commandsNewCommand: 'Yeni komut',
   commandsNewRule: 'Yeni betik kuralı',
   commandsRefreshScripts: 'Betikleri yenile',

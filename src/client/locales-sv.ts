@@ -794,6 +794,10 @@ export const sv: Record<string, string> = {
 // 「命令」keys (config page + cmd-run tab; zh is the source of truth).
   commandsPage: 'Kommandon',
   guideDescCommands: 'Konfigurera kommandon och skript; ett klick kör dem i en ny flik',
+  // guide 起始页分块标题（native/guide-blocks.tsx）。
+  guideBlockWorkspace: 'Arbetsyta',
+  guideBlockSession: 'Sessioner & uppgifter',
+  guideBlockMore: 'Plugin & inställningar',
   commandsNewCommand: 'Nytt kommando',
   commandsNewRule: 'Ny skriptregel',
   commandsRefreshScripts: 'Uppdatera skript',

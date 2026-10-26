@@ -826,6 +826,10 @@ export const zhTW: Record<string, string> = {
 // 「命令」keys (config page + cmd-run tab; zh is the source of truth).
   commandsPage: '命令',
   guideDescCommands: '設定命令與腳本，點擊即在新分頁執行',
+  // guide 起始页分块标题（native/guide-blocks.tsx）。
+  guideBlockWorkspace: '工作區',
+  guideBlockSession: '會話與任務',
+  guideBlockMore: '插件與設定',
   commandsNewCommand: '新增命令',
   commandsNewRule: '新增腳本規則',
   commandsRefreshScripts: '重新整理腳本',

@@ -811,6 +811,10 @@ export const vi: Record<string, string> = {
 // 「命令」keys (config page + cmd-run tab; zh is the source of truth).
   commandsPage: 'Lệnh',
   guideDescCommands: 'Cấu hình lệnh và script; bấm để chạy trong tab mới',
+  // guide 起始页分块标题（native/guide-blocks.tsx）。
+  guideBlockWorkspace: 'Không gian làm việc',
+  guideBlockSession: 'Phiên & tác vụ',
+  guideBlockMore: 'Plugin & cài đặt',
   commandsNewCommand: 'Lệnh mới',
   commandsNewRule: 'Quy tắc script mới',
   commandsRefreshScripts: 'Làm mới script',

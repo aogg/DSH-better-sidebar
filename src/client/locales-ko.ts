@@ -803,6 +803,10 @@ export const ko: Record<string, string> = {
 // 「命令」keys (config page + cmd-run tab; zh is the source of truth).
   commandsPage: '명령',
   guideDescCommands: '명령과 스크립트를 설정하고 클릭하면 새 탭에서 실행',
+  // guide 起始页分块标题（native/guide-blocks.tsx）。
+  guideBlockWorkspace: '워크스페이스',
+  guideBlockSession: '세션과 작업',
+  guideBlockMore: '플러그인 및 설정',
   commandsNewCommand: '새 명령',
   commandsNewRule: '새 스크립트 규칙',
   commandsRefreshScripts: '스크립트 새로고침',

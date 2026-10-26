@@ -811,6 +811,10 @@ export const ja: Record<string, string> = {
 // 「命令」keys (config page + cmd-run tab; zh is the source of truth).
   commandsPage: 'コマンド',
   guideDescCommands: 'コマンドとスクリプトを設定し、クリックで新しいタブで実行',
+  // guide 起始页分块标题（native/guide-blocks.tsx）。
+  guideBlockWorkspace: 'ワークスペース',
+  guideBlockSession: 'セッションとタスク',
+  guideBlockMore: 'プラグインと設定',
   commandsNewCommand: '新規コマンド',
   commandsNewRule: '新規スクリプトルール',
   commandsRefreshScripts: 'スクリプト再読み込み',

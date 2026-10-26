@@ -802,6 +802,10 @@ export const it: Record<string, string> = {
 // 「命令」keys (config page + cmd-run tab; zh is the source of truth).
   commandsPage: 'Comandi',
   guideDescCommands: 'Configura comandi e script; un clic li esegue in una nuova scheda',
+  // guide 起始页分块标题（native/guide-blocks.tsx）。
+  guideBlockWorkspace: 'Area di lavoro',
+  guideBlockSession: 'Sessioni e attività',
+  guideBlockMore: 'Plugin e impostazioni',
   commandsNewCommand: 'Nuovo comando',
   commandsNewRule: 'Nuova regola di script',
   commandsRefreshScripts: 'Aggiorna script',

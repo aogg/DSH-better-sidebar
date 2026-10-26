@@ -797,6 +797,10 @@ export const de: Record<string, string> = {
 // 「命令」keys (config page + cmd-run tab; zh is the source of truth).
   commandsPage: 'Befehle',
   guideDescCommands: 'Befehle und Skripte konfigurieren; per Klick in neuem Tab ausführen',
+  // guide 起始页分块标题（native/guide-blocks.tsx）。
+  guideBlockWorkspace: 'Arbeitsbereich',
+  guideBlockSession: 'Sitzung & Aufgaben',
+  guideBlockMore: 'Plugins & Einstellungen',
   commandsNewCommand: 'Neuer Befehl',
   commandsNewRule: 'Neue Skriptregel',
   commandsRefreshScripts: 'Skripte aktualisieren',

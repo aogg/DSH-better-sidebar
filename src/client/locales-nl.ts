@@ -809,6 +809,10 @@ export const nl: Record<string, string> = {
 // 「命令」keys (config page + cmd-run tab; zh is the source of truth).
   commandsPage: 'Opdrachten',
   guideDescCommands: 'Configureer opdrachten en scripts; een klik voert ze uit in een nieuw tabblad',
+  // guide 起始页分块标题（native/guide-blocks.tsx）。
+  guideBlockWorkspace: 'Werkruimte',
+  guideBlockSession: 'Sessies & taken',
+  guideBlockMore: 'Plugins & instellingen',
   commandsNewCommand: 'Nieuwe opdracht',
   commandsNewRule: 'Nieuwe scriptregel',
   commandsRefreshScripts: 'Scripts vernieuwen',

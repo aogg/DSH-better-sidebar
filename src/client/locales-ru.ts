@@ -809,6 +809,10 @@ export const ru: Record<string, string> = {
 // 「命令」keys (config page + cmd-run tab; zh is the source of truth).
   commandsPage: 'Команды',
   guideDescCommands: 'Настройте команды и скрипты; клик запускает их в новой вкладке',
+  // guide 起始页分块标题（native/guide-blocks.tsx）。
+  guideBlockWorkspace: 'Рабочая область',
+  guideBlockSession: 'Сессии и задачи',
+  guideBlockMore: 'Плагины и настройки',
   commandsNewCommand: 'Новая команда',
   commandsNewRule: 'Новое правило скриптов',
   commandsRefreshScripts: 'Обновить скрипты',

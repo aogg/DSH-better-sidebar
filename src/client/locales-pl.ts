@@ -813,6 +813,10 @@ export const pl: Record<string, string> = {
 // 「命令」keys (config page + cmd-run tab; zh is the source of truth).
   commandsPage: 'Polecenia',
   guideDescCommands: 'Konfiguruj polecenia i skrypty; kliknięcie uruchamia je w nowej karcie',
+  // guide 起始页分块标题（native/guide-blocks.tsx）。
+  guideBlockWorkspace: 'Obszar roboczy',
+  guideBlockSession: 'Sesje i zadania',
+  guideBlockMore: 'Wtyczki i ustawienia',
   commandsNewCommand: 'Nowe polecenie',
   commandsNewRule: 'Nowa reguła skryptów',
   commandsRefreshScripts: 'Odśwież skrypty',

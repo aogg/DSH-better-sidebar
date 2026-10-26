@@ -809,6 +809,10 @@ export const id: Record<string, string> = {
 // 「命令」keys (config page + cmd-run tab; zh is the source of truth).
   commandsPage: 'Perintah',
   guideDescCommands: 'Konfigurasikan perintah dan skrip; klik untuk menjalankannya di tab baru',
+  // guide 起始页分块标题（native/guide-blocks.tsx）。
+  guideBlockWorkspace: 'Ruang kerja',
+  guideBlockSession: 'Sesi & tugas',
+  guideBlockMore: 'Plugin & pengaturan',
   commandsNewCommand: 'Perintah baru',
   commandsNewRule: 'Aturan skrip baru',
   commandsRefreshScripts: 'Segarkan skrip',

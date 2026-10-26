@@ -812,6 +812,10 @@ export const ar: Record<string, string> = {
 // 「命令」keys (config page + cmd-run tab; zh is the source of truth).
   commandsPage: 'الأوامر',
   guideDescCommands: 'تكوين الأوامر والسكربتات؛ النقر يشغّلها في تبويب جديد',
+  // guide 起始页分块标题（native/guide-blocks.tsx）。
+  guideBlockWorkspace: 'مساحة العمل',
+  guideBlockSession: 'الجلسات والمهام',
+  guideBlockMore: 'الإضافات والإعدادات',
   commandsNewCommand: 'أمر جديد',
   commandsNewRule: 'قاعدة سكربت جديدة',
   commandsRefreshScripts: 'تحديث السكربتات',
