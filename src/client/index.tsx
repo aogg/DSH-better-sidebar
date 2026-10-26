@@ -23,7 +23,7 @@ import { registerNativeSurface } from './native/index.ts'
 import { registerStripCompression } from './native/strip-compression.ts'
 import { registerStripAddButton } from './native/strip-add-button.ts'
 import { registerStripWheel } from './native/strip-wheel.ts'
-import { registerGuideGrid } from './native/guide-grid.ts'
+import { registerGuideBlocks } from './native/guide-blocks.tsx'
 import { registerBottomToggle } from './sidebar/bottom-toggle.tsx'
 import { registerStartLinks } from './sidebar/start-links.tsx'
 import { createNativeSurface } from './native/surface.ts'
@@ -246,16 +246,22 @@ export function apply(ctx: Context): void {
     () => registerStartLinks(ctx, service, sidebarStore),
     'dsh-better-sidebar: hero start links',
   )
-  // The HOST guide start page as an adaptive card grid: the host stacks its
-  // entries as fixed 380px-wide row capsules in ONE centered column, and with
-  // the plugin's ~10 guide capsules the column overflows the viewport. Pure
-  // static CSS (no observer — the rules re-match on their own) scoped to the
-  // host's published data-* hooks; a host rename makes the rules stop
-  // matching and the stock single column returns, harmlessly (see
-  // guide-grid.ts).
+  // The HOST guide start page as grouped blocks: CSS cannot re-group the
+  // host's flat entry list, so the plugin renders its OWN structure instead —
+  // a MutationObserver portals one「块 → tile」component (workspace /
+  // session & tasks / plugins & settings, bigger entries with breathing room)
+  // to the END of every `[data-sidebar-right-guide]` root while one injected
+  // rule hides the host's own entry cells (the compass hero stays). Tiles
+  // enumerate the SAME registry source and filters the native registrations
+  // use, so the blocks mirror the stock guide's membership in step. Only the
+  // host's published data-* hooks are consumed: a host rename makes the
+  // hide-rule stop matching and the stock list return — the mismatch degrades
+  // harmlessly (duplicates at worst, never a broken page). Observer, portals
+  // and the style tag are cleaned up by the effect disposer (see
+  // guide-blocks.tsx).
   ctx.effect(
-    () => registerGuideGrid(),
-    'dsh-better-sidebar: host guide entry grid',
+    () => registerGuideBlocks(ctx, service),
+    'dsh-better-sidebar: host guide grouped blocks',
   )
   // The paste-progress card (文件树黏贴): one top-right body-level portal for
   // the whole page, driven by the transfer-client store — the tree only

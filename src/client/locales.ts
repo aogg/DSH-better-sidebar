@@ -815,6 +815,10 @@ export const zh = {
   // 其余语言按 locales.spec.ts 的 key-set-equal 检查全量补齐（见 locales-*.ts）。
   commandsPage: '命令',
   guideDescCommands: '配置命令与脚本，点击即在新标签页运行',
+  // guide 起始页分块标题（native/guide-blocks.tsx 的块标题）。
+  guideBlockWorkspace: '工作区',
+  guideBlockSession: '会话与任务',
+  guideBlockMore: '插件与配置',
   commandsNewCommand: '新建命令',
   commandsNewRule: '新建脚本规则',
   commandsRefreshScripts: '刷新脚本',
@@ -1673,6 +1677,10 @@ export const en: Record<keyof typeof zh, string> = {
   // The 「命令」keys (config page + cmd-run tab) — key-set-equal to zh.
   commandsPage: 'Commands',
   guideDescCommands: 'Configure commands and scripts; click to run in a new tab',
+  // Guide start-page block titles (native/guide-blocks.tsx) — key-set-equal to zh.
+  guideBlockWorkspace: 'Workspace',
+  guideBlockSession: 'Session & tasks',
+  guideBlockMore: 'Plugins & settings',
   commandsNewCommand: 'New command',
   commandsNewRule: 'New script rule',
   commandsRefreshScripts: 'Refresh scripts',

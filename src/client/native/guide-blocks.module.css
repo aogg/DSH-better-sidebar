@@ -1,0 +1,88 @@
+/*
+ * guide 起始页分块入口（src/client/native/guide-blocks.tsx）。
+ *
+ * 皮肤契约（指南 §12）：颜色一律走 `--dsw-alias-*` 令牌，本模块零字面量；
+ * `tests/theme.spec.ts` 抓 `color:` 的令牌解析。宿主 guide 的原生入口列表被
+ * 隐藏（见 guide-blocks.tsx 注入的那条规则），罗盘 hero 保留，本组件在 guide
+ * 根末尾 portal 出「块 → tile」的分组结构：块是留白卡片（16px 圆角 +
+ * layer-2 填充），tile 是放大版入口按钮（58px 高、20px 图标、13px 标签），
+ * hover/focus 态用插件的交互令牌（写法对齐 sidebar/start-links.module.css）。
+ */
+
+.container {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 14px;
+  align-content: center;
+  padding: 4px 0 8px;
+}
+
+.block {
+  border: 1px solid var(--dsw-alias-border-l2);
+  background: var(--dsw-alias-bg-layer-2);
+  border-radius: 16px;
+  padding: 12px;
+}
+
+.blockTitle {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--dsw-alias-label-tertiary);
+  padding: 2px 4px 10px;
+}
+
+.blockGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 8px;
+}
+
+.tile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 58px;
+  /* grid item 默认 min-width:auto 会撑破轨道——和 .pill 一样收为 0，
+     让 .tileLabel 的省略号有机会生效。 */
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-3);
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.tile:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  border-color: var(--dsw-alias-label-dimmed);
+  color: var(--dsw-alias-label-primary);
+}
+
+.tile:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l4);
+  outline-offset: 1px;
+}
+
+.tileIcon {
+  display: inline-flex;
+  flex: none;
+}
+
+.tileLabel {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* 宿主 ShortcutKeys 的 unboxed 键帽行（kbd 由 primitive 自带上色）：
+   大 tile 里右缘对齐，标签过长省略时也不挤压键帽。 */
+.tileKeys {
+  margin-left: auto;
+}
