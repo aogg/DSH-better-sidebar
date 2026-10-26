@@ -23,6 +23,11 @@
  * (order 39, single, the hero pill's door) and the HIDDEN sandboxed-iframe
  * page tab (one tab per page id, minted from the one-shot seed in
  * webview-open.ts, dedupeKey = page id).
+ *
+ * `commands` + `cmd-run` are the 「命令」pair (same shape): the config page
+ * (order 40, single) and the HIDDEN execution tab (id `cmd:<uuid>`, minted
+ * from the one-shot seed in commands-open.ts, deliberately NO dedupeKey —
+ * every run is a new tab; `available` gates on the host terminal service).
  */
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
@@ -40,6 +45,7 @@ import { registerBuiltins } from '../src/client/builtins/index.ts'
 import { parkSidechatReopen } from '../src/client/SideChatView.tsx'
 import { parkSearchSeed } from '../src/client/search-seed.ts'
 import { parkWebviewOpen } from '../src/client/webview-open.ts'
+import { parkCmdRun } from '../src/client/commands-open.ts'
 import { SettingsPage } from '../src/client/SettingsPage.tsx'
 
 function setup(): { service: ReturnType<typeof createBetterSidebarService>; store: ReturnType<typeof createSidebarStore>; dispose: () => void } {
@@ -50,10 +56,10 @@ function setup(): { service: ReturnType<typeof createBetterSidebarService>; stor
 }
 
 describe('built-in tab registrations', () => {
-  it('registers the 11 built-in tabs (the host owns the right-sidebar terminal and browser)', () => {
+  it('registers the 13 built-in tabs (the host owns the right-sidebar terminal and browser)', () => {
     const { service } = setup()
     expect(service.getTabs().map(t => t.id).sort()).toEqual(
-      ['diff', 'editor', 'git', 'history', 'search', 'settings', 'sidechat', 'subagent', 'terminal-bottom', 'webview', 'webview-page'],
+      ['cmd-run', 'commands', 'diff', 'editor', 'git', 'history', 'search', 'settings', 'sidechat', 'subagent', 'terminal-bottom', 'webview', 'webview-page'],
     )
   })
 
@@ -174,11 +180,13 @@ describe('built-in tab registrations', () => {
     expect(settings?.pluginToggles ?? []).toEqual([])
   })
 
-  it('only diff and the webview page tab are hidden from the + menu; editor is the visible files window (order 10)', () => {
+  it('only the hidden page/execution tabs and diff are out of the + menu; editor is the visible files window (order 10)', () => {
     const { service } = setup()
     // The webview page tab is minted from the config page / pinned opens only
-    // (a bare + menu entry would open a page with no URL).
-    expect(service.getTabs().filter(t => t.hidden).map(t => t.id)).toEqual(['webview-page', 'diff'])
+    // (a bare + menu entry would open a page with no URL); the cmd-run
+    // execution tab is minted from the config page's run actions only (a bare
+    // entry would be an empty shell).
+    expect(service.getTabs().filter(t => t.hidden).map(t => t.id)).toEqual(['webview-page', 'cmd-run', 'diff'])
     const editor = service.getTab('editor')
     expect(editor?.hidden).toBe(false)
     expect(editor?.order).toBe(10)
@@ -323,15 +331,61 @@ describe('built-in tab registrations', () => {
     expect(page?.createTab?.(undefined as never)).toBeNull()
   })
 
-  it('the visible + menu order slots webview between history (38) and the bottom terminal (40)', () => {
+  it('the visible + menu order slots commands between webview (39) and the bottom terminal (41)', () => {
     const { service } = setup()
     const ordered = service.getTabs()
       .filter(descriptor => descriptor.hidden !== true)
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
       .map(descriptor => descriptor.id)
     expect(ordered).toEqual([
-      'editor', 'search', 'git', 'subagent', 'sidechat', 'history', 'webview', 'terminal-bottom', 'settings',
+      'editor', 'search', 'git', 'subagent', 'sidechat', 'history', 'webview', 'commands', 'terminal-bottom', 'settings',
     ])
+  })
+
+  it('the commands tab is the start page\'s 命令 door (single, visible, order 40)', () => {
+    const { service } = setup()
+    const commands = service.getTab('commands')
+    expect(commands).toBeDefined()
+    // One config page: the hero pill's openTab({ type: 'commands' }) focuses
+    // the existing one (webview-tab shape).
+    expect(commands?.single).toBe(true)
+    expect(commands?.hidden).not.toBe(true)
+    expect(commands?.bottomOnly).not.toBe(true)
+    expect(commands?.order).toBe(40)
+    expect(commands?.icon).toBeDefined()
+    expect(commands?.component).toBeDefined()
+    expect(commands?.description).toBeDefined()
+  })
+
+  it('the cmd-run tab mints cmd:<uuid> from the one-shot seed and never dedupes (every run is a new tab)', () => {
+    const { service } = setup()
+    const run = service.getTab('cmd-run')
+    expect(run).toBeDefined()
+    expect(run?.hidden).toBe(true)
+    // Seedless mint (the host opening the bare kind) is refused.
+    expect(run?.createTab?.(undefined as never)).toBeNull()
+    // Park → mint carries the seed: the id is a fresh cmd:<uuid> and the meta
+    // snapshot carries the commandline (+ optional source/interaction meta).
+    parkCmdRun({ title: 'deploy.sh', commandline: "bash '/tmp/deploy.sh'", sourceKey: 'script:/tmp/deploy.sh' })
+    const first = run?.createTab?.(undefined as never)
+    expect(first?.tab.id).toMatch(/^cmd:/)
+    expect(first?.tab.type).toBe('cmd-run')
+    expect(first?.tab.title).toBe('deploy.sh')
+    expect(first?.tab.meta).toEqual({
+      commandline: "bash '/tmp/deploy.sh'",
+      title: 'deploy.sh',
+      sourceKey: 'script:/tmp/deploy.sh',
+    })
+    // Deliberately no dedupeKey: two runs mint two independent tabs.
+    parkCmdRun({ title: 'deploy.sh', commandline: "bash '/tmp/deploy.sh'" })
+    const second = run?.createTab?.(undefined as never)
+    expect(second?.tab.id).toMatch(/^cmd:/)
+    expect(second?.tab.id).not.toBe(first?.tab.id)
+    expect(run?.dedupeKey).toBeUndefined()
+    // The host terminal service gates the type (+ menu disabled state).
+    expect(run?.available).toBeDefined()
+    // Closing the tab is the only thing that ends the process.
+    expect(run?.onClose).toBeDefined()
   })
 
   it('the subagent tab declares its auto-open related settings', () => {

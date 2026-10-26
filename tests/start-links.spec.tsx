@@ -3,15 +3,15 @@
  *
  * 宿主 DOM 用假结构模拟（`[data-slot="main.conversation"]` + `[data-phase]` +
  * `[data-composer-seat]`，与 dock-fallback spec 同一手法）：相位标记是宿主
- * ConversationMainPanel 的稳定 data-* 输出，类名是哈希值不进断言。钉住九件事：
- * 相位 hero 渲染 9 个胶囊（「搜索」在「变动」之后、「webview网页」在「历史发送」
- * 之后）、相位离开 hero 移除、点击走正确的 openTab 参数（含「搜索」→
- * type: 'search' 多实例、「历史发送」→ type: 'history'、「webview网页」→
- * type: 'webview'，且带 title/aria 说明文案）、无在屏会话时终端点击是 no-op
- * （不抛错）、store 注入时设置胶囊打开内置设置页（SideCardSection 本体，
- * Esc/再点/相位离开收起）、store 缺席时设置胶囊走 settings-entry 探测链
- * （已开直达分区 / 合成 settings.open 快捷键 / 探测失败静默 no-op）、
- * observer/portal 随 disposer 清理。
+ * ConversationMainPanel 的稳定 data-* 输出，类名是哈希值不进断言。钉住十件事：
+ * 相位 hero 渲染 10 个胶囊（「搜索」在「变动」之后、「webview网页」在「历史发送」
+ * 之后、「命令」在「webview网页」与「设置」之间）、相位离开 hero 移除、点击走
+ * 正确的 openTab 参数（含「搜索」→ type: 'search' 多实例、「历史发送」→
+ * type: 'history'、「webview网页」→ type: 'webview'、「命令」→ type: 'commands'，
+ * 且带 title/aria 说明文案）、无在屏会话时终端点击是 no-op（不抛错）、store
+ * 注入时设置胶囊打开内置设置页（SideCardSection 本体，Esc/再点/相位离开收起）、
+ * store 缺席时设置胶囊走 settings-entry 探测链（已开直达分区 / 合成
+ * settings.open 快捷键 / 探测失败静默 no-op）、observer/portal 随 disposer 清理。
  */
 // @vitest-environment jsdom
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -106,7 +106,7 @@ function click(node: Element): void {
 }
 
 describe('hero start links（开始页快捷入口）', () => {
-  it('phase=hero 时渲染 9 个胶囊（webview网页在历史发送之后），行挂在相位根末尾（composer seat 之后）', async () => {
+  it('phase=hero 时渲染 10 个胶囊（webview网页在历史发送之后、命令在 webview 与设置之间），行挂在相位根末尾（composer seat 之后）', async () => {
     const { phaseRoot } = mountHero('hero')
     const ctx = makeCtx()
     const { fake } = service()
@@ -115,9 +115,9 @@ describe('hero start links（开始页快捷入口）', () => {
     try {
       await flush()
       const links = document.querySelectorAll('[data-dsh-start-link]')
-      expect(links).toHaveLength(9)
+      expect(links).toHaveLength(10)
       expect([...links].map(node => node.getAttribute('data-dsh-start-link'))).toEqual([
-        'files', 'changes', 'search', 'terminal', 'jobs', 'sidechat', 'history', 'webview', 'settings',
+        'files', 'changes', 'search', 'terminal', 'jobs', 'sidechat', 'history', 'webview', 'commands', 'settings',
       ])
       const host = document.querySelector('[data-dsh-start-links-host]')
       expect(host, '入口行宿主必须存在').not.toBeNull()
@@ -138,7 +138,7 @@ describe('hero start links（开始页快捷入口）', () => {
     act(() => { dispose = registerStartLinks(ctx, fake) })
     try {
       await flush()
-      expect(document.querySelectorAll('[data-dsh-start-link]').length).toBe(9)
+      expect(document.querySelectorAll('[data-dsh-start-link]').length).toBe(10)
       act(() => { phaseRoot.setAttribute('data-phase', 'active') })
       await flush()
       expect(document.querySelector('[data-dsh-start-links-host]')).toBeNull()
@@ -226,6 +226,26 @@ describe('hero start links（开始页快捷入口）', () => {
     }
   })
 
+  it('命令胶囊：单实例 type: commands 打开配置页，aria 与 title 用同一句说明文案', async () => {
+    mountHero('hero')
+    const ctx = makeCtx({ mounted: 's1' })
+    const { fake, openTab } = service()
+    let dispose: () => void = () => {}
+    act(() => { dispose = registerStartLinks(ctx, fake) })
+    try {
+      await flush()
+      const node = document.querySelector('[data-dsh-start-link="commands"]')
+      if (node === null) throw new Error('missing commands link')
+      expect(node.textContent).toContain(t('commandsPage'))
+      expect(node.getAttribute('aria-label')).toBe(t('guideDescCommands'))
+      expect(node.getAttribute('title')).toBe(t('guideDescCommands'))
+      click(node)
+      expect(openTab).toHaveBeenLastCalledWith({ type: 'commands' })
+    } finally {
+      act(() => { dispose() })
+    }
+  })
+
   it('终端胶囊：有在屏会话才开宿主 terminal kind，无在屏会话是 no-op（不抛错）', async () => {
     mountHero('hero')
     const openTab = vi.fn()
@@ -308,7 +328,7 @@ describe('hero start links（开始页快捷入口）', () => {
     let dispose: () => void = () => {}
     act(() => { dispose = registerStartLinks(ctx, fake) })
     await flush()
-    expect(document.querySelectorAll('[data-dsh-start-link]').length).toBe(9)
+    expect(document.querySelectorAll('[data-dsh-start-link]').length).toBe(10)
     act(() => { dispose() })
     expect(document.querySelector('[data-dsh-start-links-host]')).toBeNull()
     act(() => { phaseRoot.setAttribute('data-phase', 'settling') })

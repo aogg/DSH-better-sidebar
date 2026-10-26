@@ -27,9 +27,10 @@ import {
   VscSearch,
   VscSettingsGear,
   VscTerminal,
+  VscTerminalCmd,
 } from 'react-icons/vsc'
 /** The styled wrapper classes; typed so a renamed rule fails the build. */
-const css = styles as Record<'files' | 'changes' | 'tasks' | 'sidechat' | 'terminal' | 'browser' | 'settings' | 'history' | 'search' | 'webview' | 'webviewPage', string>
+const css = styles as Record<'files' | 'changes' | 'tasks' | 'sidechat' | 'terminal' | 'browser' | 'settings' | 'history' | 'search' | 'webview' | 'webviewPage' | 'commands', string>
 
 /** One tab type's glyph, sized by the caller's surface (14px in a strip). */
 export type TabIcon = (size: number) => ReactNode
@@ -108,3 +109,12 @@ export const webviewTabIcon: TabIcon = (size) =>
  */
 export const webviewPageTabIcon: TabIcon = (size) =>
   themed(css.webviewPage, <VscGlobe size={size} />)
+
+/**
+ * 「命令」配置页（the hero pill's door）— the door family again (same accent
+ * as the webview config chip): another curated-door surface on the hero row.
+ * The glyph is a command prompt (the page curates things that RUN), distinct
+ * from the terminal chip's plain shell rectangle.
+ */
+export const commandsTabIcon: TabIcon = (size) =>
+  themed(css.commands, <VscTerminalCmd size={size} />)

@@ -67,3 +67,10 @@
      chip 同一语言。 */
   color: var(--dsw-alias-label-primary);
 }
+
+.commands {
+  /* 「命令」配置页是一扇通往可执行内容的门：与 webview 配置 chip 同一
+     business 族（the door family），glyph 用命令提示符而不是终端矩形——
+     页面策展的是「要运行的东西」。 */
+  color: var(--dsw-alias-state-business-primary, var(--dsw-alias-brand-primary, var(--dsw-alias-label-primary)));
+}

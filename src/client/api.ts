@@ -472,6 +472,16 @@ function openExternal(payload: OpenExternalPayload): Promise<OpenExternalResult>
   }
 }
 
+/** One `commands.scanScripts` hit (the wire shape of a scanned script). */
+export interface ScriptMatchRow {
+  abs: string
+  rel: string
+  dir: string
+  name: string
+  mtime: number
+  size: number
+}
+
 /** The sidebar API surface (session scope threaded through every call). */
 export const api = {
   /**
@@ -850,6 +860,25 @@ export const api = {
    *  URLs are launched on the browser/client machine; reveal and local URLs
    *  keep using the host's platform opener. */
   openExternal,
+  /* ── 「命令」开始页（commands.* 三条路由；服务端执行体见 src/commands-scan.ts） ── */
+
+  /** 宿主环境信息（变量替换的 host 类内置变量取值；服务端缓存 ~60s）。 */
+  commandsEnvInfo: () =>
+    call<{ username: string; hostname: string; homedir: string; tmpdir: string }>('commands.envInfo', {}),
+  /** 当前工作区的 git 分支与短提交（非仓库/无 HEAD 的字段为空串；缓存 ~30s）。 */
+  commandsGitInfo: (scope: SessionScope, signal?: AbortSignal) =>
+    call<{ branch: string; sha: string }>('commands.gitInfo', scopePayload(scope, {}), signal),
+  /** 脚本规则的深度 glob 扫描：每条规则独立带回 matches/error/truncated。 */
+  commandsScanScripts: (
+    scope: SessionScope,
+    rules: readonly { id: string; pattern: string }[],
+    signal?: AbortSignal,
+  ) =>
+    call<{ scans: { id: string; matches: ScriptMatchRow[]; error?: string; truncated?: boolean }[] }>(
+      'commands.scanScripts',
+      scopePayload(scope, { rules: [...rules] }),
+      signal,
+    ),
 }
 
 /** Absolute URL of the media route for one path (images only). */

@@ -32,7 +32,7 @@ import { useCallback, useEffect, useState, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { IconCloseFillRegular, IconSettingsOutlineRegular, ShortcutKeys } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Context } from '../../context-types.ts'
-import { changesTabIcon, filesTabIcon, historyTabIcon, searchTabIcon, sidechatTabIcon, tasksTabIcon, terminalTabIcon, webviewTabIcon } from '../builtins/tab-icons.tsx'
+import { changesTabIcon, filesTabIcon, historyTabIcon, searchTabIcon, sidechatTabIcon, tasksTabIcon, terminalTabIcon, webviewTabIcon, commandsTabIcon } from '../builtins/tab-icons.tsx'
 import { mountedSessionId } from '../native/surface.ts'
 import { t } from '../locales.ts'
 import type { SidebarStore } from '../state.ts'
@@ -43,7 +43,7 @@ import css from './start-links.module.css'
 
 /** 一个入口的展示与动作（kind 也写进 data-dsh-start-link 供测试/样式锚定）。 */
 interface StartLink {
-  kind: 'files' | 'changes' | 'search' | 'terminal' | 'jobs' | 'sidechat' | 'history' | 'webview' | 'settings'
+  kind: 'files' | 'changes' | 'search' | 'terminal' | 'jobs' | 'sidechat' | 'history' | 'webview' | 'commands' | 'settings'
   label: () => string
   icon: (size: number) => React.ReactNode
   /** 终端按钮的快捷键提示（宿主 catalog 的 unboxed 键帽；探测不到给静态回退）。 */
@@ -117,6 +117,12 @@ export function openStartLink(kind: StartLink['kind'], ctx: Context, service: Be
       // 表单都在页内，真正的网页 tab 由配置条目再铸。无活动会话时 openTab
       // 内部静默返回，与 history 同一形态，点击不抛错。
       service.openTab({ type: 'webview' })
+      return
+    case 'commands':
+      // 「命令」：打开配置页（type: 'commands'，单实例去重）——命令与脚本
+      // 规则的管理都在页内，真正的执行 tab 由运行动作再铸。无活动会话时
+      // openTab 内部静默返回，与 webview 同一形态，点击不抛错。
+      service.openTab({ type: 'commands' })
       return
     case 'terminal':
       // 宿主命令面按契约作用于「在屏会话」，无在屏会话时调用会 throw——先读
@@ -208,13 +214,22 @@ export function StartLinks(props: { ctx: Context; service: BetterSidebarService;
       title: t('startHistoryAria'),
     },
     {
-      // 「webview网页」：配置页入口，排在「历史发送」之后、「设置」之前；
+      // 「webview网页」：配置页入口，排在「历史发送」之后、「命令」之前；
       // 说明文案与 aria 同句（同 history 的形态）。
       kind: 'webview',
       label: () => t('webviewPages'),
       icon: webviewTabIcon,
       aria: t('guideDescWebview'),
       title: t('guideDescWebview'),
+    },
+    {
+      // 「命令」：配置页入口，排在「webview网页」之后、「设置」之前——
+      // 满足「webview 与 settings 之间」的排位要求；说明文案与 aria 同句。
+      kind: 'commands',
+      label: () => t('commandsPage'),
+      icon: commandsTabIcon,
+      aria: t('guideDescCommands'),
+      title: t('guideDescCommands'),
     },
     { kind: 'settings', label: () => t('startSettings'), icon: settingsStartIcon },
   ]

@@ -93,6 +93,8 @@ import { FS_TREES_MAX_PATHS } from './fs-batch.ts'
 import { activeWorktreeRootOf } from './active-worktree.ts'
 import { decodeTextAs, decodeTextBytes, isWideEncoding, lastLineBreakEnd, type TextEncoding } from './text-encoding.ts'
 import { MAX_EDITABLE_BYTES, PAGE_BYTES, WRITE_BODY_GUARD_BYTES } from './editor-limits.ts'
+import { homedir as osHomedir, hostname as osHostname, tmpdir as osTmpdir, userInfo as osUserInfo } from 'node:os'
+import { scanScriptsByRules } from './commands-scan.ts'
 
 export { Config }
 export type { SidebarConfig, ResolvedSidebarConfig }
@@ -129,6 +131,32 @@ export interface SidebarFsLevel {
   truncated: boolean
   /** Present only when THIS level failed (the batch itself still succeeded). */
   error?: string
+}
+
+/* ── 「命令」开始页的 route 辅助（commands.envInfo / gitInfo / scanScripts） ── */
+
+/** `commands.envInfo` 的缓存 TTL（~60s）。 */
+const COMMANDS_ENV_TTL_MS = 60_000
+
+/** envInfo 的缓存行（node:os 的四个取值在进程生命周期里实际不变）。 */
+let commandsEnvCache: { at: number; value: { username: string; hostname: string; homedir: string; tmpdir: string } } | undefined
+
+/** `commands.gitInfo` 的缓存 TTL（~30s）。 */
+const COMMANDS_GIT_TTL_MS = 30_000
+
+/** gitInfo 的按 cwd 缓存（LRU，上限 64 个工作区）。 */
+const commandsGitCache = new Map<string, { at: number; value: { branch: string; sha: string } }>()
+
+/** `commands.scanScripts` 单批的规则数上限。 */
+const COMMANDS_SCAN_MAX_RULES = 32
+
+/** 当前用户名（os.userInfo 在无 uid 的环境会 throw——降级 env）。 */
+function commandsUsername(): string {
+  try {
+    return osUserInfo().username
+  } catch {
+    return process.env.USER ?? process.env.USERNAME ?? ''
+  }
 }
 
 /** Services required before mounting: the webserver routes, the session store, the web runtime's trusted hosts, and the tool registry. */
@@ -1493,6 +1521,63 @@ function buildApi(
     },
     'archive.status': (payload) =>
       archiveTasks.status(requireString(payload, 'id'), requireString(payload, 'sessionId')),
+    // 「命令」开始页：宿主环境信息（变量替换的 host 类内置变量取值）。
+    // node:os 读一次缓存 ~60s——用户名/主机名/主目录/临时目录在进程生命周期里
+    // 实际不变，缓存只为省每次点击的系统调用。
+    'commands.envInfo': () => {
+      const now = Date.now()
+      if (commandsEnvCache === undefined || now - commandsEnvCache.at > COMMANDS_ENV_TTL_MS) {
+        commandsEnvCache = { at: now, value: {
+          username: commandsUsername(),
+          hostname: osHostname(),
+          homedir: osHomedir(),
+          tmpdir: osTmpdir(),
+        } }
+      }
+      return commandsEnvCache.value
+    },
+    // 「命令」开始页：当前工作区的 git 分支与短提交（变量替换的 git 类内置
+    // 变量取值）。复用 git.ts 的执行封装；失败 → 空字段（不是仓库/无 HEAD 都
+    // 是合法状态）；TTL ~30s——分支/提交在两次点击之间缓慢变化即可接受。
+    'commands.gitInfo': async (payload) => {
+      const { cwd } = await cwdOf(payload)
+      const now = Date.now()
+      const hit = commandsGitCache.get(cwd)
+      if (hit !== undefined && now - hit.at <= COMMANDS_GIT_TTL_MS) return hit.value
+      const [branch, shaFull] = await Promise.all([
+        git.currentBranch(cwd).then(out => out.trim()).catch(() => ''),
+        git.runGit(cwd, ['rev-parse', 'HEAD']).then(out => out.trim()).catch(() => ''),
+      ])
+      const value = { branch: branch === 'HEAD' ? '' : branch, sha: shaFull === '' ? '' : shaFull.slice(0, 7) }
+      commandsGitCache.set(cwd, { at: now, value })
+      if (commandsGitCache.size > 64) {
+        const oldest = commandsGitCache.keys().next().value
+        if (oldest !== undefined) commandsGitCache.delete(oldest)
+      }
+      return value
+    },
+    // 「命令」开始页：脚本规则的深度 glob 扫描。每条规则独立带回
+    // matches/error/truncated——一条坏规则（pattern 非法、根不存在）不影响
+    // 其余规则（commands-scan.ts 的执行体；预算与排除约定见该模块头）。
+    'commands.scanScripts': async (payload) => {
+      // cwd 先解析（sessionId 缺席在这里抛 bad-request；cwd 走活动工作树解析）。
+      const { cwd } = await cwdOf(payload)
+      const record = payload as { rules?: unknown } | null
+      const raw = Array.isArray(record?.rules) ? record.rules : []
+      if (raw.length > COMMANDS_SCAN_MAX_RULES) {
+        throw new SidebarError('bad-request', `too many rules (max ${COMMANDS_SCAN_MAX_RULES})`)
+      }
+      const rules: { id: string; pattern: string }[] = []
+      for (const item of raw) {
+        if (item === null || typeof item !== 'object') continue
+        const row = item as Record<string, unknown>
+        if (typeof row.id !== 'string' || row.id === '') continue
+        if (typeof row.pattern !== 'string' || row.pattern.trim() === '') continue
+        rules.push({ id: row.id, pattern: row.pattern })
+      }
+      const scans = await scanScriptsByRules(cwd, rules)
+      return { scans }
+    },
     // Side Chat: create a side-thread child seeded with the parent's full
     // log up to now, deliver follow-ups (cold-resuming when the thread's
     // agent is gone), abort a running thread, and release a thread's agent.

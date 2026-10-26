@@ -28,6 +28,12 @@
  * over the global/workspace page entries), and `webview-page` is the HIDDEN
  * sandboxed-iframe tab one entry opens (one tab per page id, minted from the
  * one-shot seed in webview-open.ts; dedupeKey = page id so reopening focuses).
+ *
+ * `commands` + `cmd-run`（v0.28.x「命令」）are the same shape for runnable
+ * things: `commands` is the single config page (commands + script rules +
+ * the variable toolbar/prompt), and `cmd-run` is the HIDDEN execution tab one
+ * run mints (id `cmd:<uuid>`, deliberately NO dedupeKey — every run is a new
+ * tab; seed from commands-open.ts, xterm rides the terminal chunk).
  */
 import { IconCodeOutlineRegular, IconPanelLeftOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
@@ -55,10 +61,15 @@ import { WebviewPagesSettings } from '../WebviewPagesSettings.tsx'
 import { WebviewPageView } from '../WebviewPageView.tsx'
 import { consumeWebviewOpen } from '../webview-open.ts'
 import { webviewPageIdOfTab, webviewTabIdOf } from '../webview-pages.ts'
+import { CommandsPageView } from '../CommandsPageView.tsx'
+import { LazyCmdRun } from '../cmd-run-lazy.tsx'
+import { closeCmdRunTerminal, consumeCmdRun } from '../commands-open.ts'
+import { CMD_RUN_TAB_TYPE } from '../../commands-config.ts'
+import { commandsTabIcon } from './tab-icons.tsx'
 import type { Context } from '../../context-types.ts'
 import type { TabDescriptor } from '../service.ts'
 
-/** The 11 built-in tab descriptors (the host owns the right-Sidebar terminal and browser). */
+/** The 13 built-in tab descriptors (the host owns the right-Sidebar terminal and browser). */
 export function builtinTabs(ctx: Context): readonly TabDescriptor[] {
   return [
     {
@@ -389,6 +400,67 @@ export function builtinTabs(ctx: Context): readonly TabDescriptor[] {
       ),
     },
     {
+      // 「命令」配置页：hero 胶囊（start-links.tsx 的 kind: 'commands'）的
+      // 落点，单实例（single）——与 webview 同一形态。命令与脚本规则的
+      // 列表/表单/变量工具栏/变量弹窗都在页内（CommandsPageView）；运行
+      // 铸 cmd-run 执行 tab。全局 blob `pluginSettings['commands']`
+      // （commands/rules 两键），工作区 blob
+      // `pluginSettings['__project'][cwd]` 下 commands / commandRules
+      // （纯逻辑见 src/commands-config.ts）。
+      id: 'commands',
+      title: () => t('commandsPage'),
+      description: () => t('guideDescCommands'),
+      icon: commandsTabIcon,
+      // Right after the webview config page (39): the next tool-page door on
+      // the guide and in the + menu; the bottom terminal slots below it.
+      order: 40,
+      single: true,
+      component: ({ ctx, store, scope }) => (
+        <CommandsPageView ctx={ctx} store={store} scope={scope} />
+      ),
+    },
+    {
+      // 命令执行 tab（「命令」页运行按钮的落点）：hidden——只由配置页铸造，
+      // 不进 + 菜单（裸入口没有可运行的命令）。createTab 消费 commands-open.ts
+      // 的一次性 seed（无 seed 拒绝铸）；tab id `cmd:<uuid>`，刻意不设
+      // dedupeKey——每次点击都是新 tab（用户明确要求），多个运行互不共进程
+      // （contentId 按实例进命名空间，见 commands-open.ts 的 cmdRunContentId）。
+      // 服务缺席宿主终端时 available 门控 + 配置页运行按钮禁用。
+      id: 'cmd-run',
+      title: () => t('commandsPage'),
+      icon: commandsTabIcon,
+      // 隐藏类型不进 + 菜单，order 只影响排序兜底。
+      order: -1,
+      hidden: true,
+      available: (ctx) => webTerminals(ctx) !== undefined,
+      createTab: () => {
+        const seed = consumeCmdRun()
+        // 无 seed 的铸 tab 请求一律拒绝——没有命令行的执行 tab 只能是空壳。
+        if (seed === undefined) return null
+        return {
+          tab: {
+            id: `cmd:${crypto.randomUUID()}`,
+            type: CMD_RUN_TAB_TYPE,
+            title: seed.title,
+            meta: {
+              commandline: seed.commandline,
+              title: seed.title,
+              ...(seed.sourceKey !== undefined ? { sourceKey: seed.sourceKey } : {}),
+              ...(seed.interactionPoints !== undefined ? { interactionPoints: seed.interactionPoints } : {}),
+            },
+          },
+        }
+      },
+      // Unmounting the view leaves the process alive (the host's "a view
+      // survives DOM unmount" contract) — closing the TAB is what ends it.
+      onClose: (tab, scope) => {
+        const sessionId: string | undefined = scope?.sessionId
+        if (sessionId === undefined || sessionId === '') return
+        closeCmdRunTerminal(ctx, tab, sessionId)
+      },
+      component: LazyCmdRun,
+    },
+    {
       // The bottom workbench's terminal (#774). NOT the host's right-Sidebar
       // terminal: the plugin owns no PTY, this page is a self-drawn xterm
       // driven by the host's session-scoped terminal service
@@ -400,9 +472,10 @@ export function builtinTabs(ctx: Context): readonly TabDescriptor[] {
       title: () => t('terminal'),
       description: () => t('guideDescTerminal'),
       icon: terminalTabIcon,
-      // Below the four host-facing pages (10..35) and above the hidden diff
-      // tab: the terminal is a secondary tool, but a visible menu row.
-      order: 40,
+      // Below the four host-facing pages (10..35), history (38), the webview
+      // (39) and the commands config page (40): a secondary tool, but a
+      // visible menu row.
+      order: 41,
       bottomOnly: true,
       // Multiple bottom terminals per session workbench (#774 follow-up).
       // Dropping the old `single: true` is the whole point: each open now
