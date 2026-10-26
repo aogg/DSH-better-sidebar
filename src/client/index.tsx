@@ -23,6 +23,7 @@ import { registerNativeSurface } from './native/index.ts'
 import { registerStripCompression } from './native/strip-compression.ts'
 import { registerStripAddButton } from './native/strip-add-button.ts'
 import { registerStripWheel } from './native/strip-wheel.ts'
+import { registerGuideGrid } from './native/guide-grid.ts'
 import { registerBottomToggle } from './sidebar/bottom-toggle.tsx'
 import { registerStartLinks } from './sidebar/start-links.tsx'
 import { createNativeSurface } from './native/surface.ts'
@@ -244,6 +245,17 @@ export function apply(ctx: Context): void {
   ctx.effect(
     () => registerStartLinks(ctx, service, sidebarStore),
     'dsh-better-sidebar: hero start links',
+  )
+  // The HOST guide start page as an adaptive card grid: the host stacks its
+  // entries as fixed 380px-wide row capsules in ONE centered column, and with
+  // the plugin's ~10 guide capsules the column overflows the viewport. Pure
+  // static CSS (no observer — the rules re-match on their own) scoped to the
+  // host's published data-* hooks; a host rename makes the rules stop
+  // matching and the stock single column returns, harmlessly (see
+  // guide-grid.ts).
+  ctx.effect(
+    () => registerGuideGrid(),
+    'dsh-better-sidebar: host guide entry grid',
   )
   // The paste-progress card (文件树黏贴): one top-right body-level portal for
   // the whole page, driven by the transfer-client store — the tree only
