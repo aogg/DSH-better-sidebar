@@ -178,7 +178,7 @@ describe('built-in tab registrations', () => {
     const { service } = setup()
     // The webview page tab is minted from the config page / pinned opens only
     // (a bare + menu entry would open a page with no URL).
-    expect(service.getTabs().filter(t => t.hidden).map(t => t.id)).toEqual(['diff', 'webview-page'])
+    expect(service.getTabs().filter(t => t.hidden).map(t => t.id)).toEqual(['webview-page', 'diff'])
     const editor = service.getTab('editor')
     expect(editor?.hidden).toBe(false)
     expect(editor?.order).toBe(10)

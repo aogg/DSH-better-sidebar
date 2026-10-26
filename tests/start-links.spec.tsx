@@ -138,7 +138,7 @@ describe('hero start links（开始页快捷入口）', () => {
     act(() => { dispose = registerStartLinks(ctx, fake) })
     try {
       await flush()
-      expect(document.querySelectorAll('[data-dsh-start-link]').length).toBe(8)
+      expect(document.querySelectorAll('[data-dsh-start-link]').length).toBe(9)
       act(() => { phaseRoot.setAttribute('data-phase', 'active') })
       await flush()
       expect(document.querySelector('[data-dsh-start-links-host]')).toBeNull()
@@ -308,7 +308,7 @@ describe('hero start links（开始页快捷入口）', () => {
     let dispose: () => void = () => {}
     act(() => { dispose = registerStartLinks(ctx, fake) })
     await flush()
-    expect(document.querySelectorAll('[data-dsh-start-link]').length).toBe(8)
+    expect(document.querySelectorAll('[data-dsh-start-link]').length).toBe(9)
     act(() => { dispose() })
     expect(document.querySelector('[data-dsh-start-links-host]')).toBeNull()
     act(() => { phaseRoot.setAttribute('data-phase', 'settling') })
