@@ -109,7 +109,10 @@ export function MdToc(): ReactNode {
   // The project-global pin (one store shared by every mounted MdToc) and the
   // per-instance preference writer, created lazily on the first toggle — the
   // factory rule forbids a module-level writer singleton.
-  const pinned = useSyncExternalStore(subscribeMdTocPin, getMdTocPinned)
+  // The store is a plain boolean snapshot and the persisted-preference seed
+  // only runs in the client layout effect below, so server rendering reads
+  // the same getter (always-false default) — pass it as getServerSnapshot.
+  const pinned = useSyncExternalStore(subscribeMdTocPin, getMdTocPinned, getMdTocPinned)
   const writerRef = useRef<PrefsWriter | null>(null)
 
   useLayoutEffect(() => {
@@ -216,7 +219,6 @@ export function MdToc(): ReactNode {
   useLayoutEffect(() => {
     if (!expanded) return
     centerPanelItem(activeIndex)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeIndex, expanded])
 
   const jump = (entry: TocEntry, index: number): void => {
