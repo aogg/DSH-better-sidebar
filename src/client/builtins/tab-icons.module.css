@@ -54,3 +54,16 @@
      and settings chips. */
   color: var(--dsw-alias-label-primary);
 }
+
+.webview {
+  /* 「webview网页」配置页是一扇通往 web 内容的门：与 browser chip 同一
+     business 族（the door family），glyph 用链节而不是地球——地球留给
+     网页 tab 自己。 */
+  color: var(--dsw-alias-state-business-primary, var(--dsw-alias-brand-primary, var(--dsw-alias-label-primary)));
+}
+
+.webviewPage {
+  /* 网页 tab 是渲染中的内容，不是工具也不是门：ink，与 terminal/search
+     chip 同一语言。 */
+  color: var(--dsw-alias-label-primary);
+}

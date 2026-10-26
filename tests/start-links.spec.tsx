@@ -4,9 +4,10 @@
  * 宿主 DOM 用假结构模拟（`[data-slot="main.conversation"]` + `[data-phase]` +
  * `[data-composer-seat]`，与 dock-fallback spec 同一手法）：相位标记是宿主
  * ConversationMainPanel 的稳定 data-* 输出，类名是哈希值不进断言。钉住九件事：
- * 相位 hero 渲染 8 个胶囊（「搜索」在「变动」之后）、相位离开 hero 移除、点击
- * 走正确的 openTab 参数（含「搜索」→ type: 'search' 多实例、「历史发送」→
- * type: 'history'，且带 title/aria 说明文案）、无在屏会话时终端点击是 no-op
+ * 相位 hero 渲染 9 个胶囊（「搜索」在「变动」之后、「webview网页」在「历史发送」
+ * 之后）、相位离开 hero 移除、点击走正确的 openTab 参数（含「搜索」→
+ * type: 'search' 多实例、「历史发送」→ type: 'history'、「webview网页」→
+ * type: 'webview'，且带 title/aria 说明文案）、无在屏会话时终端点击是 no-op
  * （不抛错）、store 注入时设置胶囊打开内置设置页（SideCardSection 本体，
  * Esc/再点/相位离开收起）、store 缺席时设置胶囊走 settings-entry 探测链
  * （已开直达分区 / 合成 settings.open 快捷键 / 探测失败静默 no-op）、
@@ -105,7 +106,7 @@ function click(node: Element): void {
 }
 
 describe('hero start links（开始页快捷入口）', () => {
-  it('phase=hero 时渲染 8 个胶囊（搜索在变动之后），行挂在相位根末尾（composer seat 之后）', async () => {
+  it('phase=hero 时渲染 9 个胶囊（webview网页在历史发送之后），行挂在相位根末尾（composer seat 之后）', async () => {
     const { phaseRoot } = mountHero('hero')
     const ctx = makeCtx()
     const { fake } = service()
@@ -114,9 +115,9 @@ describe('hero start links（开始页快捷入口）', () => {
     try {
       await flush()
       const links = document.querySelectorAll('[data-dsh-start-link]')
-      expect(links).toHaveLength(8)
+      expect(links).toHaveLength(9)
       expect([...links].map(node => node.getAttribute('data-dsh-start-link'))).toEqual([
-        'files', 'changes', 'search', 'terminal', 'jobs', 'sidechat', 'history', 'settings',
+        'files', 'changes', 'search', 'terminal', 'jobs', 'sidechat', 'history', 'webview', 'settings',
       ])
       const host = document.querySelector('[data-dsh-start-links-host]')
       expect(host, '入口行宿主必须存在').not.toBeNull()
@@ -200,6 +201,26 @@ describe('hero start links（开始页快捷入口）', () => {
       expect(node.getAttribute('title')).toBe(t('startHistoryAria'))
       click(node)
       expect(openTab).toHaveBeenLastCalledWith({ type: 'history' })
+    } finally {
+      act(() => { dispose() })
+    }
+  })
+
+  it('webview网页胶囊：单实例 type: webview 打开配置页，aria 与 title 用同一句说明文案', async () => {
+    mountHero('hero')
+    const ctx = makeCtx({ mounted: 's1' })
+    const { fake, openTab } = service()
+    let dispose: () => void = () => {}
+    act(() => { dispose = registerStartLinks(ctx, fake) })
+    try {
+      await flush()
+      const node = document.querySelector('[data-dsh-start-link="webview"]')
+      if (node === null) throw new Error('missing webview link')
+      expect(node.textContent).toContain(t('webviewPages'))
+      expect(node.getAttribute('aria-label')).toBe(t('guideDescWebview'))
+      expect(node.getAttribute('title')).toBe(t('guideDescWebview'))
+      click(node)
+      expect(openTab).toHaveBeenLastCalledWith({ type: 'webview' })
     } finally {
       act(() => { dispose() })
     }

@@ -22,10 +22,17 @@
  * 「设置」door on the right column's start page (the host guide), and picking it
  * opens the Side card preferences as a real page — the same section the hero
  * start page's settings panel mounts, on the same store.
+ *
+ * `webview` + `webview-page`（v0.28.x「webview网页」）are the configured-web-page
+ * pair: `webview` is the single config page (the hero pill's door, list + form
+ * over the global/workspace page entries), and `webview-page` is the HIDDEN
+ * sandboxed-iframe tab one entry opens (one tab per page id, minted from the
+ * one-shot seed in webview-open.ts; dedupeKey = page id so reopening focuses).
  */
 import { IconCodeOutlineRegular, IconPanelLeftOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
   changesTabIcon, filesTabIcon, historyTabIcon, searchTabIcon, settingsTabIcon, sidechatTabIcon, tasksTabIcon, terminalTabIcon,
+  webviewPageTabIcon, webviewTabIcon,
 } from './tab-icons.tsx'
 import { t } from '../locales.ts'
 import { openSidebarFile } from '../sidebar-file.ts'
@@ -44,10 +51,14 @@ import { HistoryView } from '../HistoryView.tsx'
 import { LazyTerminalBottom } from '../terminal-lazy.tsx'
 import { CWD_FIELD, INSTANCE_FIELD, closeBottomTerminal, consumeBottomTerminalCwd, webTerminals } from '../terminal-client.ts'
 import { api } from '../api.ts'
+import { WebviewPagesSettings } from '../WebviewPagesSettings.tsx'
+import { WebviewPageView } from '../WebviewPageView.tsx'
+import { consumeWebviewOpen } from '../webview-open.ts'
+import { webviewPageIdOfTab, webviewTabIdOf } from '../webview-pages.ts'
 import type { Context } from '../../context-types.ts'
 import type { TabDescriptor } from '../service.ts'
 
-/** The 9 built-in tab descriptors (the host owns the right-Sidebar terminal and browser). */
+/** The 11 built-in tab descriptors (the host owns the right-Sidebar terminal and browser). */
 export function builtinTabs(ctx: Context): readonly TabDescriptor[] {
   return [
     {
@@ -323,6 +334,58 @@ export function builtinTabs(ctx: Context): readonly TabDescriptor[] {
       // same ConversationNavigation face SubagentView's openConversation uses).
       component: ({ ctx, scope, visible }) => (
         <HistoryView ctx={ctx} visible={visible} sessionId={scope.sessionId} />
+      ),
+    },
+    {
+      // 「webview网页」配置页：hero 胶囊（start-links.tsx 的 kind: 'webview'）
+      // 的落点，单实例（single）——与 history 同一形态。列出「全局 + 当前
+      // 工作区」合并后的网页配置（每条带来源徽章），新增/编辑/删除与固定
+      // 打开开关都在页内完成；读写走 plugin-settings.ts 的串行写队列
+      // （全局 blob `pluginSettings['webview'].pages`，工作区 blob
+      // `pluginSettings['__project'][cwd].webviewPages`，纯逻辑见
+      // webview-pages.ts）。
+      id: 'webview',
+      title: () => t('webviewPages'),
+      description: () => t('guideDescWebview'),
+      icon: webviewTabIcon,
+      // Between history (38) and the bottom terminal (40): a tool page with a
+      // visible door on the guide and in the + menu.
+      order: 39,
+      single: true,
+      component: ({ ctx, store, scope }) => (
+        <WebviewPagesSettings ctx={ctx} store={store} scope={scope} />
+      ),
+    },
+    {
+      // 网页 tab（openMode='tab' 的落点）：一条配置一个 tab。hidden——只由
+      // 配置页/固定打开铸造，不进 + 菜单（没有 URL 可言的裸入口只会开出空白
+      // 页）；createTab 消费 webview-open.ts 的一次性 seed（无 seed 拒绝铸，
+      // 见返回 null 的契约），tab id 固定为 `webview:<pageId>`，dedupeKey =
+      // pageId 保证同一页重复「打开」聚焦已开 tab 而不是再铸一个。URL/标题
+      // 的即时跟随由正文组件按现行配置驱动（WebviewPageView 头注释）。
+      id: 'webview-page',
+      title: () => t('webviewPages'),
+      icon: webviewPageTabIcon,
+      // 隐藏类型不进 + 菜单，order 只影响 native guide（同样不出现）与排序兜底。
+      order: -1,
+      hidden: true,
+      createTab: () => {
+        const seed = consumeWebviewOpen()
+        // 无 seed 的铸 tab 请求（宿主直开这个 kind 等）一律拒绝——没有地址
+        // 的网页 tab 只能是空白页。
+        if (seed === undefined) return null
+        return {
+          tab: {
+            id: webviewTabIdOf(seed.pageId),
+            type: 'webview-page',
+            title: seed.name,
+            meta: { pageId: seed.pageId, url: seed.url, name: seed.name },
+          },
+        }
+      },
+      dedupeKey: (tab) => webviewPageIdOfTab(tab),
+      component: ({ ctx, store, scope, tab }) => (
+        <WebviewPageView ctx={ctx} store={store} scope={scope} tab={tab} />
       ),
     },
     {

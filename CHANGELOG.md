@@ -2,6 +2,19 @@
 
 > 本文档收录 dsh-better-sidebar 的完整发布历史（最新版摘要见 [README](README.md)；同步发布于 [GitHub Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)）。
 
+### v0.28.22
+
+- 🌐 **开始页新增「webview网页」：把常用网页收进侧边栏——配置页 + 沙箱网页 tab + 固定打开**。开始页入口行在「历史发送」之后、「设置」之前新增一枚「webview网页」胶囊，点击打开单实例的「webview 配置页」（新内置 tab 类型 `webview`，order 39，与 history 同一单实例形态）。各层一起收：
+  - **纯逻辑**（新增 `src/client/webview-pages.ts`）：单条配置 `{ id, name, url, openMode: 'tab'|'window', pinned }`；持久化 blob 容错解析（坏行兜底默认值，openMode 只认 'window'、pinned 只认严格 true）；全局+工作区合并（工作区在前、id 冲突工作区赢，与 `mergeOpenWithConfigs` 同一语义）；pinned 挑选（合并序 + 名称非空 + URL 为 http/https 的严格过滤）；两个 scope 的读取与 upsert/remove 辅助。无 React、无 api，整体可单测。
+  - **存储**：全局放 `pluginSettings['webview'].pages`，工作区放 `pluginSettings['__project'][cwd].webviewPages`；读写一律走 `plugin-settings.ts` 的 `updatePluginSettings` / `updateProjectSettings`（同一条串行写队列，改范围 = 从原 scope 删除 + 写入新 scope 两次入队，顺序即调用序）。
+  - **配置页**（新增 `src/client/WebviewPagesSettings.tsx` + `webview.module.css`）：列出「全局 + 当前工作区」合并后的全部条目（工作区在前），每行带来源徽章（全局/工作区）与「固定打开」徽标；新增/编辑共用一张表单（名称、URL（仅 http/https）、打开方式（当前侧边栏tab｜新窗口，默认 tab）、固定打开开关（默认否）、配置范围（全局｜工作区，默认全局；会话无 cwd 时工作区选项禁用并提示））；点行进编辑、删除两段式确认（先点变确认态再点执行，与后台任务终止按钮同一手法）。
+  - **网页 tab**（新增 `src/client/WebviewPageView.tsx`；新内置隐藏类型 `webview-page`）：`openMode: 'tab'` 的落点，一条配置一个 tab（tab id 固定 `webview:<pageId>`，dedupeKey = pageId——重复「打开」聚焦已开 tab 不重铸；createTab 消费 `webview-open.ts` 的一次性 seed，无 seed 拒绝铸造，绝不出现裸空白页）。正文是沙箱 iframe：sandbox tokens 沿用 `html-preview.ts` 的 `HTML_IFRAME_SANDBOX`（不含 allow-same-origin / allow-top-navigation），只允许 http/https；URL 与标题按 pageId 从现行配置解析即时跟随（编辑地址后 iframe 以 key 强制重载，条目被删退回铸造时的 meta 快照），改名/改地址经 `updateTab` 回写 tab 记录（native chip 标题同步）。
+  - **新窗口**：`openMode: 'window'` 走 `window.open(url, '_blank', 'noopener,noreferrer')`（与 `link-intercept.ts` 的兜底同一出口；`src/open-external.ts` 只服务自定义 scheme，明确不收 http/https）。
+  - **固定打开**：`pinned: true` 的条目在每次 dsh 新建会话上屏时自动打开（全局+当前工作区合并、按列表顺序），复用 `sidebar/new-session-open.ts` 的钩子（页面加载后新出现的会话 id 才算新会话；`origin: 'subagent'` / 带 parentId 不算）。与 `rightbarOpenOnNewSession` 偏好解耦：pinned 是页面级配置，展开偏好关闭时 tab 照开（tab 打开不依赖展开）；展开本身仍由该偏好决定。防重复靠 dedupeKey 天然保证；store 座位未就绪时让给 250ms 重试窗口，pinned 页不丢。`Sidebar.tsx` 向钩子传入 `useSessionRoot` 的 cwd 以决定工作区条目参与合并。
+  - **文案与图标**：21 处 locale（`locales.ts` zh/en 两段 + 19 个 `locales-*.ts`）新增 `webviewPages` / `guideDescWebview` / `webviewEmpty` / `webviewAdd` / `webviewEdit` / `webviewName(Placeholder)` / `webviewUrl(Placeholder)` / `webviewOpenMode(Tab|Window)` / `webviewPinned(Desc)` / `webviewScope(Global|Workspace|WorkspaceUnavailable)` / `webviewDeleteConfirm` / `webviewInvalidHint` / `webviewOpen` / `webviewFrameHint`；`tab-icons.tsx` 新增 `webviewTabIcon`（配置页，链节 glyph，business 族）与 `webviewPageTabIcon`（网页 tab，地球 glyph，ink）。
+  - **版本**：`SIDEBAR_SERVICE_VERSION` 与 package.json / dsh.plugin.json 一起升到 **0.28.22**。
+  - 🧪 测试：新增 `tests/webview-pages.spec.ts`（解析容错、合并冲突、pinned 挑选、scope 读取、打开出口的 window/tab/禁用/非法四路、seed 一次性手递手）；`tests/builtins.spec.ts` 同步 11 个内置 tab、隐藏集合（diff + webview-page）、+ 菜单序（webview 在 history 与 terminal-bottom 之间）并新增配置页/网页 tab 铸造与 dedupe 用例；`tests/start-links.spec.tsx` 同步 9 枚胶囊与「webview网页」点击参数。
+
 ### v0.28.21
 
 - 📌 **markdown 预览的标题目录（TOC）新增「固定展开」图钉与滚动跟随**：预览右上角在目录按钮旁多一枚图钉按钮，点击后目录面板常驻展开——固定状态是插件级偏好 `tocPinned`（默认 false），对本项目内打开的所有 md 预览同时生效（跨文件、跨会话、重启后仍在）；面板可见（弹出或固定）时，预览滚动会实时计算当前激活标题，目录对应条目高亮并自动滚到面板垂直居中。各层一起收：

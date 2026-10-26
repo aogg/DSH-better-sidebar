@@ -23,12 +23,13 @@ import {
   VscGlobe,
   VscHistory,
   VscLayers,
+  VscLink,
   VscSearch,
   VscSettingsGear,
   VscTerminal,
 } from 'react-icons/vsc'
 /** The styled wrapper classes; typed so a renamed rule fails the build. */
-const css = styles as Record<'files' | 'changes' | 'tasks' | 'sidechat' | 'terminal' | 'browser' | 'settings' | 'history' | 'search', string>
+const css = styles as Record<'files' | 'changes' | 'tasks' | 'sidechat' | 'terminal' | 'browser' | 'settings' | 'history' | 'search' | 'webview' | 'webviewPage', string>
 
 /** One tab type's glyph, sized by the caller's surface (14px in a strip). */
 export type TabIcon = (size: number) => ReactNode
@@ -90,3 +91,20 @@ export const historyTabIcon: TabIcon = (size) =>
  */
 export const searchTabIcon: TabIcon = (size) =>
   themed(css.search, <VscSearch size={size} />)
+
+/**
+ * 「webview网页」配置页（the hero pill's door）— the business accent, the
+ * same family as the browser chip: both doors lead to web content, and the
+ * config page is the one that curates it. The glyph is a LINK (the page is a
+ * curated list of links), not a globe — the globe is the webpage tab's own.
+ */
+export const webviewTabIcon: TabIcon = (size) =>
+  themed(css.webview, <VscLink size={size} />)
+
+/**
+ * 网页 tab（type: 'webview-page'）— primary ink: rendered content, not a
+ * tool or a door. The globe says "a live web page", matching the host's own
+ * browser chip vocabulary.
+ */
+export const webviewPageTabIcon: TabIcon = (size) =>
+  themed(css.webviewPage, <VscGlobe size={size} />)

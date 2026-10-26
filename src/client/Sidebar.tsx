@@ -286,10 +286,12 @@ export function Sidebar(props: { ctx: Context; store: SidebarStore }) {
   // consumes (renderTab's onSubagentJump arms it).
   const { subagentJumpRef } = useHostFeeds({ ctx, store, sessionList, sessionId })
 
-  // 新会话自动展开右栏（rightbarOpenOnNewSession）：对会话列表快照做 id diff，
-  // 只认页面加载后新出现的 id，命中且上屏时展开宿主右栏（宽度随之由
-  // rightbar-width.ts 的展开跳变逻辑应用）。
-  useRightbarOpenOnNewSession(ctx, store, sessionList)
+  // 新会话钩子（sidebar/new-session-open.ts）：对会话列表快照做 id diff，
+  // 只认页面加载后新出现的 id。命中且上屏时依次打开 pinned 的 webview 网页
+  // （页面级配置，不受下面开关影响），再按 rightbarOpenOnNewSession 展开右栏
+  // （宽度随之由 rightbar-width.ts 的展开跳变逻辑应用）。cwd 决定工作区条目
+  // 是否参与 pinned 合并。
+  useRightbarOpenOnNewSession(ctx, store, sessionList, cwd)
 
   // Center-column tracking (sidebar/use-center-column.ts): the bottom
   // workbench spans ONLY the app shell's center column ("squeezes the agent

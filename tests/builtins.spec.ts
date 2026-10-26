@@ -18,6 +18,11 @@
  * between files 10 and changes 20) — a createTab multi-instance kind (every
  * open mints a fresh `search:<uuid>`; no dedupeKey/single), whose one-shot
  * seed prefills the add-to-search redirect's chips.
+ *
+ * `webview` + `webview-page` are the 「webview网页」pair: the config page
+ * (order 39, single, the hero pill's door) and the HIDDEN sandboxed-iframe
+ * page tab (one tab per page id, minted from the one-shot seed in
+ * webview-open.ts, dedupeKey = page id).
  */
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
@@ -34,6 +39,7 @@ import { createSidebarStore } from '../src/client/state.ts'
 import { registerBuiltins } from '../src/client/builtins/index.ts'
 import { parkSidechatReopen } from '../src/client/SideChatView.tsx'
 import { parkSearchSeed } from '../src/client/search-seed.ts'
+import { parkWebviewOpen } from '../src/client/webview-open.ts'
 import { SettingsPage } from '../src/client/SettingsPage.tsx'
 
 function setup(): { service: ReturnType<typeof createBetterSidebarService>; store: ReturnType<typeof createSidebarStore>; dispose: () => void } {
@@ -44,10 +50,10 @@ function setup(): { service: ReturnType<typeof createBetterSidebarService>; stor
 }
 
 describe('built-in tab registrations', () => {
-  it('registers the 9 built-in tabs (the host owns the right-sidebar terminal and browser)', () => {
+  it('registers the 11 built-in tabs (the host owns the right-sidebar terminal and browser)', () => {
     const { service } = setup()
     expect(service.getTabs().map(t => t.id).sort()).toEqual(
-      ['diff', 'editor', 'git', 'history', 'search', 'settings', 'sidechat', 'subagent', 'terminal-bottom'],
+      ['diff', 'editor', 'git', 'history', 'search', 'settings', 'sidechat', 'subagent', 'terminal-bottom', 'webview', 'webview-page'],
     )
   })
 
@@ -168,9 +174,11 @@ describe('built-in tab registrations', () => {
     expect(settings?.pluginToggles ?? []).toEqual([])
   })
 
-  it('only diff is hidden from the + menu; editor is the visible files window (order 10)', () => {
+  it('only diff and the webview page tab are hidden from the + menu; editor is the visible files window (order 10)', () => {
     const { service } = setup()
-    expect(service.getTabs().filter(t => t.hidden).map(t => t.id)).toEqual(['diff'])
+    // The webview page tab is minted from the config page / pinned opens only
+    // (a bare + menu entry would open a page with no URL).
+    expect(service.getTabs().filter(t => t.hidden).map(t => t.id)).toEqual(['diff', 'webview-page'])
     const editor = service.getTab('editor')
     expect(editor?.hidden).toBe(false)
     expect(editor?.order).toBe(10)
@@ -274,14 +282,55 @@ describe('built-in tab registrations', () => {
     })
   })
 
-  it('the visible + menu order slots search between files (10) and changes (20)', () => {
+  it('the webview tab is the start page\'s webview网页 door (single, visible, order 39)', () => {
+    const { service } = setup()
+    const webview = service.getTab('webview')
+    expect(webview).toBeDefined()
+    // One config page: the hero pill's openTab({ type: 'webview' }) focuses
+    // the existing one (history-tab shape).
+    expect(webview?.single).toBe(true)
+    expect(webview?.hidden).not.toBe(true)
+    expect(webview?.bottomOnly).not.toBe(true)
+    expect(webview?.order).toBe(39)
+    expect(webview?.icon).toBeDefined()
+    expect(webview?.component).toBeDefined()
+    expect(webview?.description).toBeDefined()
+  })
+
+  it('the webview page tab mints webview:<pageId> from the one-shot seed and dedupes by page id', () => {
+    const { service } = setup()
+    const page = service.getTab('webview-page')
+    expect(page).toBeDefined()
+    expect(page?.hidden).toBe(true)
+    // Park → mint carries the seed: the tab id is webview:<pageId> (the
+    // dedupe contract) and the meta snapshot carries pageId + url + name.
+    parkWebviewOpen({ pageId: 'p1', url: 'https://example.com/a', name: 'Docs' })
+    const minted = page?.createTab?.(undefined as never)
+    expect(minted?.tab.id).toBe('webview:p1')
+    expect(minted?.tab.type).toBe('webview-page')
+    expect(minted?.tab.title).toBe('Docs')
+    expect(minted?.tab.meta).toEqual({ pageId: 'p1', url: 'https://example.com/a', name: 'Docs' })
+    // dedupeKey = the minted meta's pageId: reopening the same page focuses
+    // the existing tab instead of minting a duplicate.
+    expect(page?.dedupeKey?.(minted!.tab)).toBe('p1')
+    // One-shot: the seed is spent, a second mint is seedless.
+    expect(page?.createTab?.(undefined as never)).toBeNull()
+  })
+
+  it('the webview page tab refuses to mint without a seed (no bare blank pages)', () => {
+    const { service } = setup()
+    const page = service.getTab('webview-page')
+    expect(page?.createTab?.(undefined as never)).toBeNull()
+  })
+
+  it('the visible + menu order slots webview between history (38) and the bottom terminal (40)', () => {
     const { service } = setup()
     const ordered = service.getTabs()
       .filter(descriptor => descriptor.hidden !== true)
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
       .map(descriptor => descriptor.id)
     expect(ordered).toEqual([
-      'editor', 'search', 'git', 'subagent', 'sidechat', 'history', 'terminal-bottom', 'settings',
+      'editor', 'search', 'git', 'subagent', 'sidechat', 'history', 'webview', 'terminal-bottom', 'settings',
     ])
   })
 
