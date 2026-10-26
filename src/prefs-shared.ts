@@ -150,6 +150,15 @@ export interface SidebarPrefs {
    */
   htmlViewerDefaultUnsafe: boolean
   /**
+   * Whether the markdown preview's outline (TOC) is PINNED open: while true
+   * the panel stays expanded on every md preview in the project (any file
+   * with enough headings), across files, sessions and restarts — the
+   * preference is read once per page load and toggled live from the pin
+   * button beside the outline button (not a settings-page row). Off by
+   * default: the outline stays a click-open popover.
+   */
+  tocPinned: boolean
+  /**
    * Whether a NEWLY CREATED session (an id that appears after this page
    * loaded) auto-expands the host's right sidebar when it comes on screen.
    * Sessions restored at page load never trigger — only ids the page saw
@@ -236,6 +245,9 @@ export const SIDEBAR_PREFS_DEFAULTS: SidebarPrefs = {
   historyStoragePath: '',
   htmlViewerNoSandbox: false,
   htmlViewerDefaultUnsafe: false,
+  // The md outline starts as a click-open popover; pinning is a deliberate
+  // user gesture remembered across sessions.
+  tocPinned: false,
   rightbarOpenOnNewSession: true,
   rightbarOpenRatio: RIGHTBAR_RATIO_DEFAULT,
   tabsEnabled: {},

@@ -197,6 +197,8 @@ export const nl: Record<string, string> = {
   terminalNew: 'Nieuwe terminal',
   preview: 'Voorbeeld',
   toc: 'Inhoudsopgave',
+  tocPin: 'Inhoudsopgave vastmaken',
+  tocUnpin: 'Inhoudsopgave losmaken',
   edit: 'Bewerken',
   mermaidError: 'Mermaid-renderen mislukt',
   mermaidZoomIn: 'Inzoomen',

@@ -192,6 +192,8 @@ export const fr: Record<string, string> = {
   terminalNew: 'Nouveau terminal',
   preview: 'Aperçu',
   toc: 'Sommaire',
+  tocPin: 'Épingler le sommaire',
+  tocUnpin: 'Détacher le sommaire',
   edit: 'Modifier',
   mermaidError: 'Échec du rendu Mermaid',
   mermaidZoomIn: 'Agrandir',

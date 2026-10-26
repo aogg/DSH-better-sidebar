@@ -190,6 +190,8 @@ export const it: Record<string, string> = {
   terminalNew: 'Nuovo terminale',
   preview: 'Anteprima',
   toc: 'Indice',
+  tocPin: 'Fissa l’indice',
+  tocUnpin: 'Sblocca l’indice',
   edit: 'Modifica',
   mermaidError: 'Rendering Mermaid non riuscito',
   mermaidZoomIn: 'Ingrandisci',

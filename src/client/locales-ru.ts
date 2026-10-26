@@ -195,6 +195,8 @@ export const ru: Record<string, string> = {
   terminalNew: 'Новый терминал',
   preview: 'Предпросмотр',
   toc: 'Оглавление',
+  tocPin: 'Закрепить оглавление',
+  tocUnpin: 'Открепить оглавление',
   edit: 'Изменить',
   mermaidError: 'Сбой рендеринга Mermaid',
   mermaidZoomIn: 'Приблизить',

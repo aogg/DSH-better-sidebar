@@ -214,6 +214,8 @@ export const zhTW: Record<string, string> = {
   terminalNew: '新增終端',
   preview: '預覽',
   toc: '目錄',
+  tocPin: '釘選目錄',
+  tocUnpin: '取消釘選目錄',
   edit: '編輯',
   mermaidError: 'Mermaid 渲染失敗',
   mermaidZoomIn: '放大',

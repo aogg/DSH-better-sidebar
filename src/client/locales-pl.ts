@@ -201,6 +201,8 @@ export const pl: Record<string, string> = {
   terminalNew: 'Nowy terminal',
   preview: 'Podgląd',
   toc: 'Spis treści',
+  tocPin: 'Przypnij spis treści',
+  tocUnpin: 'Odepnij spis treści',
   edit: 'Edytuj',
   mermaidError: 'Renderowanie Mermaid nie powiodło się',
   mermaidZoomIn: 'Powiększ',

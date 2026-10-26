@@ -199,6 +199,8 @@ export const ja: Record<string, string> = {
   terminalNew: '新しいターミナル',
   preview: 'プレビュー',
   toc: '目次',
+  tocPin: '目次を固定',
+  tocUnpin: '目次の固定を解除',
   edit: '編集',
   mermaidError: 'Mermaid レンダリング失敗',
   mermaidZoomIn: '拡大',

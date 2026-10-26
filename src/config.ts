@@ -106,6 +106,10 @@ export const PrefsSchema: z<SidebarPrefs> = z.object({
   customCss: z.string(),
   htmlViewerNoSandbox: z.boolean().default(false),
   htmlViewerDefaultUnsafe: z.boolean().default(false),
+  // The markdown preview's outline pinned-open switch (the pin button beside
+  // the outline button, not a settings row). OFF = the popover stays
+  // click-open; ON keeps it expanded on every md preview across sessions.
+  tocPinned: z.boolean().default(false),
   // The right-sidebar width/open behaviour (feature pair: open ratio +
   // new-session auto-open). The ratio range mirrors the client clamp
   // (prefs-shared.ts); the settings service enforces it on write, the client

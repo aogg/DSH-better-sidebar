@@ -84,6 +84,9 @@ export function parsePrefs(value: unknown): SidebarPrefs {
     htmlViewerDefaultUnsafe: typeof record.htmlViewerDefaultUnsafe === 'boolean'
       ? record.htmlViewerDefaultUnsafe
       : SIDEBAR_PREFS_DEFAULTS.htmlViewerDefaultUnsafe,
+    tocPinned: typeof record.tocPinned === 'boolean'
+      ? record.tocPinned
+      : SIDEBAR_PREFS_DEFAULTS.tocPinned,
     rightbarOpenOnNewSession: typeof record.rightbarOpenOnNewSession === 'boolean'
       ? record.rightbarOpenOnNewSession
       : SIDEBAR_PREFS_DEFAULTS.rightbarOpenOnNewSession,

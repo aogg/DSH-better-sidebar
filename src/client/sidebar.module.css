@@ -2732,6 +2732,37 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
   color: var(--dsw-alias-label-primary);
 }
 
+/* The pin toggle beside the outline button (「固定展开」): same footprint and
+   ink as the outline button, sitting at its left with the same 2px outer
+   margin — the two margins meet as a 4px gap. While pinned the button reads
+   as pressed (hover-grade background + primary ink), matching the filled
+   pin glyph. */
+.tocPinButton {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin: 4px 2px 0 0;
+  padding: 0;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+.tocPinButton:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.tocPinButton[data-pinned='true'] {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
 /* The outline popover, anchored under the button (the bar is the containing
    block; its height is 0, so the panel drops below the pinned button row). */
 .tocPanel {
@@ -2767,6 +2798,14 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
 }
 
 .tocItem:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The scroll-follow highlight (md-toc.tsx writes data-active): the entry the
+   preview's scroll currently sits in wears the hover-grade treatment so it
+   reads as "this is where you are", not as a pointer hover. */
+.tocItem[data-active='true'] {
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
 }

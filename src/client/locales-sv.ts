@@ -182,6 +182,8 @@ export const sv: Record<string, string> = {
   terminalNew: 'Ny terminal',
   preview: 'Förhandsgranska',
   toc: 'Innehållsförteckning',
+  tocPin: 'Fäst innehållsförteckningen',
+  tocUnpin: 'Lossa innehållsförteckningen',
   edit: 'Redigera',
   mermaidError: 'Mermaid-rendering misslyckades',
   mermaidZoomIn: 'Zooma in',

@@ -214,6 +214,8 @@ export const zhMO: Record<string, string> = {
   terminalNew: '新增終端',
   preview: '預覽',
   toc: '目錄',
+  tocPin: '固定展開目錄',
+  tocUnpin: '取消固定目錄',
   edit: '編輯',
   mermaidError: 'Mermaid 渲染失敗',
   mermaidZoomIn: '放大',

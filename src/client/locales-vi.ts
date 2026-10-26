@@ -199,6 +199,8 @@ export const vi: Record<string, string> = {
   terminalNew: 'Terminal mới',
   preview: 'Xem trước',
   toc: 'Mục lục',
+  tocPin: 'Ghim mục lục',
+  tocUnpin: 'Bỏ ghim mục lục',
   edit: 'Chỉnh sửa',
   mermaidError: 'Render Mermaid thất bại',
   mermaidZoomIn: 'Phóng to',

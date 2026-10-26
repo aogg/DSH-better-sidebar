@@ -200,6 +200,8 @@ export const ar: Record<string, string> = {
   terminalNew: 'طرفية جديدة',
   preview: 'معاينة',
   toc: 'الفهرس',
+  tocPin: 'تثبيت الفهرس',
+  tocUnpin: 'إلغاء تثبيت الفهرس',
   edit: 'تحرير',
   mermaidError: 'فشل رسم Mermaid',
   mermaidZoomIn: 'تكبير',

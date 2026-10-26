@@ -185,6 +185,8 @@ export const de: Record<string, string> = {
   terminalNew: 'Neues Terminal',
   preview: 'Vorschau',
   toc: 'Inhaltsverzeichnis',
+  tocPin: 'Inhaltsverzeichnis anheften',
+  tocUnpin: 'Inhaltsverzeichnis lösen',
   edit: 'Bearbeiten',
   mermaidError: 'Mermaid-Rendering fehlgeschlagen',
   mermaidZoomIn: 'Vergrößern',

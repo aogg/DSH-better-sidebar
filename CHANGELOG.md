@@ -2,6 +2,16 @@
 
 > 本文档收录 dsh-better-sidebar 的完整发布历史（最新版摘要见 [README](README.md)；同步发布于 [GitHub Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)）。
 
+### v0.28.21
+
+- 📌 **markdown 预览的标题目录（TOC）新增「固定展开」图钉与滚动跟随**：预览右上角在目录按钮旁多一枚图钉按钮，点击后目录面板常驻展开——固定状态是插件级偏好 `tocPinned`（默认 false），对本项目内打开的所有 md 预览同时生效（跨文件、跨会话、重启后仍在）；面板可见（弹出或固定）时，预览滚动会实时计算当前激活标题，目录对应条目高亮并自动滚到面板垂直居中。各层一起收：
+  - **偏好链路**（`src/prefs-shared.ts` / `src/config.ts` / `src/client/prefs.ts`）：`SidebarPrefs` 新增 `tocPinned: boolean`（默认 false——目录默认保持点开的弹出形态，固定是用户显式手势后被记住的选择），PrefsSchema 加 `tocPinned: z.boolean().default(false)`（随既有 volatilePrefs 机制自动 volatile，旧宿主 schema 未声明该字段时写校验拒收 → 客户端读回退默认，不炸），客户端 `parsePrefs` 宽松解析（非 boolean 回退默认）。
+  - **固定 store**（新增 `src/client/md-toc-pin.ts`）：模块级外部 store（值 + 订阅者集 + 通知）。`MdToc` 挂载时经模块级 promise 守卫只读一次 `api.settingsGet()` → `parsePrefs(view.value).tocPinned` 播种（失败静默回退 false；只在 true 时写 store，绝不覆盖已经发生的用户切换）；组件用 `useSyncExternalStore` 订阅——任意一个 md 预览切换固定，同页所有 md 预览同拍重渲染。持久化用 `createPrefsWriter(api)`：每次 toggle 惰性创建、挂在组件 `useRef` 上（工厂规则：不允许模块级 writer 单例），卸载时 dispose；写失败静默（writer 本身不抛）。
+  - **组件**（`src/client/md-toc.tsx`）：图钉按钮与目录按钮并排在 `.tocBar` 右侧（同样受 `TOC_MIN_HEADINGS = 3` 门控，<3 个标题都不显示；已固定的偏好不会让短文档凭空出面板）。未固定 `IconPinOutlineRegular` + `aria-pressed=false`，固定 `IconPinFillRegular` + `data-pinned='true'` 高亮，title/aria-label 用 `tocPin`/`tocUnpin`。`expanded = pinned || open`：固定时 Esc、面板外 pointerdown、jump 都不收起面板；目录按钮在固定态一次手势 = 取消固定 + 收起（非固定态行为不变）。
+  - **滚动跟随**：expanded 时给滚动容器挂 passive + rAF 节流的 scroll 监听（收起/卸载清理；entries 重扫后也重算）。激活标题：阈值线 = 容器可视顶部往下 `max(clientHeight/3, 72px)`，激活条目 = 最后一个 `getBoundingClientRect().top <= 阈值` 的 entry（折叠 `<details>` 里隐藏标题的零尺寸矩形不参与，不冒领高亮），一个都没有 → 第一条，容器滚到底（`scrollTop + clientHeight >= scrollHeight - 2`）→ 最后一条。激活条目加 `data-active='true'` 高亮，且 `panel.scrollTop = item.offsetTop - (panel.clientHeight - item.offsetHeight) / 2` 直接赋值垂直居中（不用 smooth，跟随连续滚动；面板自身滚动不回写预览）；点击目录条目跳转后同样立即居中该条目。
+  - **样式与文案**（`src/client/sidebar.module.css` / 21 处 locale）：`.tocPinButton` 尺寸/边框照抄 `.tocButton`（与目录按钮间隔 4px）+ `[data-pinned='true']` 固定态高亮 + `.tocItem[data-active='true']` hover 级高亮（`--dsw-alias-interactive-bg-hover` + `--dsw-alias-label-primary`）；zh/en 两段 + 19 个 `locales-*.ts` 各新增 `tocPin`/`tocUnpin`（插在各文件 `toc:` 之后，译文随各语言术语）。
+  - **版本**：`SIDEBAR_SERVICE_VERSION` 与 package.json / dsh.plugin.json 一起升到 **0.28.21**。
+
 ### v0.28.20
 
 - 🔎 **「搜索」页新增可选「git 起点」：从某个提交或某天起，只搜 git 有差异的文件**（PhpStorm 式 Find in Files 的候选范围过滤——搜的仍是当前工作树的内容，只是候选文件集被 git 差异过滤）。三处一起收：

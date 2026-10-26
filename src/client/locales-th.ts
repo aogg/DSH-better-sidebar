@@ -199,6 +199,8 @@ export const th: Record<string, string> = {
   terminalNew: 'เทอร์มินัลใหม่',
   preview: 'พรีวิว',
   toc: 'สารบัญ',
+  tocPin: 'ปักหมุดสารบัญ',
+  tocUnpin: 'เลิกปักหมุดสารบัญ',
   edit: 'แก้ไข',
   mermaidError: 'เรนเดอร์ Mermaid ล้มเหลว',
   mermaidZoomIn: 'ซูมเข้า',

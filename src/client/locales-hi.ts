@@ -199,6 +199,8 @@ export const hi: Record<string, string> = {
   terminalNew: 'नया टर्मिनल',
   preview: 'पूर्वावलोकन',
   toc: 'विषय-सूची',
+  tocPin: 'विषय-सूची पिन करें',
+  tocUnpin: 'विषय-सूची पिन हटाएँ',
   edit: 'संपादित करें',
   mermaidError: 'Mermaid रेंडर विफल',
   mermaidZoomIn: 'ज़ूम इन',

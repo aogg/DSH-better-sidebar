@@ -199,6 +199,8 @@ export const tr: Record<string, string> = {
   terminalNew: 'Yeni terminal',
   preview: 'Önizleme',
   toc: 'İçindekiler',
+  tocPin: 'İçindekileri sabitle',
+  tocUnpin: 'İçindekilerin sabitlemesini kaldır',
   edit: 'Düzenle',
   mermaidError: 'Mermaid oluşturma başarısız',
   mermaidZoomIn: 'Yakınlaştır',

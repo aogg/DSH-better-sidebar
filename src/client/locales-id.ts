@@ -197,6 +197,8 @@ export const id: Record<string, string> = {
   terminalNew: 'Terminal baru',
   preview: 'Pratinjau',
   toc: 'Daftar Isi',
+  tocPin: 'Sematkan daftar isi',
+  tocUnpin: 'Lepas sematan daftar isi',
   edit: 'Edit',
   mermaidError: 'Render Mermaid gagal',
   mermaidZoomIn: 'Perbesar',

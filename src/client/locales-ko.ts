@@ -191,6 +191,8 @@ export const ko: Record<string, string> = {
   terminalNew: '새 터미널',
   preview: '미리보기',
   toc: '목차',
+  tocPin: '목차 고정',
+  tocUnpin: '목차 고정 해제',
   edit: '편집',
   mermaidError: 'Mermaid 렌더링 실패',
   mermaidZoomIn: '확대',
