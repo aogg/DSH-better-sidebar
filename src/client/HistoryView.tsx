@@ -22,7 +22,9 @@
  * 2. 每页到达后新记录进入发送队列，按 ~40ms 一条的微节奏逐条上屏；
  * 3. ws `kind:'history'` 帧的记录走同一队列实时逐条追加；合并按 key 双层
  *    幂等（入队侧 seen 剪枝 + 上屏侧 mergeHistoryRecords），同一条记录无论
- *    从首页/翻页/实时哪条路径到达几次，都只上屏一次；
+ *    从首页/翻页/实时哪条路径到达几次，都只上屏一次；唯一例外是无文本记录
+ *    允许被后到的有文本版本原位升级（v0.28.27）——正文缺账必须能补上，
+ *    页面绝不整行留白，也绝不让同一条记录重复成两行；
  * 4. `kind:'history-seed'`（seeding:true）亮「索引建设中」提示条；
  *    （seeding:false）熄条并补拉一次首页——把 watch 建立前错过的会话记录
  *    补齐；用户已翻页时跳过补拉（翻页游标语义优先，绝不回卷）；
@@ -45,9 +47,13 @@
  * 「已打开会话」。
  *
  * 展示：按会话（=一场对话）分组保留，组内时间正序（旧→新的聊天顺序），
- * 组间按最近一条消息新→旧；组头 = 会话标识 + 最近时间 + 条数；行文本默认
- * 3 行截断、点击展开全文可收起。搜索/标签过滤/多选建组/评论/标签/关联组
- * 全部保留，作用域 = 已加载记录（工具条下有说明行）。
+ * 组间按最近一条消息新→旧。组头只在多条组出现（v0.28.27：最近时间 + 条数，
+ * 完整 sessionId 在组头 title 里）——单条组完全不渲染组头（去边框平铺成
+ * 一条行，时间已在行 meta 里），多条组头也不再重复项目名（总发送历史作用
+ * 域下所有组同属一个项目，项目名零信息量）。行文本默认 3 行截断、点击展开
+ * 全文可收起；空文本行渲染「未提取到文本」占位（次级色调、不可点开）。
+ * 搜索/标签过滤/多选建组/评论/标签/关联组全部保留，作用域 = 已加载记录
+ * （工具条下有说明行）。
  *
  * 降级路径（绝不抛未捕获异常）：`history.list` 失败（宿主 persistence 缺席
  * 的 503 `history-error`、网络失败等）→ 页签内联降级提示 + 重试按钮；翻页
@@ -78,15 +84,10 @@ export type HistoryScope = 'session' | 'project'
 /** 各 tab 的每页条数（客户端显式传 limit；服务端默认值不动）。 */
 const HISTORY_SCOPE_LIMITS: Record<HistoryScope, number> = { session: 50, project: 20 }
 
-/** 会话标识的短拼法（去掉 `session-` 前缀，取前 8 位；完整 id 走 title）。 */
+/** 会话标识的短拼法（去掉 `session-` 前缀，取前 8 位）：关联组成员 chip 在
+ * 记录缺席时的回退展示（组头不再展示会话标识——完整 id 在组头 title 里）。 */
 function shortSessionId(id: string): string {
   return id.replace(/^session-/, '').slice(0, 8)
-}
-
-/** cwd 的末段（分组头的会话标识优先用项目名）。 */
-function baseNameOf(cwd: string): string {
-  const parts = cwd.split(/[\\/]/).filter(part => part !== '')
-  return parts.at(-1) ?? cwd
 }
 
 /** 记录文本的一行短拼（关联组成员 chip 用）。 */
@@ -193,6 +194,9 @@ function RecordRow(props: {
   }
   const timeLabel = record.time !== 0 ? formatStamp(record.time) : ''
   const timeFull = record.time !== 0 ? formatStampFull(record.time) : ''
+  // 空文本账（旧版落盘/提取失败遗留）：正文区渲染占位文案，绝不整行留白；
+  // 占位不可点开（role/onClick 全不带，点击零副作用），评论/标签等注解仍可用。
+  const textEmpty = record.text.trim() === ''
   return (
     <div className={css.record} data-dsh-history-record={record.key}>
       {multiSelect && (
@@ -244,21 +248,25 @@ function RecordRow(props: {
             {t('historyJump')}
           </button>
         </div>
-        <div
-          className={expanded ? css.text : css.textClamped}
-          role="button"
-          tabIndex={expanded ? -1 : 0}
-          onClick={() => { if (!expanded) props.onToggleExpand(record.key) }}
-          onKeyDown={event => {
-            if (expanded) return
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault()
-              props.onToggleExpand(record.key)
-            }
-          }}
-        >
-          {record.text}
-        </div>
+        {textEmpty ? (
+          <div className={css.textEmpty}>{t('historyEmptyText')}</div>
+        ) : (
+          <div
+            className={expanded ? css.text : css.textClamped}
+            role="button"
+            tabIndex={expanded ? -1 : 0}
+            onClick={() => { if (!expanded) props.onToggleExpand(record.key) }}
+            onKeyDown={event => {
+              if (expanded) return
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                props.onToggleExpand(record.key)
+              }
+            }}
+          >
+            {record.text}
+          </div>
+        )}
         {expanded && (
           <button type="button" className={css.collapse} onClick={() => { props.onToggleExpand(record.key) }}>
             {t('historyCollapse')}
@@ -357,6 +365,9 @@ export function HistoryView(props: {
 
   // ── 渐进队列：enqueue 去重入队，pump 按 ~40ms 一条 setRecords 上屏 ──
   const seenKeysRef = useRef<Set<string>>(new Set())
+  // 已入队记录里「无文本」版本的 key 集：同 key 的有文本版本后到时放行入队
+  // （上屏侧 mergeHistoryRecords 原位升级补正文），其余同 key 重复照旧剪枝。
+  const textlessSeenRef = useRef<Set<string>>(new Set())
   const sessionKeysRef = useRef<Set<string>>(new Set())
   const queueRef = useRef<HistorySendRecord[]>([])
   const dripTimerRef = useRef<number | undefined>(undefined)
@@ -383,8 +394,9 @@ export function HistoryView(props: {
       dripTimerRef.current = undefined
       return
     }
-    // 上屏合并的幂等兜底：key 已在屏上的记录直接丢弃——入队侧 seen 剪枝
-    // 失守（多路径/状态重置竞态）也绝不让同一条记录二次上屏。
+    // 上屏合并的幂等兜底：key 已在屏上的记录默认丢弃，唯一例外是无文本记录
+    // 被有文本版本原位升级（mergeHistoryRecords）——入队侧 seen 剪枝失守
+    // （多路径/状态重置竞态）也绝不让同一条记录二次上屏。
     setRecords(previous => mergeHistoryRecords(previous, [next]))
     dripTimerRef.current = window.setTimeout(() => { pumpRef.current() }, DRIP_INTERVAL_MS)
   })
@@ -392,8 +404,14 @@ export function HistoryView(props: {
     let added = 0
     for (const record of incoming) {
       if (record === null || typeof record !== 'object') continue
-      if (seenKeysRef.current.has(record.key)) continue
+      if (seenKeysRef.current.has(record.key)) {
+        // 已入队的是无文本版本、本次带来了文本 → 放行入队走 merge 升级；
+        // 其余同 key 重复照旧剪枝（多路径到达只上屏一次）。
+        if (!(textlessSeenRef.current.has(record.key) && record.text.trim() !== '')) continue
+      }
       seenKeysRef.current.add(record.key)
+      if (record.text.trim() === '') textlessSeenRef.current.add(record.key)
+      else textlessSeenRef.current.delete(record.key)
       sessionKeysRef.current.add(record.sessionId)
       queueRef.current.push(record)
       added += 1
@@ -486,6 +504,7 @@ export function HistoryView(props: {
       dripTimerRef.current = undefined
     }
     seenKeysRef.current = new Set()
+    textlessSeenRef.current = new Set()
     sessionKeysRef.current = new Set()
     setRecords([])
     setLiveCount(0)
@@ -658,7 +677,6 @@ export function HistoryView(props: {
   const sessionGroups = useMemo(() => groupRecordsBySession(filtered), [filtered])
   const allTags = useMemo(() => collectHistoryTags(annotations), [annotations])
   const recordIndex = useMemo(() => new Map(flat.map(record => [record.key, record])), [flat])
-  const projectCwd = meta.projectCwd
   // seeding 提示条：首页响应的 seeding + ws history-seed 帧共同驱动（帧翻转
   // 走 setMeta，这里只是读取）。
   const seeding = meta.seeding
@@ -892,7 +910,6 @@ export function HistoryView(props: {
         <SessionGroupSection
           key={group.sessionId}
           group={group}
-          projectCwd={projectCwd}
           annotations={annotations}
           expanded={expanded}
           multiSelect={multiSelect}
@@ -922,10 +939,15 @@ export function HistoryView(props: {
   )
 }
 
-/** 一个会话分组：组头（会话标识 + 最近时间 + 条数）+ 组内记录行（聊天正序）。 */
+/**
+ * 一个会话分组 + 组内记录行（聊天正序）。组头只在多条组出现：最近时间 +
+ * 条数，完整 sessionId 放组头 title——项目名不再上组头（同一作用域下所有
+ * 组同属一个项目，零信息量）。单条组（count === 1）完全不渲染组头并去边
+ * 框，读起来就是一条平铺行（时间已在行 meta 里），页面不再被 1:1 的组头
+ * 重复信息淹没。
+ */
 function SessionGroupSection(props: {
   group: HistorySessionGroup
-  projectCwd: string | undefined
   annotations: HistoryAnnotations
   expanded: ReadonlySet<string>
   multiSelect: boolean
@@ -936,19 +958,21 @@ function SessionGroupSection(props: {
   onJump: (record: HistorySendRecord) => void
   onMutate: (op: HistoryAnnotationOpInput) => Promise<boolean>
 }) {
-  const { group, projectCwd, annotations } = props
-  const label = projectCwd !== undefined && projectCwd !== ''
-    ? baseNameOf(projectCwd)
-    : t('historySessionLabel', { id: shortSessionId(group.sessionId) })
+  const { group, annotations } = props
+  const solo = group.count === 1
   return (
-    <section className={css.sessionGroup} data-dsh-history-session={group.sessionId}>
-      <header className={css.sessionHead}>
-        <span className={css.sessionId} title={projectCwd !== undefined && projectCwd !== '' ? group.sessionId : label}>{label}</span>
-        <span className={css.time} title={formatStampFull(group.lastTime)}>
-          {group.lastTime !== 0 ? formatStamp(group.lastTime) : ''}
-        </span>
-        <span className={css.sessionCount}>{t('historyGroupMembers', { count: group.count })}</span>
-      </header>
+    <section
+      className={solo ? `${css.sessionGroup} ${css.sessionGroupSolo}` : css.sessionGroup}
+      data-dsh-history-session={group.sessionId}
+    >
+      {!solo && (
+        <header className={css.sessionHead} title={group.sessionId}>
+          <span className={css.time} title={formatStampFull(group.lastTime)}>
+            {group.lastTime !== 0 ? formatStamp(group.lastTime) : ''}
+          </span>
+          <span className={css.sessionCount}>{t('historyGroupMembers', { count: group.count })}</span>
+        </header>
+      )}
       {group.records.map(record => {
         const note = annotationOfRecord(annotations, record)
         return (

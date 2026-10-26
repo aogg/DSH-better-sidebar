@@ -2,6 +2,13 @@
 
 > 本文档收录 dsh-better-sidebar 的完整发布历史（最新版摘要见 [README](README.md)；同步发布于 [GitHub Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)）。
 
+### v0.28.27
+
+- 🧹 **「历史发送」分组展示去重：单条会话组不再渲染组头，多条组头去掉项目名**。总发送历史页过去每个只有 1 条记录的会话组都渲染「组头 + 行」两行重复信息（时间两遍、项目名每组建一遍），整页成一堵重复的墙。现在 `count === 1` 的组完全不渲染组头并去掉边框圆角（`.sessionGroupSolo`），读起来就是一条平铺行（时间已在行 meta 里）；`count > 1` 的组头只保留最近时间 + `{count} 条记录`（完整 sessionId 放组头 title 提示），项目名 span 连同 `baseNameOf` 一起移除。
+- 🩹 **空文本记录不再整行留白：占位文案 + 无文本记录可被后到的全文原位升级**。历史上有些账目先以「只有 key 没有正文」的形态上屏，又被 key 幂等去重（入队侧 seen 剪枝 + `mergeHistoryRecords` 已存在跳过）钉死，后到的完整文本版本永远进不来。现在：`RecordRow` 对空文本行渲染占位文案（新 locale key `historyEmptyText`：zh「（未提取到文本）」/ en `(no text captured)`，只上 zh/en 两段，其余语言走 zh/en 回退链；次级色调斜体、无可点开的假交互）；`mergeHistoryRecords` 对同 key 的「无文本 → 有文本」原位替换（顺序不动，已展示正文绝不降级/改写），入队侧 `enqueue` 新增 `textlessSeenRef`——已入队版本无文本而本次有文本时放行走 merge 升级，其余同 key 重复照旧剪枝。
+- 🧪 测试：`tests/prompt-history-groups.spec.ts` 补 merge 升级用例（无→有原位替换、有→有/有→无跳过保序、乱序仓不回卷）；`tests/history-view-tabs.spec.tsx` 补分组展示用例（单条组无组头且挂去边框类、多条组头无项目名含条数且 title=完整 sessionId、空文本占位无假交互、ws 后到全文原位升级不重复成两行）；`tests/locales.spec.ts` 的第三语言字典门禁按实情从「key 集合相等」放宽为「不得携带 zh 没有的 key」（新文案允许先上 zh/en、其余语言走回退链）。
+- **版本**：`SIDEBAR_SERVICE_VERSION` 与 package.json / dsh.plugin.json 一起升到 **0.28.27**。
+
 ### v0.28.22
 
 - 🌐 **开始页新增「webview网页」：把常用网页收进侧边栏——配置页 + 沙箱网页 tab + 固定打开**。开始页入口行在「历史发送」之后、「设置」之前新增一枚「webview网页」胶囊，点击打开单实例的「webview 配置页」（新内置 tab 类型 `webview`，order 39，与 history 同一单实例形态）。各层一起收：

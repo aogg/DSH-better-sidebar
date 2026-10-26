@@ -109,13 +109,16 @@ describe('locales (DSH i18n following)', () => {
     expect(Object.keys(en).sort()).toEqual(Object.keys(zh).sort())
   })
 
-  it('keeps every shipped third-language dictionary key-set-equal to zh', () => {
-    // The third-language dicts live in the lazy locale chunk typed as plain
-    // records (the chunk boundary has no key-set type tie to zh). This test
-    // catches missing/extra keys introduced when a zh key is added without
-    // updating every language — a missing key silently falls back to en.
+  it('keeps every shipped third-language dictionary free of unknown keys (missing keys fall back to en)', () => {
+    // v0.28.27 policy: new copy may ship zh/en-only and ride the zh/en
+    // fallback chain (t() answers the en text for every non-zh locale and
+    // the better-locale override wins only when the store has the key), so
+    // the third-language dicts may LAG behind zh. What they must never do
+    // is carry keys zh doesn't have — a typo'd or removed zh key would
+    // otherwise stick out of every override path silently.
     for (const [lang, dict] of Object.entries(localeDicts)) {
-      expect(Object.keys(dict).sort(), lang).toEqual(Object.keys(zh).sort())
+      const unknown = Object.keys(dict).filter(key => !Object.prototype.hasOwnProperty.call(zh, key))
+      expect(unknown, lang).toEqual([])
     }
     expect(Object.keys(localeDicts), 'every shipped third language rides the locale chunk').toContain('ja')
   })

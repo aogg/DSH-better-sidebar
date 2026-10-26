@@ -8,7 +8,8 @@
  *   最近一条记录的时间倒序；
  * - {@link filterHistoryRecords}：顶部文本搜索（大小写不敏感的子串）与
  *   标签过滤（任一命中即保留）都作用在平面上，先过滤再分组，空组不出现；
- * - {@link mergeHistoryRecords}：多路径合并的幂等兜底（按 key 去重并入），
+ * - {@link mergeHistoryRecords}：多路径合并的幂等兜底（按 key 去重并入；
+ *   唯一例外是「无文本 → 有文本」的原位升级，见函数注释），
  *   首页/翻页/ws 实时帧共同喂同一张平面表时防重复上屏；
  * - {@link collectHistoryTags}：全库标签聚合（过滤条的 chips 来源，按名字
  *   去重排序）。
@@ -63,21 +64,35 @@ export function groupRecordsBySession(records: readonly HistorySendRecord[]): Hi
 
 /**
  * 幂等合并：以记录 key（`${sessionId}:${seq}`）为锚把 incoming 并入 existing。
- * 已存在于 existing 的 key 不重复并入，incoming 批次内部同 key 也只留第一条
- * ——列表合并的第二道幂等（第一道在入队侧的 seen 剪枝），保证同一条记录无论
- * 从首页/翻页/ws 哪条路径到达、到达几次，都只上屏一次。返回新数组，不改入参。
+ * 已存在于 existing 的 key 不重复并入——唯一例外是「无文本升级」（v0.28.27）：
+ * existing 里的版本没有正文、incoming 带来了正文时，原位替换（顺序与其余
+ * 记录一概不动）。历史上有些账目先以「只有 key 没有正文」的形态上屏（旧版
+ * 落盘/提取失败），后到的完整文本版本必须能补上正文——页面绝不允许整行留
+ * 白；反向（有→无）与有→有都维持跳过，已展示的正文绝不被降级或改写。
+ * incoming 批次内部同 key 也只留第一条（后续同 key 项按同一升级规则判定）。
+ * 返回新数组，不改入参。
  */
 export function mergeHistoryRecords(
   existing: readonly HistorySendRecord[],
   incoming: readonly HistorySendRecord[],
 ): HistorySendRecord[] {
-  const seen = new Set<string>()
-  for (const record of existing) seen.add(record.key)
+  const indexByKey = new Map<string, number>()
   const merged = [...existing]
+  for (let index = 0; index < merged.length; index += 1) {
+    const record = merged[index]
+    if (record !== undefined) indexByKey.set(record.key, index)
+  }
   for (const record of incoming) {
     if (record === null || typeof record !== 'object') continue
-    if (seen.has(record.key)) continue
-    seen.add(record.key)
+    const at = indexByKey.get(record.key)
+    if (at !== undefined) {
+      const current = merged[at]
+      if (current !== undefined && current.text.trim() === '' && record.text.trim() !== '') {
+        merged[at] = record
+      }
+      continue
+    }
+    indexByKey.set(record.key, merged.length)
     merged.push(record)
   }
   return merged

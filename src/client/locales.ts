@@ -882,6 +882,7 @@ export const zh = {
   cmdRunInputAria: '发送一行到终端',
   cmdRunInputPlaceholder: '输入并回车发送…',
   cmdRunInputEnded: '进程已结束',
+  historyEmptyText: '（未提取到文本）',
 }
 
 /** The en dictionary (key-set-equal to zh, enforced by the type annotation). */
@@ -1744,6 +1745,7 @@ export const en: Record<keyof typeof zh, string> = {
   cmdRunInputAria: 'Send a line to the terminal',
   cmdRunInputPlaceholder: 'Type and press Enter to send…',
   cmdRunInputEnded: 'Process has ended',
+  historyEmptyText: '(no text captured)',
 }
 
 /**

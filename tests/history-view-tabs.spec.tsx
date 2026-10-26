@@ -10,6 +10,10 @@
  *   开，定位不到就降级（按钮 title 换「已打开会话」说明）；宿主桥缺席静
  *   默不炸。api / session-push 模块级 mock（side-card-scope-tabs 手法），
  *   定位时长经 jumpLocateOptions 注入（不真等 5s）。
+ * 分组展示与空文本占位（v0.28.27）：单条会话组不渲染组头（无边框平铺一
+ * 行）、多条组头只有时间+条数（项目名不再重复、完整 sessionId 在 title）、
+ * 空文本行渲染占位文案且无可点开的假交互、无文本记录可被 ws 后到的全文
+ * 原位升级（不重复成两行）。
  */
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -53,6 +57,7 @@ vi.mock('../src/client/session-push.ts', () => ({
 
 import { api } from '../src/client/api.ts'
 import { HistoryView } from '../src/client/HistoryView.tsx'
+import css from '../src/client/HistoryView.module.css'
 
 beforeEach(() => {
   Object.defineProperty(navigator, 'language', { value: 'en-US', configurable: true })
@@ -262,6 +267,84 @@ describe('history view 记录跳转', () => {
     await sleep(250)
     expect(jumpButton('s2:5').title).toContain('Jump to this prompt')
     expect(jumpButton('s2:5').title).not.toContain('Session opened')
+    view.unmount()
+  })
+})
+
+describe('history view 分组展示与空文本占位（v0.28.27）', () => {
+  // 一个项目页：solo 会话（1 条）、multi 会话（2 条）、ghost 会话（1 条空文本）。
+  const GROUPED_RECORDS = [
+    rec('solo', 0, 1_700_000_020_000, 'solo 会话只有这一条'),
+    rec('multi', 1, 1_700_000_011_000, 'multi 的第二条'),
+    rec('multi', 0, 1_700_000_010_000, 'multi 的第一条'),
+    rec('ghost', 0, 1_700_000_030_000, ''),
+  ]
+
+  /** api.historyList：session 页给空，project 页带 project.cwd 返回分组页。 */
+  function mockHistoryListProjectGroups(): void {
+    ;(api.historyList as ReturnType<typeof vi.fn>).mockImplementation(async (payload: { scope?: string }) => ({
+      available: true,
+      records: payload.scope === 'session' ? [] : GROUPED_RECORDS,
+      hasMore: false,
+      seeding: false,
+      project: { cwd: '/code/www/my/github/DSH-better-sidebar' },
+    }))
+  }
+
+  /** 挂载视图并切到「总发送历史」tab，等分组页上屏后返回 mount 结果。 */
+  async function openProjectTab(): Promise<ReturnType<typeof mountView>> {
+    mockHistoryListProjectGroups()
+    const mounted = mountView()
+    click(tabButton('All Sends'))
+    await waitForText('multi 的第一条')
+    return mounted
+  }
+
+  it('单条会话组不渲染组头（无边框平铺），多条组头 = 时间+条数（无项目名，title=完整 sessionId）', async () => {
+    const { view } = await openProjectTab()
+    // solo 组：没有 <header>，行照常上屏，且挂上去边框类。
+    const solo = document.querySelector<HTMLElement>('[data-dsh-history-session="solo"]')
+    expect(solo).not.toBeNull()
+    expect(solo!.querySelector('header')).toBeNull()
+    expect(solo!.classList.contains(css.sessionGroupSolo!)).toBe(true)
+    expect(document.querySelector('[data-dsh-history-record="solo:0"]')).not.toBeNull()
+    // multi 组：组头存在 = 时间 + 条数（'2 records'），不含项目名与 sessionId。
+    const head = document.querySelector<HTMLElement>('[data-dsh-history-session="multi"] header')
+    expect(head).not.toBeNull()
+    expect(head!.textContent).toContain('2 records')
+    expect(head!.textContent).not.toContain('DSH-better-sidebar')
+    expect(head!.getAttribute('title')).toBe('multi')
+    for (const node of document.querySelectorAll('[data-dsh-history-session] header')) {
+      expect(node.textContent).not.toContain('DSH-better-sidebar')
+    }
+    view.unmount()
+  })
+
+  it('空文本行渲染占位文案（次级键），且没有可点开展开的假交互（无 role="button" 正文）', async () => {
+    const { view } = await openProjectTab()
+    await waitForText('(no text captured)')
+    const ghost = document.querySelector<HTMLElement>('[data-dsh-history-session="ghost"]')
+    expect(ghost).not.toBeNull()
+    // 正文区不是可点开的 role="button"（评论/跳转 chip 是原生 button，不算）。
+    expect(ghost!.querySelector('div[role="button"]')).toBeNull()
+    // 对照组：有文本的行仍保留可点开展开的正文。
+    expect(document.querySelector('[data-dsh-history-session="multi"] div[role="button"]')).not.toBeNull()
+    view.unmount()
+  })
+
+  it('无文本记录可升级：ws 后到的全文原位替换占位，同一条记录不重复成两行', async () => {
+    const { view } = await openProjectTab()
+    await waitForText('(no text captured)')
+    act(() => {
+      pushState.handlers.at(-1)?.({
+        kind: 'history',
+        sessionId: 'ghost',
+        records: [rec('ghost', 0, 1_700_000_030_000, 'ghost 补来的完整正文')],
+      })
+    })
+    await waitForText('ghost 补来的完整正文')
+    expect(document.querySelectorAll('[data-dsh-history-record="ghost:0"]')).toHaveLength(1)
+    expect(document.body.textContent).not.toContain('(no text captured)')
     view.unmount()
   })
 })

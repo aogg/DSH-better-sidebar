@@ -3,7 +3,8 @@
  * 钉住：按会话归并（组内旧→新的聊天顺序、组间按最近记录倒序）、文本搜索
  * （大小写不敏感子串）与标签过滤（精确匹配、取数口注入）的交集语义、全库
  * 标签聚合，以及 mergeHistoryRecords 的按 key 幂等合并（同一条记录从首页/
- * 翻页/ws 哪条路径到达几次都只上屏一次——列表重复堆叠的回归锁）。
+ * 翻页/ws 哪条路径到达几次都只上屏一次——列表重复堆叠的回归锁）与「无文本
+ * → 有文本」的原位升级（v0.28.27：正文缺账必须能补上，已展示正文绝不降级）。
  */
 import { describe, expect, it } from 'vitest'
 import { collectHistoryTags, filterHistoryRecords, groupRecordsBySession, mergeHistoryRecords } from '../src/prompt-history-groups.ts'
@@ -116,5 +117,32 @@ describe('prompt-history groups（mergeHistoryRecords：多路径合并的幂等
     const merged = mergeHistoryRecords(existing, incoming)
     expect(existing).toEqual(snapshot)
     expect(merged.map(item => item.key)).toEqual(['s:1', 's:2'])
+  })
+
+  it('无文本记录被后到的有文本版本原位升级（v0.28.27）：位置不动，正文补上，不重复成两行', () => {
+    const onScreen = [record('s', 1, ''), record('s', 2, '二')]
+    const upgraded = mergeHistoryRecords(onScreen, [record('s', 1, '后到的完整正文')])
+    expect(upgraded.map(item => item.key)).toEqual(['s:1', 's:2'])
+    expect(upgraded[0]!.text).toBe('后到的完整正文')
+    // 入参不改（原位 = 合并结果数组内的位置，不是改 existing）。
+    expect(onScreen[0]!.text).toBe('')
+  })
+
+  it('升级不降级：有→有、有→无都维持跳过，已展示正文绝不被改写', () => {
+    const onScreen = [record('s', 3, '已展示'), record('s', 1, '其一')]
+    const afterDifferent = mergeHistoryRecords(onScreen, [record('s', 1, '迟到的另一版本')])
+    expect(afterDifferent.map(item => item.key)).toEqual(['s:3', 's:1'])
+    expect(afterDifferent[1]!.text).toBe('其一')
+    const afterEmpty = mergeHistoryRecords(afterDifferent, [record('s', 1, ''), record('s', 3, '')])
+    expect(afterEmpty[1]!.text).toBe('其一')
+    expect(afterEmpty[0]!.text).toBe('已展示')
+  })
+
+  it('升级不回卷顺序：乱序仓里按 key 原位替换，批内「无→有」同规则适用', () => {
+    const onScreen = [record('s', 5, ''), record('s', 2, '二'), record('s', 1, '')]
+    const merged = mergeHistoryRecords(onScreen, [record('s', 1, '一号的正文'), record('s', 5, '')])
+    expect(merged.map(item => item.key)).toEqual(['s:5', 's:2', 's:1'])
+    expect(merged[0]!.text).toBe('')
+    expect(merged[2]!.text).toBe('一号的正文')
   })
 })

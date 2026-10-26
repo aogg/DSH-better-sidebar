@@ -314,6 +314,14 @@
   overflow: hidden;
 }
 
+/* 单条会话组（count === 1）不渲染组头：连边框圆角一起去掉，读起来就是
+ * 一条平铺行（时间已在行 meta 里）——总发送历史不再被 1:1 的组头重复
+ * 信息墙淹没。 */
+.sessionGroupSolo {
+  border: 0;
+  border-radius: 0;
+}
+
 .sessionHead {
   display: flex;
   align-items: center;
@@ -324,15 +332,6 @@
   border-bottom: 1px solid var(--dsw-alias-hairline);
   font-size: 12px;
   color: var(--dsw-alias-label-secondary);
-}
-
-.sessionId {
-  color: var(--dsw-alias-label-primary);
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 60%;
 }
 
 .sessionCount {
@@ -433,6 +432,15 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
   cursor: pointer;
+}
+
+/* 空文本记录的正文占位（落盘/提取缺正文的账）：次级色调斜体，非交互，
+ * 绝不让记录行整行留白。 */
+.textEmpty {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-tertiary);
+  font-style: italic;
 }
 
 .collapse {
