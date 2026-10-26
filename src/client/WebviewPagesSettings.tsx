@@ -133,7 +133,7 @@ export function WebviewPagesSettings(props: {
     setAttempted(true)
     if (!draftValid) return
     const page: WebviewPage = {
-      id: editing === 'new' ? newWebviewPageId() : editing,
+      id: editing !== undefined && editing !== 'new' ? editing : newWebviewPageId(),
       name: draft.name.trim(),
       url: draft.url.trim(),
       openMode: draft.openMode,

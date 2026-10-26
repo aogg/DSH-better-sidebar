@@ -115,7 +115,7 @@ export function useRightbarOpenOnNewSession(ctx: Context, store: SidebarStore, s
       const pinned = service !== undefined
         ? pinnedWebviewPagesFor(store.getPrefs().pluginSettings, cwdRef.current)
         : []
-      if (pinned.length > 0) {
+      if (pinned.length > 0 && service !== undefined) {
         if (store.getSnapshot().sessionId === undefined) return false
         // 依次打开（合并序）；同一页的重复 open 由 dedupeKey 聚焦已开 tab。
         for (const page of pinned) openWebviewPage(service, page)

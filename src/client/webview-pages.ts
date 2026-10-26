@@ -99,9 +99,9 @@ export function parseWebviewPages(raw: unknown): WebviewPage[] {
   const pages: WebviewPage[] = []
   for (const row of raw) {
     if (!isWebviewPageRow(row)) continue
-    const record = row as Record<string, unknown>
+    const record = row as unknown as Record<string, unknown>
     pages.push({
-      id: record.id,
+      id: row.id,
       name: typeof record.name === 'string' ? record.name : '',
       url: typeof record.url === 'string' ? record.url : '',
       openMode: record.openMode === 'window' ? 'window' : 'tab',
@@ -143,7 +143,7 @@ export function pinnedWebviewPages(pages: readonly WebviewPage[]): WebviewPage[]
 /** 从 prefs 的 pluginSettings 直接算出当前工作区应自动打开的 pinned 列表
  *  （合并 + 挑选一步到位；cwd 缺席时工作区条目自然为空）。 */
 export function pinnedWebviewPagesFor(
-  pluginSettings: Record<string, Record<string, unknown>> | undefined,
+  pluginSettings: Record<string, unknown> | undefined,
   cwd: string | undefined,
 ): WebviewPage[] {
   return pinnedWebviewPages(mergeWebviewPages(
@@ -153,7 +153,7 @@ export function pinnedWebviewPagesFor(
 }
 
 /** 读全局 scope 的网页列表（`pluginSettings['webview'].pages`）。 */
-export function readGlobalWebviewPages(pluginSettings: Record<string, Record<string, unknown>> | undefined): WebviewPage[] {
+export function readGlobalWebviewPages(pluginSettings: Record<string, unknown> | undefined): WebviewPage[] {
   const blob = pluginSettings?.[WEBVIEW_SETTINGS_ID]
   if (blob === null || typeof blob !== 'object') return []
   return parseWebviewPages((blob as Record<string, unknown>)[WEBVIEW_PAGES_KEY])
@@ -161,7 +161,7 @@ export function readGlobalWebviewPages(pluginSettings: Record<string, Record<str
 
 /** 读工作区 scope 的网页列表（`pluginSettings['__project'][cwd].webviewPages`）。
  *  cwd 缺席/空串一律空表——没有工作区就没有项目 scope 可言。 */
-export function readWorkspaceWebviewPages(pluginSettings: Record<string, Record<string, unknown>> | undefined, cwd: string | undefined): WebviewPage[] {
+export function readWorkspaceWebviewPages(pluginSettings: Record<string, unknown> | undefined, cwd: string | undefined): WebviewPage[] {
   if (cwd === undefined || cwd === '') return []
   const map = pluginSettings?.[PROJECT_SETTINGS_KEY]
   if (map === null || typeof map !== 'object') return []
