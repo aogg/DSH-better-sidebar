@@ -45,10 +45,17 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { hostWebSocketUrl } from './host-route-url.ts'
 
-/** One host frame: the worktree it names changed (the client's own spelling). */
+/** One host frame: the worktree it names changed (the client's own spelling).
+ *  `paths`, when present, narrows the reaction: the worktree-relative POSIX
+ *  paths the host's file watcher saw move inside its burst window (deduped,
+ *  capped — an overflow degrades the field away). Absent on pure `.git`
+ *  metadata events (stage / commit / checkout can move any path) and on
+ *  overflow, which is the plain "something moved" notice every consumer
+ *  already answers with a full re-pull. */
 export interface GitPushFrame {
   kind: 'git'
   worktree: string
+  paths?: string[]
 }
 
 /** Mirror of the host hub's own watch guard (MAX_WATCHED): the union never
@@ -153,8 +160,10 @@ interface GitSubscriber {
   /** Worktrees whose changes invalidate this subscriber (mutable set —
    *  the lenses re-point it as the inventory answer changes). */
   worktrees: ReadonlySet<string>
-  /** One watched worktree's git state moved — re-pull once. */
-  onGit(worktree: string): void
+  /** One watched worktree's git state moved — re-pull once. `paths`
+   *  narrows the pull to the paths the host saw move (absent = unknown:
+   *  the full re-pull). */
+  onGit(worktree: string, paths?: string[]): void
   /** The session's socket re-opened after a drop — catch up on the outage. */
   onReconnect(): void
 }
@@ -173,13 +182,13 @@ interface GitHub {
 const hubs = new Map<string, GitHub>()
 
 /** Fan one `git` frame out to the subscribers that named the worktree. */
-function fanOutGit(subscribers: ReadonlySet<GitSubscriber>, worktree: string): void {
+function fanOutGit(subscribers: ReadonlySet<GitSubscriber>, frame: GitPushFrame): void {
   for (const subscriber of [...subscribers]) {
-    if (!subscriber.worktrees.has(worktree)) continue
+    if (!subscriber.worktrees.has(frame.worktree)) continue
     // A throwing subscriber is CONTAINED, not allowed to starve the rest —
     // the same isolation turn-push.ts and ops-push.ts fan out with.
     try {
-      subscriber.onGit(worktree)
+      subscriber.onGit(frame.worktree, frame.paths)
     } catch (error) {
       console.error('[dsh-better-sidebar] git subscriber error:', error)
     }
@@ -226,7 +235,7 @@ function ensureHub(sessionId: string): GitHub {
   const connection = openGitPush(
     sessionId,
     () => unionWorktrees(subscribers),
-    (frame: GitPushFrame) => { fanOutGit(subscribers, frame.worktree) },
+    (frame: GitPushFrame) => { fanOutGit(subscribers, frame) },
     (open: boolean) => {
       if (open) {
         const recovered = dropped
@@ -282,8 +291,12 @@ export interface GitWatchOptions {
    * the timer-free replacement of the old poll tick).
    * @param worktree - the checkout the host named, always one of
    *  `worktrees` (the hub filters by set membership).
+   * @param paths - the worktree-relative POSIX paths the host saw move,
+   *  when it could name them (absent: pure `.git` metadata event or an
+   *  overflow — the reaction is the full re-pull). A consumer may ignore
+   *  it; the full pull stays correct in every case.
    */
-  onInvalidate: (worktree: string) => void
+  onInvalidate: (worktree: string, paths?: string[]) => void
   /**
    * The session's socket re-opened after at least one failed attempt —
    * the FIRST open never fires this. Every frame the outage swallowed is
@@ -322,7 +335,7 @@ export function useGitWatch(options: GitWatchOptions): void {
     const currentHub = ensureHub(sessionId)
     const subscriber: GitSubscriber = {
       worktrees: new Set(wantedRef.current),
-      onGit: (worktree: string) => { invalidateRef.current(worktree) },
+      onGit: (worktree: string, paths?: string[]) => { invalidateRef.current(worktree, paths) },
       onReconnect: () => { reconnectRef.current?.() },
     }
     subscriberRef.current = subscriber
@@ -370,19 +383,20 @@ export interface GitWatchHandle {
  *   (the endpoint's fence; watch spellings resolve against its cwd chain).
  * @param worktrees - the worktrees to watch (empty: nothing is joined
  *   until {@linkcode GitWatchHandle.setWorktrees} names one).
- * @param onInvalidate - one watched worktree moved; re-pull once.
+ * @param onInvalidate - one watched worktree moved; re-pull once. The
+ *   optional `paths` argument narrows the pull to what the host saw move.
  * @param onReconnect - the session's socket re-opened after a drop; catch up.
  * @returns the subscription handle (close it with the slot's release).
  */
 export function subscribeGitWatch(
   sessionId: string,
   worktrees: readonly string[],
-  onInvalidate: (worktree: string) => void,
+  onInvalidate: (worktree: string, paths?: string[]) => void,
   onReconnect?: () => void,
 ): GitWatchHandle {
   const subscriber: GitSubscriber = {
     worktrees: new Set(worktrees.slice(0, MAX_WATCHED)),
-    onGit: (worktree: string) => { onInvalidate(worktree) },
+    onGit: (worktree: string, paths?: string[]) => { onInvalidate(worktree, paths) },
     onReconnect: () => { onReconnect?.() },
   }
   let joined = false

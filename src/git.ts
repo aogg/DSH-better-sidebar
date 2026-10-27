@@ -10,9 +10,15 @@
  *
  * Commits use the user's git global identity untouched (never sets
  * user.name/user.email).
+ *
+ * Two status shapes exist, and the difference is deliberate: {@link status}
+ * answers the WHOLE checkout (the first paint, and the calibration read after
+ * an event that could move any path), while {@link statusPaths} answers only a
+ * named set of paths — the incremental read the push hub's per-file notices
+ * ride, so one saved file costs one small answer instead of a full snapshot.
  */
 import { readdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { isAbsolute, join, relative } from 'node:path'
 import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
 
@@ -59,6 +65,35 @@ export interface GitStatusResult {
   /** Selected repository root, or the discovered roots when the cwd is a container. */
   root?: string
   repositories?: string[]
+}
+
+/**
+ * The answer to {@link statusPaths}: the SAME row vocabulary as
+ * {@link GitStatusResult}, but only for the paths the caller asked about —
+ * never the whole repository. It exists so a single changed file can be
+ * re-read on its own (one small answer instead of a full `status` snapshot),
+ * which is what lets the client patch one row's ink and leave every other row
+ * alone.
+ */
+export interface GitStatusPathsResult {
+  /** Whether the session cwd resolves to a repository at all. */
+  isRepo: boolean
+  /** The repository root the paths were resolved against (absent when not a repo). */
+  root?: string
+  /** The current branch (absent when not a repo; `HEAD` when detached). */
+  branch?: string
+  /** The changed entries UNDER the requested paths' subtrees, repo-root-relative. */
+  entries: GitStatusEntry[]
+  /**
+   * The IGNORED paths among the requested ones, repo-root-relative, exactly
+   * the vocabulary {@link GitStatusResult.ignored} uses. Empty is a valid
+   * answer (nothing requested is ignored, or the ignore read failed).
+   */
+  ignored: string[]
+  /** True when this answer was capped at {@link GIT_STATUS_LIMIT} rows: the
+   *  caller must calibrate with a full read rather than patch from a partial
+   *  answer. */
+  truncated?: boolean
 }
 
 /** One linked checkout returned by `git worktree list --porcelain`. */
@@ -322,8 +357,11 @@ export function parseLogNameStatus(output: string): GitLogEntry[] {
   return rows
 }
 
-/** Run one git command; resolves with stdout, rejects with GitCommandError. */
-export function runGit(cwd: string, args: string[], timeoutMs = 30_000): Promise<string> {
+/** Run one git command; resolves with stdout, rejects with GitCommandError.
+ *  `input` (optional) is written to the child's stdin and the pipe closed —
+ *  the `--stdin` readers (`check-ignore`) need it; every other command keeps
+ *  the plain no-stdin spawn it always had. */
+export function runGit(cwd: string, args: string[], timeoutMs = 30_000, input?: string): Promise<string> {
   // `core.quotePath=false`: emit paths verbatim instead of C-quoting them
   // (git's default turns a CJK/space path into an octal-escaped, quoted
   // string, and every diff surface renders that string as the file name).
@@ -332,10 +370,17 @@ export function runGit(cwd: string, args: string[], timeoutMs = 30_000): Promise
   const full = ['-C', cwd, '--no-pager', '-c', 'color.ui=false', '-c', 'core.quotePath=false', ...args]
   return new Promise<string>((resolvePromise, reject) => {
     const child = spawn('git', full, {
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       windowsHide: true,
       env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
     })
+    if (input !== undefined) {
+      // A write to a git that died early surfaces as EPIPE on the stream; the
+      // exit code / stderr below is the real error and must not be pre-empted
+      // by an unhandled stream error.
+      child.stdin?.on('error', () => {})
+      child.stdin?.end(input)
+    }
     let stdout = ''
     let stderr = ''
     const timer = setTimeout(() => {
@@ -566,6 +611,12 @@ export async function currentBranch(cwd: string): Promise<string> {
  *  freeze the browser main thread on JSON parse or list render (#369). */
 const GIT_STATUS_LIMIT = 2_000
 
+/** How many paths one {@link statusPaths} call may carry. The client chunks
+ *  its incremental refreshes well below this; the cap exists so a single
+ *  request can never turn into a command line of unbounded length (Windows
+ *  caps argv at ~32k characters, and a pathological caller would hit it). */
+export const GIT_STATUS_PATHS_LIMIT = 200
+
 /**
  * Fold one path's counts from both numstat sides into a running map. A file
  * changed in the index AND in the worktree is measured on each side against
@@ -647,6 +698,107 @@ export async function status(cwd: string, selected?: string): Promise<GitStatusR
     ignoredTruncated,
     root,
     repositories,
+  }
+}
+
+/**
+ * Status of a NAMED SET OF PATHS only — the incremental counterpart of
+ * {@link status} ("tell me about these rows", never "tell me the whole
+ * repository").
+ *
+ * Why it exists: the client used to re-read the full snapshot whenever
+ * anything in the checkout moved, so one saved file re-transferred every
+ * changed row plus the whole ignored list and re-rendered the file tree. The
+ * push hub now names the files that actually moved, and this route answers
+ * exactly those, so a refresh costs an answer proportional to the change.
+ *
+ * Path handling: every requested path is resolved against the session cwd and
+ * folded into a repo-root-relative pathspec. A path OUTSIDE the repository is
+ * dropped (it can have no git status there); a DIRECTORY is passed as its own
+ * pathspec, so git answers everything changed under it — an empty answer
+ * means that subtree is clean. Requesting the repository root itself is
+ * accepted and behaves like the full read (the caller normally never does:
+ * fs events name files). Everything after `--` is a literal pathspec, so a
+ * caller-supplied spelling can never be parsed as an option.
+ *
+ * The three reads ride ONE batch, exactly like {@link status}: porcelain
+ * status (the rows), `check-ignore` (the ⊘ vocabulary — NUL-fed on stdin so
+ * no argv-length or quoting concerns), and both `--numstat` sides (the line
+ * counts). A failed ignore/numstat read costs only that facet; the status
+ * answer itself must never fail because of it.
+ *
+ * @param cwd - the session working directory the paths resolve against.
+ * @param paths - absolute paths (or cwd-relative spellings) to answer for.
+ * @param selected - the Git panel's selected repository (a container cwd).
+ * @returns the requested paths' entries + ignored paths, plus the root and
+ *   branch they belong to; `isRepo: false` when cwd has no repository.
+ */
+export async function statusPaths(
+  cwd: string,
+  paths: readonly string[],
+  selected?: string,
+): Promise<GitStatusPathsResult> {
+  if (paths.length > GIT_STATUS_PATHS_LIMIT) {
+    throw new GitCommandError(
+      `too many paths (max ${GIT_STATUS_PATHS_LIMIT})`,
+      'bad-request',
+      'status',
+    )
+  }
+  const repositories = await repoRoots(cwd)
+  if (repositories.length === 0) return { isRepo: false, entries: [], ignored: [] }
+  const root = await repoRoot(cwd, selected)
+  // Repo-root-relative pathspecs, deduped. A path outside the root has no
+  // status here; the root itself is pathspec '.' (the full-read shape).
+  const pathspecs: string[] = []
+  const seen = new Set<string>()
+  for (const raw of paths) {
+    let rel: string
+    try {
+      rel = relative(root, resolve(cwd, raw)).split('\\').join('/')
+    } catch {
+      continue
+    }
+    // A path outside the root has no status here; on Windows a different
+    // drive comes back ABSOLUTE from `relative` rather than `../`-prefixed.
+    if (rel === '..' || rel.startsWith('../') || isAbsolute(rel)) continue
+    const pathspec = rel === '' ? '.' : rel
+    if (seen.has(pathspec)) continue
+    seen.add(pathspec)
+    pathspecs.push(pathspec)
+  }
+  const branchPromise = currentBranch(root).catch(() => 'HEAD')
+  if (pathspecs.length === 0) {
+    return { isRepo: true, root, branch: await branchPromise, entries: [], ignored: [] }
+  }
+  // ONE batch: the rows, their line counts, and the ignore subset. `--`
+  // before the pathspecs keeps every caller spelling literal.
+  const [branch, raw, unstagedNumstat, stagedNumstat, ignoredRaw] = await Promise.all([
+    branchPromise,
+    runGit(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', ...pathspecs]),
+    runGit(root, ['diff', '--numstat', '-z', '--', ...pathspecs]).catch(() => ''),
+    runGit(root, ['diff', '--cached', '--numstat', '-z', '--', ...pathspecs]).catch(() => ''),
+    // NUL-framed on stdin AND stdout: a path that starts with `-` or holds a
+    // newline stays literal. `check-ignore` exits 1 when nothing matches —
+    // that is an empty answer, not a failure.
+    runGit(root, ['check-ignore', '--stdin', '-z'], 30_000, `${pathspecs.join('\0')}\0`).catch(() => ''),
+  ])
+  const parsed = parsePorcelainZ(raw)
+  const lineCounts = new Map<string, GitLineCounts>()
+  addLineCounts(lineCounts, parseNumstat(stagedNumstat))
+  addLineCounts(lineCounts, parseNumstat(unstagedNumstat))
+  const truncated = parsed.length > GIT_STATUS_LIMIT
+  const bounded = truncated ? parsed.slice(0, GIT_STATUS_LIMIT) : parsed
+  return {
+    isRepo: true,
+    root,
+    branch,
+    entries: bounded.map((entry): GitStatusEntry => {
+      const counts = lineCounts.get(entry.path)
+      return counts === undefined ? entry : { ...entry, counts }
+    }),
+    ignored: ignoredPaths(ignoredRaw),
+    truncated,
   }
 }
 

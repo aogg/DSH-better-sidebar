@@ -139,6 +139,25 @@ export interface GitStatusResult {
   repositories?: string[]
 }
 
+/**
+ * The PER-PATH status answer (`git.statusPaths`): the same row vocabulary as
+ * {@link GitStatusResult}, but only for the paths the request named — never
+ * the whole repository. `entries`/`ignored` cover exactly the requested
+ * paths' subtrees; a path that went clean answers by ABSENCE. `truncated`
+ * means the answer was capped (`GIT_STATUS_LIMIT` rows): a caller that came
+ * to patch must fall back to a full read instead of trusting a partial one.
+ */
+export interface GitStatusPathsResult {
+  isRepo: boolean
+  /** The repository root the paths resolved against (absent when not a repo). */
+  root?: string
+  /** The current branch (absent when not a repo; `HEAD` when detached). */
+  branch?: string
+  entries: GitStatusEntry[]
+  ignored: string[]
+  truncated?: boolean
+}
+
 /** One linked Git checkout. */
 export interface GitWorktree {
   path: string
@@ -642,6 +661,15 @@ export const api = {
     call<GitWorktree[]>('git.worktrees', scopePayload(scope, {}), signal),
   gitStatus: (scope: SessionScope, worktree?: string, signal?: AbortSignal) =>
     call<GitStatusResult>('git.status', gitPayload(scope, worktree, {}), signal),
+  /**
+   * Status of SPECIFIC paths only (the incremental read the git push frame's
+   * `paths` ride): the host answers only what was asked, never the whole
+   * repository. The caller chunks its path list well below the host's
+   * `GIT_STATUS_PATHS_LIMIT` cap; a `truncated` answer must be treated as
+   * "unknown" and calibrated with a full {@link gitStatus} read.
+   */
+  gitStatusPaths: (scope: SessionScope, paths: readonly string[], worktree?: string, signal?: AbortSignal) =>
+    call<GitStatusPathsResult>('git.statusPaths', gitPayload(scope, worktree, { paths: [...paths] }), signal),
   gitDiff: (scope: SessionScope, path: string | undefined, staged: boolean, worktree?: string, signal?: AbortSignal) =>
     call<{ diff: string }>('git.diff', gitPayload(scope, worktree, { ...(path !== undefined ? { path } : {}), staged }), signal),
   gitStage: (scope: SessionScope, path?: string, worktree?: string) =>

@@ -2,6 +2,15 @@
 
 > 本文档收录 dsh-better-sidebar 的完整发布历史（最新版摘要见 [README](README.md)；同步发布于 [GitHub Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)）。
 
+### v0.28.29
+
+- ⚡ **文件页 Git 图标状态改为「逐文件增量刷新 + localStorage 缓存上色」，不再一有变动就整仓库重拉**。文件树每行的 M/U/⊘/✓ 徽标此前在任何 git 变动通知（`/sidebar/ws/git` 失效帧）到达时都会整体重拉一次 `git.status` 全量快照（全仓库变更行 + 全 ignored 列表，5 个 git 进程），文件树随新快照整体重渲染。现在三段一起收：
+  - **宿主帧带上「变了什么」**（`src/git-push.ts`）：fs.watch 的「工作区文件」组把事件 filename 规范化为 worktree 相对 POSIX 路径（`\`→`/`，null 丢弃），在 250ms 去抖窗口内收集去重，触发的帧带上 `paths`；`.git` 内的路径剔除（主 checkout 的递归 watch 会看见自己的 `.git/index`，stage/commit 属于全仓库事件）；去重上限 64 条，超限整个帧退化为不带 paths（「不知道变了什么」→ 客户端走全量校准）。纯 `.git` 元数据事件（stage/commit/checkout）不带 paths，旧客户端对多余字段天然兼容。
+  - **新增按路径答状态的接口 `git.statusPaths`**（`src/git.ts` + `src/index.ts` 路由，客户端 `api.gitStatusPaths`）：绝不返回全仓库——请求路径折叠为 repo 根相对 pathspec（根外跳过、目录按目录本身作 pathspec 答整棵子树、空答=子树干净），一批 git 进程答齐 porcelain 状态 + `check-ignore` 忽略子集（NUL 走 stdin）+ 两侧 numstat 行数（复用 `parsePorcelainZ`/`parseNumstat`/`addLineCounts`）；每次调用上限 200 条路径（`GIT_STATUS_PATHS_LIMIT`，路由与函数双重校验），答出 `GitStatusPathsResult`（含 `truncated` 标记：截断的答案不可信，调用方须退全量）。
+  - **客户端 store 三层升级**（`src/client/ui/git-status.ts`，新增 `src/client/ui/git-status-storage.ts`）：① **Storage 持久化**——每个被接受的快照写穿到 localStorage（key `dsh-sidebar:v1:git-status:<sessionId>:<cwd/worktree 的 FNV-1a 摘要>`，紧凑数组编码 entries 含 xy/counts（binary 用 `'-','-'` 标记，绝不伪造 0/0）/root/branch/truncated/ignored/ignoredTruncated + 写入时间戳），slot 创建时同步水合——新开页面首屏即用缓存上色，且水合出的 root 让 ws 订阅在首次拉取返回前就挂上；retain 的全量拉取照跑做校准（缓存只决定首屏观感，不定最终状态）；写失败（隐私模式/配额满）静默降级内存，坏 payload 当无缓存；LRU 只保留最近 8 个 slot 文档。② **逐路径增量补丁**——带 paths 的帧去重后分块（每块 ≤128）调 `gitStatusPaths`，答案逐路径补丁进快照：答到的行更新字母与行数、没答到的旧行视为转干净而删除、ignored 同爆炸半径合并，索引每批重建一次，只在确实有变化时 notify 一次（保持「空转静默」语义），带 paths 的帧不再触发全量重拉；截断答案/根不一致/请求失败/快照被全量抢先 → 静默退回全量校准。③ **回合落定校准**——slot 有可见消费者期间额外持有 `subscribeSessionTurns(sessionId)` 订阅（与 git watch 同一条 visible 边），`turn` 帧到达触发一次全量异步校准重拉（走既有 fetchSlot 合并/防乱序/幂等静默路径）；页面没打开（visible=0）时无 ws watch、无 turn 订阅、无任何拉取。不带 paths 的帧与 ws 重连维持既有整快照重拉。
+- 🧪 测试：`tests/git-push-hub.spec.ts` 新增（宿主 hub：filename 收集/去重/64 上限溢出丢字段/`.git` 内路径剔除/纯元数据帧不带 paths/帧形状）；`tests/git-status-poll.spec.tsx` 新增 7 例（水合先上色且订阅先于首拉挂上、带 paths 帧不整拉且逐路径增删、空转补丁不 notify、截断答案退全量、turn 订阅随 visible 建立/释放且触发校准）；`tests/git-status-storage.spec.ts` 新增（存储键按 slot 身份稳定、快照读写回环含行数变体、坏 payload/缺文档容错读、LRU 清理且手清不动、无 localStorage 静默降级）。
+- **版本**：`SIDEBAR_SERVICE_VERSION` 与 package.json / dsh.plugin.json 一起升到 **0.28.29**。
+
 ### v0.28.28
 
 - 🧾 **终端新增「执行命令历史」按钮 + 弹窗（纯客户端，无后端接口、无轮询）**。底部工作台终端视图右上角新增「执行命令历史」按钮（`VscHistory` 图标 + 文案，`aria-label`/`aria-haspopup="dialog"`，11 个新 locale key 覆盖 locales.ts + 19 个语言文件），点击经 AnchoredPopover 弹出会话级命令记录浮层：列表最新在上，每条带状态点（运行中/成功/失败/已中断/完成(未知退出码) 四态配色全走 `--dsw-alias-state-*` 令牌）+ 命令 + 状态文案；点行展开完整输出（等宽字体、`max-height: 240px` 内部滚动、头部+尾部各 4000 字符中间 `[…]` 截断）；空态有文案（含「仅内存、刷新清空」说明）。运行中记录经 `useSyncExternalStore` 订阅日志 revision 实时刷新，数据按 sessionId 共享同一份内存环形队列（同会话所有终端 tab 与「命令」执行 tab 都喂进同一份），刷新页面即清空。

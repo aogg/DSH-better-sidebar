@@ -1028,6 +1028,24 @@ function buildApi(
       const { cwd } = await gitCwdOf(payload)
       return git.status(cwd, selectedRepoOf(payload))
     },
+    // Per-path status: the incremental read behind `/sidebar/ws/git`'s
+    // per-file notices. It answers ONLY the paths it was asked about (never
+    // the whole repository — that is `git.status`), so one saved file costs
+    // an answer proportional to the change instead of a full snapshot. The
+    // list is validated here (the shape rule `fs.trees` uses) and capped at
+    // the host's pathspec limit, which the client chunks well below.
+    'git.statusPaths': async (payload) => {
+      const { cwd } = await gitCwdOf(payload)
+      const record = payload as { paths?: unknown } | null
+      const paths = Array.isArray(record?.paths)
+        ? record.paths.filter((value): value is string => typeof value === 'string' && value !== '')
+        : []
+      if (paths.length === 0) throw new SidebarError('bad-request', 'paths must be a non-empty array')
+      if (paths.length > git.GIT_STATUS_PATHS_LIMIT) {
+        throw new SidebarError('bad-request', `too many paths (max ${git.GIT_STATUS_PATHS_LIMIT})`)
+      }
+      return git.statusPaths(cwd, paths, selectedRepoOf(payload))
+    },
     'git.diff': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
       const record = payload as { path?: unknown; staged?: unknown }

@@ -43,6 +43,22 @@
  * (`invalidateGitCache`, the same reason `fs-watch` drops the listing
  * cache): the client's re-pull must not be answered from a cache level
  * computed before the change.
+ *
+ * WHAT MOVED rides the frame too, since the status store learned to
+ * refresh one path at a time: the FILES watcher group forwards each
+ * event's `filename` — normalized to a worktree-relative POSIX path,
+ * deduplicated across the burst window, paths inside `.git` dropped (the
+ * main checkout's recursive watch sees its own `.git/index` too, and a
+ * stage/commit must recalibrate broadly, not incrementally) — and the
+ * fired frame carries them as `paths`. A frame without `paths` (a pure
+ * `.git`-metadata event, a null filename, or an overflow past
+ * {@link GIT_FRAME_PATH_LIMIT} distinct paths) says only "something
+ * moved", the shape every frame had before: the client answers that with
+ * the full snapshot re-pull, so the field is strictly additive and old
+ * clients never see a difference. The `.git` watcher group never
+ * collects filenames — its events are metadata (stage / commit /
+ * checkout / worktree churn), whose blast radius is by definition
+ * repository-wide.
  * @module dsh-better-sidebar/git-push
  */
 import { watch, type FSWatcher } from 'node:fs'
@@ -63,15 +79,28 @@ const GIT_NOTICE_MIN_INTERVAL_MS = 2_000
 /** Worktrees one socket may watch (a resource guard, not a policy). */
 const MAX_WATCHED = 32
 
+/** Distinct paths one fired frame may carry. A burst that touches more is
+ *  indistinguishable from a whole-tree event (a build output, a branch
+ *  switch), so the frame DEGRADES to paths-less — the client's full
+ *  re-pull — instead of shipping a partial list that would leave the rest
+ *  of the burst's paths stale until the next notice. */
+const GIT_FRAME_PATH_LIMIT = 64
+
 /** The frames the host pushes: a watched worktree's git state changed. */
 export type GitPushFrame =
   /**
    * INVALIDATION ONLY (the side-chat push model): `worktree` names the
    * checkout whose files or git metadata moved, spelled exactly as the
    * client's own watch frame spelled it. The reaction is always one
-   * one-shot re-pull; no git output ever rides the frame.
+   * one-shot re-pull; no git output ever rides the frame. `paths`, when
+   * present, narrows that re-pull: the worktree-relative POSIX paths the
+   * checkout's file watcher saw move inside the burst window (deduped,
+   * `.git`-internal entries excluded, capped at
+   * {@link GIT_FRAME_PATH_LIMIT} — past the cap the field is dropped).
+   * Absent on pure `.git`-metadata events and on overflow: those are
+   * "something moved" notices the client answers with the full snapshot.
    */
-  | { kind: 'git'; worktree: string }
+  | { kind: 'git'; worktree: string; paths?: string[] }
 
 /** The frame the client sends to replace its watch set. */
 interface WatchFrame {
@@ -107,6 +136,13 @@ interface WorktreeEntry {
   timer: NodeJS.Timeout | undefined
   /** `Date.now()` of the last fired notice (the 2 s floor's anchor). */
   firedAt: number
+  /**
+   * Worktree-relative POSIX paths the FILES watcher collected inside the
+   * pending burst window (deduplicated), or `undefined` once the window
+   * overflowed {@link GIT_FRAME_PATH_LIMIT} — the frame then fires
+   * paths-less. The `.git` watcher group never writes here.
+   */
+  paths: Set<string> | undefined
 }
 
 /** Where a checkout's git metadata lives, and the repository root it serves. */
@@ -152,8 +188,12 @@ export function createGitWatchHub(warn: GitWatchWarn): GitWatchHub {
   const entries = new Map<string, WorktreeEntry>()
   const sockets = new Set<GitSocket>()
 
-  /** One handle onto one path, or remove it again when the watch failed. */
-  const attachWatcher = (entry: WorktreeEntry, key: string, path: string, recursive: boolean): boolean => {
+  /** One handle onto one path, or remove it again when the watch failed.
+   *  `collect` marks the checkout's FILES watcher group — the only one
+   *  whose event filenames feed the frame's `paths` (the `.git` metadata
+   *  group's events are stage/commit/checkout, whose blast radius is
+   *  repository-wide; its filenames are never collected). */
+  const attachWatcher = (entry: WorktreeEntry, key: string, path: string, recursive: boolean, collect: boolean): boolean => {
     let watcher: FSWatcher
     try {
       watcher = watch(path, { persistent: false, recursive })
@@ -161,7 +201,10 @@ export function createGitWatchHub(warn: GitWatchWarn): GitWatchHub {
       return false
     }
     entry.watchers.push(watcher)
-    watcher.on('change', () => { schedule(key, entry) })
+    watcher.on('change', (_eventType: string, filename: string | Buffer | null) => {
+      if (collect) collectChangedPath(entry, filename)
+      schedule(key, entry)
+    })
     watcher.on('error', (error) => {
       // Degrade, never crash: drop THIS handle (the entry keeps its
       // others); the client re-subscribes on its next reconnect if the
@@ -178,27 +221,56 @@ export function createGitWatchHub(warn: GitWatchWarn): GitWatchHub {
     return true
   }
 
+  /**
+   * Fold one file-watcher event's `filename` into the pending frame. The
+   * name is relative to the watched root and platform-spelled, so it is
+   * normalized to a worktree-relative POSIX path; `null` (some platforms
+   * under load) contributes nothing — the notice still fires, just
+   * paths-less. A `.git`-internal name is dropped: the main checkout's
+   * recursive file watch sees its own `.git/index` and friends, and a
+   * stage/commit belongs to the metadata story (the frame fires WITHOUT
+   * paths, forcing the client's broad recalibration).
+   */
+  const collectChangedPath = (entry: WorktreeEntry, filename: string | Buffer | null): void => {
+    if (filename === null) {
+      // "Something moved, name unknown": nothing in the pending set can be
+      // trusted to describe the change — degrade the whole frame.
+      entry.paths = undefined
+      return
+    }
+    const raw = typeof filename === 'string' ? filename : filename.toString('utf8')
+    const relative = raw.replaceAll('\\', '/')
+    if (relative === '' || relative === '.git' || relative.startsWith('.git/')) return
+    if (entry.paths === undefined) return // already degraded by a null name / overflow
+    entry.paths.add(relative)
+    if (entry.paths.size > GIT_FRAME_PATH_LIMIT) entry.paths = undefined
+  }
+
   const createEntry = async (key: string): Promise<WorktreeEntry | undefined> => {
     const dirs = await resolveGitDirs(key)
     if (dirs === undefined) {
       warn(`"${key}" is not a git worktree; not watched`)
       return undefined
     }
-    const entry: WorktreeEntry = { refs: 1, repoRoot: dirs.repoRoot, watchers: [], timer: undefined, firedAt: 0 }
+    const entry: WorktreeEntry = { refs: 1, repoRoot: dirs.repoRoot, watchers: [], timer: undefined, firedAt: 0, paths: new Set() }
     // (1) The checkout's files. Recursive where the platform allows it;
     //     the shallow fallback still sees the checkout's top level.
-    if (!attachWatcher(entry, key, key, true)) {
+    //     This is the ONLY group whose event filenames feed the frame's
+    //     `paths` (see attachWatcher's `collect`).
+    if (!attachWatcher(entry, key, key, true, true)) {
       warn(`recursive fs.watch unavailable; watching "${key}" shallow (edits below the root may not notify)`)
-      attachWatcher(entry, key, key, false)
+      attachWatcher(entry, key, key, false, true)
     }
     // (2) The checkout's git metadata. Recursive where possible; the
     //     shallow fallback covers the four places the moving files live:
     //     the top (HEAD / index / packed-refs), refs/, logs/, worktrees/.
+    //     Metadata events never collect paths (stage / commit / checkout
+    //     can move any path — the client must recalibrate broadly).
     const before = entry.watchers.length
-    attachWatcher(entry, key, dirs.own, true)
+    attachWatcher(entry, key, dirs.own, true, false)
     if (entry.watchers.length === before) {
       for (const sub of ['', 'refs', 'logs', 'worktrees']) {
-        attachWatcher(entry, key, join(dirs.own, sub), false)
+        attachWatcher(entry, key, join(dirs.own, sub), false, false)
       }
     }
     if (entry.watchers.length === 0) {
@@ -226,6 +298,7 @@ export function createGitWatchHub(warn: GitWatchWarn): GitWatchHub {
     entries.delete(key)
     if (entry.timer !== undefined) clearTimeout(entry.timer)
     entry.timer = undefined
+    entry.paths = new Set()
     for (const watcher of entry.watchers) {
       try {
         watcher.close()
@@ -250,9 +323,14 @@ export function createGitWatchHub(warn: GitWatchWarn): GitWatchHub {
       // cache level computed before the change — the same reason
       // fs-watch drops the host's listing cache for the changed directory.
       invalidateGitCache(entry.repoRoot)
+      // Consume the burst's collected paths: an overflowed (`undefined`)
+      // or empty set fires paths-less, the "something moved" shape. The
+      // window resets either way — the next burst collects afresh.
+      const paths = entry.paths !== undefined && entry.paths.size > 0 ? [...entry.paths] : undefined
+      entry.paths = new Set()
       for (const socket of sockets) {
         const spelling = socket.spellingOf(key)
-        if (spelling !== undefined) socket.send({ kind: 'git', worktree: spelling })
+        if (spelling !== undefined) socket.send(paths === undefined ? { kind: 'git', worktree: spelling } : { kind: 'git', worktree: spelling, paths })
       }
     }, wait)
     // A pending notice must never hold the host process open.

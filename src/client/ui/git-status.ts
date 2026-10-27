@@ -49,10 +49,51 @@
  * nobody. Bumping the version on every answer re-rendered every consumer
  * — the file tree's rows included — once per change for no reason, which
  * is what the snapshot identity check below exists to prevent.
+ *
+ * The store refines WHAT a notice costs in three steps, all additive:
+ *
+ * - HYDRATION (`./git-status-storage.ts`): every accepted snapshot is
+ *   written through to `localStorage`, and a slot hydrates from it at
+ *   creation — the first paint of a fresh page already carries the last
+ *   answer's ink, and the push subscription attaches before the
+ *   calibration pull returns (the cached answer names the checkout root).
+ *   The pull itself always still runs: the cache decides how the page
+ *   looks for its first instants, the live answer what it converges to.
+ *   At most the freshest eight slot documents survive (an LRU sweep on
+ *   the key prefix); storage failures degrade to memory, never break a
+ *   render.
+ * - PER-PATH PATCHING: the host's file watcher now names WHAT moved — a
+ *   `git` frame can carry `paths` (worktree-relative, deduped, capped;
+ *   absent on pure `.git` metadata events, on overflow, and from old
+ *   hosts). A paths-bearing notice no longer re-pulls the whole
+ *   repository: the paths are deduplicated, chunked, and answered by
+ *   `git.statusPaths` (only what was asked), and the answer is patched
+ *   into the snapshot row by row — added/changed rows land, rows that
+ *   went clean are dropped, the ignored overlay merges the same way —
+ *   with ONE notify at the end and only when something actually changed.
+ *   A paths-LESS notice (or a patch whose answer says truncated / root
+ *   mismatched) still means "any path may have moved" and takes the full
+ *   calibration pull, as does the socket's reconnect catch-up.
+ * - TURN CALIBRATION: while a slot is visibly held it also holds its
+ *   session's turn subscription (`../turn-push.ts`): each settled reply
+ *   of the agent (a durable assistant step — the model just wrote its
+ *   files) triggers one full asynchronous re-pull, so the tree's ink is
+ *   honest at the end of every round even if the file watcher's burst
+ *   window folded the writes into a notice the slot patched coarsely.
+ *   The subscription follows the SAME visible edge as the watch — no
+ *   consumer, no socket, no fetch of any kind.
  */
 import { useCallback, useEffect, useSyncExternalStore } from 'react'
-import { api, type GitLineCounts, type GitStatusResult, type SessionScope } from '../api.ts'
+import { api, type GitLineCounts, type GitStatusPathsResult, type GitStatusResult, type SessionScope } from '../api.ts'
 import { subscribeGitWatch, type GitWatchHandle } from '../git-push.ts'
+import { subscribeSessionTurns } from '../turn-push.ts'
+import { readGitStatusSnapshot, writeGitStatusSnapshot } from './git-status-storage.ts'
+
+/** How many paths one incremental `gitStatusPaths` call carries. Well below
+ *  the host's own pathspec cap (200): the chunk bounds one request's argv and
+ *  keeps a 64-path overflow notice — patched as a paths-less full pull in
+ *  practice — from ever crossing the wire as one giant ask anyway. */
+const GIT_PATHS_CHUNK = 128
 
 /** The semantic class of one changed path (drives the row's ink). */
 export type GitTone =
@@ -139,6 +180,24 @@ function normPath(path: string): string {
 function joinRoot(root: string, rel: string): string {
   const base = root.replace(/[\\/]+$/, '')
   return `${base}/${rel.replace(/^[\\/]+/, '')}`
+}
+
+/**
+ * Lexically resolve an absolute path's `.`/`..` segments (preserving the
+ * leading separator). The patch path joins worktree-relative frame paths
+ * through the snapshot root, and a `../`-spelled name must leave the root
+ * instead of merely sitting under a `root/..` prefix that string-prefix
+ * checks would wrongly call "inside".
+ */
+function lexicalAbsolute(path: string): string {
+  const absolute = path.startsWith('/') ? path : `/${path}`
+  const segments: string[] = []
+  for (const segment of absolute.split('/')) {
+    if (segment === '' || segment === '.') continue
+    if (segment === '..') segments.pop()
+    else segments.push(segment)
+  }
+  return `/${segments.join('/')}`
 }
 
 /**
@@ -266,10 +325,17 @@ interface Slot {
   visible: number
   /** The push subscription while at least one consumer holds the slot. */
   watch: GitWatchHandle | undefined
+  /** The session-turn subscription (the reply-settled calibration) while
+   *  at least one consumer holds the slot — the same visible edge. */
+  turns: (() => void) | undefined
   listeners: Set<() => void>
   index: Index | null
   /** The snapshot the current index was built from (identity compare). */
   indexSource: GitStatusResult | null
+  /** A per-path patch is in flight; its chunks must not stampede. */
+  patchRunning: boolean
+  /** Paths a notice named while a patch ran — folded into one trailing patch. */
+  patchPending: Map<string, string> | undefined
 }
 
 const slots = new Map<string, Slot>()
@@ -282,12 +348,37 @@ function slotOf(scope: SessionScope, worktree: string | undefined): Slot {
   const slot: Slot = {
     key, sessionId, cwd, repoRoot, worktree,
     snapshot: null, loading: false, error: false, version: 0, generation: 0,
-    running: false, pending: false, visible: 0, watch: undefined,
+    running: false, pending: false, visible: 0, watch: undefined, turns: undefined,
     listeners: new Set(),
     index: null, indexSource: null,
+    patchRunning: false, patchPending: undefined,
   }
+  // Hydrate BEFORE anything can render the slot: the cached snapshot (if any)
+  // colors the first paint, and its `root` is the worktree identity the push
+  // subscription keys on — so the socket attaches at the first retain, before
+  // the calibration pull returns. The pull still always runs; the cache only
+  // decides the first instants.
+  slot.snapshot = readGitStatusSnapshot(gitStatusStorageKeyOf(slot))
   slots.set(key, slot)
   return slot
+}
+
+/** The slot's localStorage key (sessionId + cwd/worktree digest — see the
+ *  storage module). */
+function gitStatusStorageKeyOf(slot: Slot): string {
+  return gitStatusStorageKey(slot.sessionId, slot.cwd, slot.worktree)
+}
+
+/**
+ * (Re-)hydrate a slot from storage. Runs at creation AND at the first
+ * retain after a release: a release drops the in-memory snapshot, but the
+ * stored document survives, so the next mount pre-colors from it again and
+ * recalibrates with the pull that follows. A hydrated snapshot never blocks
+ * a fetch — the retain path fetches unconditionally (see retain).
+ */
+function hydrateSlot(slot: Slot): void {
+  if (slot.snapshot !== null) return
+  slot.snapshot = readGitStatusSnapshot(gitStatusStorageKeyOf(slot))
 }
 
 function notify(slot: Slot): void {
@@ -328,6 +419,10 @@ function fetchSlot(slot: Slot): void {
       slot.snapshot = snapshot
       slot.error = false
       changed = true
+      // The answer is durable across reloads: write it through (a storage
+      // failure degrades silently — see the storage module). An idle answer
+      // (same status) skips the write: nothing the cache could gain.
+      writeGitStatusSnapshot(gitStatusStorageKeyOf(slot), snapshot)
       // The first answer names the checkout this slot describes — exactly
       // the worktree identity the push subscription keys on. Before it,
       // only the consumer-named linked checkout could be subscribed.
@@ -350,6 +445,208 @@ function fetchSlot(slot: Slot): void {
     })
 }
 
+/**
+ * The per-path notice: patch the snapshot for exactly the paths the host
+ * named, never re-pull the repository.
+ *
+ * Flow: deduplicate the frame's paths against the store's normalized key
+ * (original spellings ride the wire — a lowercased pathspec would miss on
+ * a case-sensitive checkout), drop paths outside the slot's repository
+ * root (they cannot have a status here), chunk below
+ * {@link GIT_PATHS_CHUNK}, and answer each chunk with `gitStatusPaths`.
+ * Every answer is merged into the CURRENT snapshot (see applyPathsAnswer);
+ * the index rebuilds once per chunk; ONE notify follows — and only when
+ * something a consumer could see actually changed (the same idle-silence
+ * contract the full pull runs under). A successful patch writes through
+ * to storage like any accepted answer.
+ *
+ * Guards: no visible consumer → nothing runs (the same rule the fetch
+ * path obeys); no snapshot yet (a notice racing the first pull, or an
+ * error state) → the full fetch takes over, there is nothing to patch;
+ * a truncated answer or a root that disagrees with the snapshot's → the
+ * patch cannot be trusted, the full fetch recalibrates; a failed request
+ * → the patch gives up silently (the next full calibration heals — a
+ * patch failure must never flip the slot's error state, which belongs to
+ * the full read); a snapshot replaced mid-patch → the patch abandons (the
+ * newer full answer already knows more). A notice landing while a patch
+ * runs is folded into ONE trailing patch (the fetch path's pending flag,
+ * per-path).
+ */
+function patchSlot(slot: Slot, rawPaths: readonly string[]): void {
+  if (slot.visible === 0) return
+  /** normalized key → the ORIGINAL spelling (the wire carries originals). */
+  const wanted = new Map<string, string>()
+  for (const raw of rawPaths) {
+    if (typeof raw !== 'string' || raw === '') continue
+    const normalized = normPath(raw)
+    if (!wanted.has(normalized)) wanted.set(normalized, raw)
+  }
+  if (wanted.size === 0) return
+  if (slot.patchRunning) {
+    const pending = slot.patchPending ?? new Map<string, string>()
+    for (const [normalized, original] of wanted) if (!pending.has(normalized)) pending.set(normalized, original)
+    slot.patchPending = pending
+    return
+  }
+  slot.patchRunning = true
+  void runPatch(slot, wanted).finally(() => {
+    slot.patchRunning = false
+    const pending = slot.patchPending
+    slot.patchPending = undefined
+    if (pending !== undefined && pending.size > 0 && slot.visible > 0) patchSlot(slot, [...pending.values()])
+  })
+}
+
+/** One patch pass over one deduplicated path set. */
+async function runPatch(slot: Slot, wanted: Map<string, string>): Promise<void> {
+  if (slot.visible === 0) return
+  const snapshot = slot.snapshot
+  if (snapshot === null || !snapshot.isRepo || snapshot.root === undefined) {
+    fetchSlot(slot)
+    return
+  }
+  const rootNorm = normPath(snapshot.root)
+  // The frame's paths are worktree-RELATIVE (the host's watcher reports
+  // filenames against the watch root); the store's rows and the
+  // `gitStatusPaths` wire are ABSOLUTE (the host route folds them back to
+  // pathspecs against its own root — relative spellings would resolve
+  // against the session cwd, which may be a subdirectory of the checkout).
+  // Join through the snapshot root and key on the store's normalized form.
+  const root = snapshot.root
+  const inside = new Map<string, string>()
+  for (const [, original] of wanted) {
+    const absolute = /^(?:[A-Za-z]:)?\//.test(original) ? lexicalAbsolute(original) : lexicalAbsolute(joinRoot(root, original))
+    const normalized = normPath(absolute)
+    if ((normalized === rootNorm || normalized.startsWith(`${rootNorm}/`)) && !inside.has(normalized)) {
+      inside.set(normalized, absolute)
+    }
+  }
+  if (inside.size === 0) return
+  const scope: SessionScope = { sessionId: slot.sessionId, cwd: slot.cwd, repoRoot: slot.repoRoot }
+  let changed = false
+  const flat = [...inside.entries()]
+  for (let at = 0; at < flat.length; at += GIT_PATHS_CHUNK) {
+    const chunk = flat.slice(at, at + GIT_PATHS_CHUNK)
+    let answer: GitStatusPathsResult
+    try {
+      answer = await api.gitStatusPaths(scope, chunk.map(([, absolute]) => absolute), slot.worktree)
+    } catch {
+      return // silent: the next full calibration (turn / paths-less notice) heals
+    }
+    // Superseded (a full fetch replaced the snapshot), released, or the
+    // answer describes a different checkout than the snapshot's: the patch
+    // cannot be trusted — the full read recalibrates.
+    if (slot.visible === 0 || slot.snapshot !== snapshot) return
+    if (answer.truncated === true || answer.root === undefined || normPath(answer.root) !== rootNorm) {
+      fetchSlot(slot)
+      return
+    }
+    changed = applyPathsAnswer(slot, snapshot, chunk, answer) || changed
+  }
+  if (changed && slot.snapshot !== null) {
+    writeGitStatusSnapshot(gitStatusStorageKeyOf(slot), slot.snapshot)
+    notify(slot)
+  }
+}
+
+/**
+ * Merge ONE `gitStatusPaths` answer into the slot's snapshot. The
+ * requested paths define the patch's blast radius — everything at or under
+ * them is REPLACED by the answer (an answered row updates its letter and
+ * counts, an un-answered old row went clean and is dropped, an answered
+ * ignored row joins the overlay, an ignored row the answer stops listing
+ * is removed) — and everything else is untouched. Absolute identity runs
+ * through the store's `normPath` (case-insensitive, '/'-separated), the
+ * same key the index builds on, so Windows separators and case never
+ * split a row.
+ *
+ * Row ORDER is preserved for the surviving rows; newly-answered rows
+ * append. A later full pull re-orders canonically — a patch only has to
+ * be truthful, not git's own order.
+ *
+ * @returns whether any consumer-visible field actually moved (the caller
+ *  notifies only then).
+ */
+function applyPathsAnswer(
+  slot: Slot,
+  before: GitStatusResult,
+  requested: ReadonlyArray<[normalized: string, original: string]>,
+  answer: GitStatusPathsResult,
+): boolean {
+  const root = before.root
+  if (root === undefined) return false
+  const underRequested = (abs: string): boolean =>
+    requested.some(([normalized]) => abs === normalized || abs.startsWith(`${normalized}/`))
+  // The answer, keyed the way the snapshot is keyed.
+  const answered = new Map<string, GitStatusResult['entries'][number]>()
+  for (const entry of answer.entries) {
+    answered.set(normPath(joinRoot(root, entry.path)), entry)
+  }
+  /** The patched rows, git's root-relative spelling (the snapshot's own). */
+  const rows: GitStatusResult['entries'] = []
+  const seen = new Set<string>()
+  let mutated = 0
+  for (const entry of before.entries) {
+    const abs = normPath(joinRoot(root, entry.path))
+    if (seen.has(abs)) continue // duplicate spelling: one row is the truth
+    seen.add(abs)
+    if (!underRequested(abs)) {
+      rows.push(entry)
+      continue
+    }
+    const fresh = answered.get(abs)
+    if (fresh === undefined) {
+      mutated += 1 // the path went clean: absence IS the answer
+      continue
+    }
+    answered.delete(abs)
+    if (fresh.xy !== entry.xy || !sameCounts(fresh.counts, entry.counts)) mutated += 1
+    rows.push(fresh)
+  }
+  let added = 0
+  for (const entry of answer.entries) {
+    const abs = normPath(joinRoot(root, entry.path))
+    if (!underRequested(abs) || seen.has(abs)) continue
+    seen.add(abs)
+    rows.push(entry)
+    added += 1
+  }
+  // The ignored overlay, same blast radius: re-keyed by normalized absolute
+  // path, rows at/under the request replaced by the answer's subset. The
+  // sweep below drops rows the answer stopped listing.
+  const ignoredOld = before.ignored ?? []
+  const ignoredMap = new Map<string, string>()
+  for (const rel of ignoredOld) {
+    const abs = normPath(joinRoot(root, rel))
+    if (abs !== '' && !ignoredMap.has(abs)) ignoredMap.set(abs, rel)
+  }
+  const scopedBefore = new Set<string>()
+  for (const abs of ignoredMap.keys()) if (underRequested(abs)) scopedBefore.add(abs)
+  for (const rel of answer.ignored) {
+    const abs = normPath(joinRoot(root, rel))
+    if (abs === '' || !underRequested(abs)) continue
+    scopedBefore.add(abs) // answered rows survive the sweep below
+    ignoredMap.set(abs, rel)
+  }
+  for (const abs of [...ignoredMap.keys()]) {
+    if (underRequested(abs) && !scopedBefore.has(abs)) ignoredMap.delete(abs)
+  }
+  const ignored = [...ignoredMap.values()]
+  const branch = answer.branch ?? before.branch
+  const ignoredChanged = ignored.length !== ignoredOld.length
+    || ignored.some(rel => !ignoredOld.includes(rel))
+  const changed = mutated > 0 || added > 0 || ignoredChanged || branch !== before.branch
+  if (!changed) return false
+  // One new snapshot object per accepted patch — the identity discipline
+  // the full pull runs under (downstream memos compare references).
+  slot.snapshot = { ...before, branch, entries: rows, ignored }
+  // The index rebuilds lazily on the next read, once per patched batch —
+  // the same defer the full pull's notify path uses.
+  slot.index = null
+  slot.indexSource = null
+  return true
+}
+
 /** The worktree identity this slot's answer describes: the linked checkout
  *  the consumer named, else the checkout root the last answer reported. */
 function watchRootsOf(slot: Slot): string[] {
@@ -363,25 +660,56 @@ function watchRootsOf(slot: Slot): string[] {
 
 /**
  * Subscribe the slot to the shared git push socket — once it has a worktree
- * identity and a consumer to refresh. A notice (or the socket's reconnect)
- * re-pulls ONE snapshot through the coalescing fetch above; the hub filters
- * frames by the set given here, so the slot only ever hears about ITS
- * checkout.
+ * identity and a consumer to refresh. A paths-bearing notice patches the
+ * snapshot per path (the incremental read — see patchSlot); a paths-LESS
+ * notice (pure `.git` metadata, overflow, an old host) and the socket's
+ * reconnect catch-up re-pull the WHOLE snapshot, because those are exactly
+ * the events that can move any path (stage / commit / checkout / an outage
+ * whose frames were swallowed). The hub filters frames by the set given
+ * here, so the slot only ever hears about ITS checkout. The session-turn
+ * subscription rides the same visible edge (see ensureSlotTurns).
  */
 function ensureSlotWatch(slot: Slot): void {
-  if (slot.watch !== undefined || slot.visible === 0) return
+  if (slot.visible === 0) return
+  ensureSlotTurns(slot)
+  if (slot.watch !== undefined) return
   const roots = watchRootsOf(slot)
   if (roots.length === 0) return
-  const invalidate = (): void => { if (slot.visible > 0) fetchSlot(slot) }
-  slot.watch = subscribeGitWatch(slot.sessionId, roots, invalidate, invalidate)
+  const invalidate = (worktree: string, paths?: string[]): void => {
+    if (slot.visible === 0) return
+    if (paths !== undefined && paths.length > 0) patchSlot(slot, paths)
+    else fetchSlot(slot)
+  }
+  const catchUp = (): void => { if (slot.visible > 0) fetchSlot(slot) }
+  slot.watch = subscribeGitWatch(slot.sessionId, roots, invalidate, catchUp)
+}
+
+/**
+ * Hold the slot's session-turn subscription while it is visibly consumed:
+ * every settled reply of the agent (a durable assistant step — typically
+ * "the model just wrote/committed files") triggers one FULL asynchronous
+ * calibration re-pull through the coalescing fetch. The subscription needs
+ * only the sessionId (the endpoint's own fence), so it attaches at the
+ * first retain — earlier than the git watch can, which waits for the
+ * answer to name the checkout. The last release drops it: a slot nobody
+ * sees holds no socket and runs no fetch.
+ */
+function ensureSlotTurns(slot: Slot): void {
+  if (slot.turns !== undefined || slot.visible === 0) return
+  slot.turns = subscribeSessionTurns(slot.sessionId, () => {
+    if (slot.visible > 0) fetchSlot(slot)
+  })
 }
 
 function retain(slot: Slot): void {
   slot.visible += 1
-  // The answer is fetched for the FIRST consumer, and the subscription
-  // follows the same edge — the last consumer's release drops both.
+  // The answer is fetched for the FIRST consumer — always, even over a
+  // hydrated cache (the cache only pre-colors; the pull is the arbiter) —
+  // and both subscriptions follow the same edge; the last consumer's
+  // release drops all three.
   if (slot.visible === 1) {
-    if (slot.snapshot === null) fetchSlot(slot)
+    hydrateSlot(slot)
+    fetchSlot(slot)
     ensureSlotWatch(slot)
   }
 }
@@ -393,8 +721,18 @@ function release(slot: Slot): void {
       slot.watch.close()
       slot.watch = undefined
     }
-    // No consumer left: drop the snapshot so a later mount re-reads the truth
-    // instead of coloring rows from a stale answer.
+    if (slot.turns !== undefined) {
+      slot.turns()
+      slot.turns = undefined
+    }
+    // A trailing patch may still land after the release; it must not
+    // resurrect the slot's data — patchSlot/runPatch re-check `visible`
+    // at every step (the same guard the fetch path's callbacks run).
+    slot.patchRunning = false
+    slot.patchPending = undefined
+    // No consumer left: drop the snapshot so a later mount re-reads the
+    // truth (via the storage re-hydration + calibration pull) instead of
+    // coloring rows from a stale in-memory answer.
     slot.snapshot = null
     slot.index = null
     slot.indexSource = null
