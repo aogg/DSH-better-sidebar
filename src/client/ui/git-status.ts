@@ -87,7 +87,7 @@ import { useCallback, useEffect, useSyncExternalStore } from 'react'
 import { api, type GitLineCounts, type GitStatusPathsResult, type GitStatusResult, type SessionScope } from '../api.ts'
 import { subscribeGitWatch, type GitWatchHandle } from '../git-push.ts'
 import { subscribeSessionTurns } from '../turn-push.ts'
-import { readGitStatusSnapshot, writeGitStatusSnapshot } from './git-status-storage.ts'
+import { gitStatusStorageKey, readGitStatusSnapshot, writeGitStatusSnapshot } from './git-status-storage.ts'
 
 /** How many paths one incremental `gitStatusPaths` call carries. Well below
  *  the host's own pathspec cap (200): the chunk bounds one request's argv and

@@ -387,8 +387,8 @@ export function runGit(cwd: string, args: string[], timeoutMs = 30_000, input?: 
       child.kill('SIGKILL')
       reject(new GitCommandError(`git ${args[0] ?? ''} timed out after ${timeoutMs}ms`, 'git-error', args.join(' ')))
     }, timeoutMs)
-    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8') })
-    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
+    child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8') })
+    child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
     child.on('error', (error) => {
       clearTimeout(timer)
       reject(new GitCommandError(`cannot run git: ${error.message}`, 'git-error', args.join(' ')))
