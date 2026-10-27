@@ -876,4 +876,16 @@ export const ru: Record<string, string> = {
   cmdRunInputAria: 'Отправить строку в терминал',
   cmdRunInputPlaceholder: 'Введите и нажмите Enter…',
   cmdRunInputEnded: 'Процесс завершён',
+
+  terminalHistory: 'История выполнения команд',
+  terminalHistoryEmpty: 'Команд пока нет: выполненные в этой вкладке команды (с выводом и статусом) появятся здесь; хранятся только последние записи, обновление страницы очищает список.',
+  terminalHistoryNoOutput: '(нет вывода)',
+  terminalHistoryStatusRunning: 'Выполняется',
+  terminalHistoryStatusSuccess: 'Успешно',
+  terminalHistoryStatusFailed: 'Ошибка',
+  terminalHistoryStatusFailedCode: 'Ошибка (код выхода {code})',
+  terminalHistoryStatusInterrupted: 'Прервано',
+  terminalHistoryStatusDone: 'Завершено (код выхода неизвестен)',
+  settingsTerminalHistoryLimitTitle: 'Размер истории команд терминала',
+  settingsTerminalHistoryLimitDesc: 'Сколько последних команд хранит всплывающее окно истории (10–1000, по умолчанию 100; только в памяти, очищается при обновлении)',
 }

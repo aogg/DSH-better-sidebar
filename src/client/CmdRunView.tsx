@@ -40,6 +40,8 @@ import {
 } from './commands-open.ts'
 import { detectWaitInput } from '../command-interaction.ts'
 import { webTerminals, type HostTerminalEnvironment, type HostTerminalView, type HostTerminalViewState } from './terminal-client.ts'
+import { attachPasteTakeover, bindSurfaceTheme } from './terminal-surface.ts'
+import { TerminalCommandRecorder } from './terminal-history.ts'
 import terminalCss from './terminal.module.css'
 import css from './commands.module.css'
 
@@ -171,7 +173,7 @@ export function CmdRunView({ ctx, scope, tab, visible }: CmdRunProps): ReactNode
         </div>
       )}
       {state.info !== undefined && (
-        <CmdRunScreen model={model} state={state} visible={visible} scheme={scheme} label={title} />
+        <CmdRunScreen model={model} state={state} visible={visible} scheme={scheme} label={title} sessionId={sessionId} />
       )}
       <CmdRunQuickInput model={model} running={running} label={title} />
       {state.error !== undefined && state.issue === undefined && (
@@ -195,10 +197,12 @@ interface CmdRunScreenProps {
   visible: boolean
   scheme: boolean
   label: string
+  /** 会话 id：命令历史日志按会话共享（与终端 tab 同一份）。 */
+  sessionId: string
 }
 
 /** xterm 屏幕（frame→xterm→acknowledge、fit），并维护「屏幕尾部」文本给等待输入启发。 */
-function CmdRunScreen({ model, state, visible, scheme, label }: CmdRunScreenProps): ReactNode {
+function CmdRunScreen({ model, state, visible, scheme, label, sessionId }: CmdRunScreenProps): ReactNode {
   const element = useRef<HTMLDivElement | null>(null)
   const emulator = useRef<Terminal | undefined>(undefined)
   const fit = useRef<FitAddon | undefined>(undefined)
@@ -207,6 +211,7 @@ function CmdRunScreen({ model, state, visible, scheme, label }: CmdRunScreenProp
   const screenTail = useRef('')
   const lastOutputAt = useRef(Date.now())
   const [waiting, setWaiting] = useState(false)
+  const commandRecorderRef = useRef<TerminalCommandRecorder | undefined>(undefined)
   const current = useRef({ state, visible })
   current.current = { state, visible }
 
@@ -227,7 +232,27 @@ function CmdRunScreen({ model, state, visible, scheme, label }: CmdRunScreenProp
     emulator.current = xterm
     fit.current = addon
     lastRevision.current = 0
-    const input = xterm.onData((data) => { model.write(data) })
+    // 粘贴接管（与终端 tab 同一套：ANSI 剥离 + 字面 ^[[200~ 净化 + 括号粘贴）。
+    const paste = attachPasteTakeover(node, xterm, (data) => { model.write(data) })
+    // 命令历史：与终端 tab 喂进同一份会话日志。快捷输入行走 model.write 直写
+    // （不经 onData），有 shell integration（OSC 133 C）时同样会被记录。
+    const commandRecorder = new TerminalCommandRecorder({
+      sessionId,
+      readCursorLine: () => {
+        const buffer = xterm.buffer?.active
+        const line = buffer?.getLine(buffer.baseY + buffer.cursorY)
+        return line?.translateToString(true) ?? ''
+      },
+    })
+    commandRecorderRef.current = commandRecorder
+    const osc133 = xterm.parser?.registerOscHandler?.(133, (data) => {
+      commandRecorder.handleOsc133(data)
+      return false
+    })
+    const input = xterm.onData((data) => {
+      commandRecorder.handleInput(data)
+      model.write(data)
+    })
     const measure = (): void => {
       const live = current.current
       if (!live.visible || !live.state.writable || node.clientWidth === 0 || node.clientHeight === 0) return
@@ -238,25 +263,23 @@ function CmdRunScreen({ model, state, visible, scheme, label }: CmdRunScreenProp
     return () => {
       observer?.disconnect()
       input.dispose()
+      osc133?.dispose()
+      paste.dispose()
+      commandRecorder.dispose()
+      commandRecorderRef.current = undefined
       xterm.dispose()
       emulator.current = undefined
       fit.current = undefined
     }
-  }, [model, label])
+  }, [model, label, sessionId])
 
+  // 主题桥（防御版）：颜色未就绪时挂 <head> 样式监听，落地即应用——不再有
+  // 「主题 CSS 未到就读到透明底」的白屏窗口（见 bindSurfaceTheme）。
   useLayoutEffect(() => {
     const node = element.current
     const xterm = emulator.current
     if (node === null || xterm === undefined) return
-    const style = getComputedStyle(node)
-    xterm.options.theme = {
-      background: style.backgroundColor,
-      foreground: style.color,
-      cursor: style.color,
-      cursorAccent: style.backgroundColor,
-      selectionBackground: style.color,
-      selectionForeground: style.backgroundColor,
-    }
+    return bindSurfaceTheme(node, xterm)
   }, [scheme, model, state.phase])
 
   // frame 协议：snapshot 整屏重放、output 追加，然后 ACK 放行下一帧。
@@ -265,6 +288,8 @@ function CmdRunScreen({ model, state, visible, scheme, label }: CmdRunScreenProp
     const render = state.render
     if (xterm === undefined || render === undefined || render.revision <= lastRevision.current) return
     lastRevision.current = render.revision
+    // 命令历史采集在渲染前喂（运行中记录输出帧；空闲时只做基线捕获）。
+    commandRecorderRef.current?.handleFrame(render.frame)
     if (render.frame.type === 'snapshot') {
       xterm.reset()
       xterm.resize(render.frame.info.cols, render.frame.info.rows)

@@ -222,6 +222,42 @@ export const PROJECT_SETTINGS_KEY = '__project'
 /** The stock exclude list (VS Code ships a similar files.exclude default). */
 export const EXPLORER_EXCLUDE_DEFAULTS: readonly string[] = ['.DS_Store', 'Thumbs.db']
 
+/**
+ * The terminal command-history capacity (plugin-owned setting
+ * `pluginSettings['terminal-bottom'][TERMINAL_HISTORY_SETTING_KEY]`): how many
+ * recent command executions the 「执行命令历史」 popover keeps per session, in
+ * a pure in-memory ring buffer (a page reload clears it by design). Declared
+ * here so the settings row (the descriptor's `pluginToggles`), the writer
+ * clamp and the chunk-side recorder share one typed vocabulary.
+ */
+export const TERMINAL_HISTORY_MIN = 10
+export const TERMINAL_HISTORY_MAX = 1000
+export const TERMINAL_HISTORY_DEFAULT = 100
+/** The `pluginSettings['terminal-bottom']` blob key holding the capacity. */
+export const TERMINAL_HISTORY_SETTING_KEY = 'terminalHistoryLimit'
+/** The descriptor id whose settings blob carries {@link TERMINAL_HISTORY_SETTING_KEY}. */
+export const TERMINAL_BOTTOM_DESCRIPTOR_ID = 'terminal-bottom'
+
+/** Clamp one raw capacity into the declared range (non-finite falls to the default). */
+export function clampTerminalHistoryLimit(value: unknown): number {
+  // The settings blob is open (JSON values): parse defensively before comparing.
+  const parsed = typeof value === 'number'
+    ? value
+    : Number.parseInt(String(value ?? ''), 10)
+  if (!Number.isFinite(parsed)) return TERMINAL_HISTORY_DEFAULT
+  return Math.min(TERMINAL_HISTORY_MAX, Math.max(TERMINAL_HISTORY_MIN, Math.round(parsed)))
+}
+
+/**
+ * Read the terminal command-history capacity from the resolved prefs, with the
+ * default as the fallback (an absent blob / key — the stock state — reads as
+ * {@link TERMINAL_HISTORY_DEFAULT}).
+ */
+export function terminalHistoryLimitOf(prefs: SidebarPrefs): number {
+  const blob = prefs.pluginSettings[TERMINAL_BOTTOM_DESCRIPTOR_ID]
+  return clampTerminalHistoryLimit(blob?.[TERMINAL_HISTORY_SETTING_KEY])
+}
+
 /** Fallback prefs used whenever the settings document is unreachable or malformed. */
 export const SIDEBAR_PREFS_DEFAULTS: SidebarPrefs = {
   autoOpenSubagent: true,

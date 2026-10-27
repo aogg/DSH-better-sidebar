@@ -90,3 +90,168 @@
 .action:hover {
   background: var(--dsw-alias-bg-l2);
 }
+
+/*
+ * 「执行命令历史」：终端视图右上角的悬浮按钮 + 锚定弹窗（几何与关闭契约在
+ * AnchoredPopover；内容组件 TerminalHistoryPopover）。悬浮在屏幕容器之上，
+ * 不挤压 xterm 高度。
+ */
+
+.screenHost {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.historyButton {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 40%;
+  padding: 3px 8px;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: 6px;
+  cursor: pointer;
+  overflow: hidden;
+  color: var(--dsw-alias-label-secondary, var(--dsw-alias-label-primary));
+  background: var(--dsw-alias-bg-layer-1);
+  font-size: var(--dsw-font-xxxs-11);
+}
+
+.historyButton:hover {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.historyCard {
+  display: flex;
+  flex-direction: column;
+  max-height: min(70vh, 480px);
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  overflow: hidden;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: var(--dsw-shadow-lv3);
+}
+
+.historyHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px 8px;
+  border-bottom: 0.5px solid var(--dsw-alias-hairline);
+  color: var(--dsw-alias-label-primary);
+  font-size: var(--dsw-font-xxs-strong-12);
+}
+
+.historyCount {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--dsw-alias-label-secondary, var(--dsw-alias-label-primary));
+  background: var(--dsw-alias-bg-layer-2);
+  font-size: var(--dsw-font-xxxs-11);
+}
+
+.historyList {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 6px 8px;
+  overflow-y: auto;
+}
+
+.historyItem {
+  border-radius: 8px;
+}
+
+.historyRow {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+}
+
+.historyRow:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.historyDot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  color: var(--dsw-alias-label-tertiary);
+  background: currentcolor;
+}
+
+.historyRow[data-status='running'] .historyDot {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.historyRow[data-status='success'] .historyDot {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.historyRow[data-status='failed'] .historyDot {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.historyRow[data-status='interrupted'] .historyDot {
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.historyCommand {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dsw-alias-label-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--ds-font-family-code, monospace);
+}
+
+.historyState {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: var(--dsw-font-xxxs-11);
+}
+
+.historyOutput {
+  max-height: 240px;
+  margin: 0 8px 8px 22px;
+  padding: 8px;
+  border: 0.5px solid var(--dsw-alias-hairline);
+  border-radius: 8px;
+  overflow: auto;
+  color: var(--dsw-alias-label-secondary, var(--dsw-alias-label-primary));
+  background: var(--dsw-alias-bg-base);
+  font-family: var(--ds-font-family-code, monospace);
+  font-size: var(--dsw-font-xxxs-11);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.historyEmpty {
+  margin: 0;
+  padding: 18px 14px 16px;
+  color: var(--dsw-alias-label-tertiary);
+  line-height: 1.6;
+}

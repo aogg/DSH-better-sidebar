@@ -248,8 +248,9 @@ function bottomTab(meta?: unknown): SidebarTab {
   return { id: 'terminal-bottom', type: 'terminal-bottom', title: 'Terminal', ...(meta === undefined ? {} : { meta }) }
 }
 
-function render(ctx: Context, tab: SidebarTab, visible = true) {
-  return renderRoot(createElement(TerminalBottomView, { ctx, scope: { sessionId: 's1', cwd: '/w' }, tab, visible }))
+function render(ctx: Context, tab: SidebarTab, visible = true, scopeOverride?: { sessionId: string }) {
+  const scope = { sessionId: 's1', cwd: '/w', ...(scopeOverride ?? {}) }
+  return renderRoot(createElement(TerminalBottomView, { ctx, scope, tab, visible }))
 }
 
 /** Flush the microtask queue the memoized `view()`/refresh path may schedule. */
@@ -512,10 +513,12 @@ describe('terminal-bottom: degradation and recovery', () => {
     // …it is the ONLY status line on screen (the suppressed one was a
     // `role="status"` div as well)…
     expect(container.querySelectorAll('[role="status"]')).toHaveLength(1)
-    // …and the only action is the new terminal: the suppressed line's Retry
-    // button would come FIRST in DOM order.
+    // …and the actions are the new terminal plus the screen's own history
+    // button (an ended terminal keeps its screen — and with it the history
+    // entry; the suppressed line's Retry button would come FIRST in DOM
+    // order).
     expect([...container.querySelectorAll('button')].map(button => button.textContent))
-      .toEqual([t('terminalNew')])
+      .toEqual([t('terminalNew'), t('terminalHistory')])
     expect(container.textContent).not.toContain(t('disconnected'))
     unmount()
   })
@@ -574,7 +577,9 @@ describe('terminal-bottom: degradation and recovery', () => {
       activate: () => false,
       has: () => false,
     })
-    act(() => { action.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    // Async act: the mint lock (same-tick dedupe) releases on a microtask, so
+    // each genuine click flushes it before the next one.
+    await act(async () => { action.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     expect(nativePatches).toEqual([
       { tabId: 'terminal-bottom', patch: { meta: { terminalRun: 1 } }, sessionId: 's1' },
     ])
@@ -582,8 +587,33 @@ describe('terminal-bottom: degradation and recovery', () => {
 
     // ── the own-layout half: no native record, so the bottom tree takes it ──
     service.setSurface(undefined)
-    act(() => { action.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    await act(async () => { action.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     expect(tabInStore()?.meta).toEqual({ terminalRun: 1 })
+    unmount()
+  })
+
+  it('a same-tick double click on 「新建终端」 mints ONCE (meta replaces wholesale)', async () => {
+    // Both clicks of a double click read the SAME `tab` prop, so both would
+    // compute the same `nextTerminalMeta` — and `updateTab` REPLACES `meta`
+    // wholesale, so the second write can clobber fields a follow-up effect
+    // wrote in between (the CWD spend, a cmd-run injection flag). The lock
+    // collapses the same-tick duplicates into one mint.
+    const terminals = new FakeTerminals()
+    const { ctx, order } = viewSetup(terminals)
+    const { container, unmount } = render(ctx, bottomTab())
+    await flush()
+    const view = terminals.views.get('s1\u0000' + bottomTerminalContentId(0))!
+    act(() => { view.patch({ phase: 'failed', writable: false, issue: 'missingTerminal' }) })
+    const action = container.querySelector('button')!
+    act(() => {
+      action.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      action.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(order).toEqual(['terminal-bottom:{"terminalRun":1}'])
+    // The lock is a microtask, not a latch: a LATER click still mints.
+    await flush()
+    await act(async () => { action.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(order).toEqual(['terminal-bottom:{"terminalRun":1}', 'terminal-bottom:{"terminalRun":1}'])
     unmount()
   })
 })
@@ -680,5 +710,95 @@ describe('terminal-bottom: several terminals in one session (#774 follow-up)', (
     ])
     first.unmount()
     second.unmount()
+  })
+})
+
+/**
+ * 「执行命令历史」+ 粘贴净化 + 加载期占位（R0/R1/R2 在渲染层的接线）。
+ * The xterm stub above has no `buffer`/`parser`/`modes`/`textarea`, which is
+ * exactly the degradation half of the new wiring: cursor-line derivation falls
+ * back to the keystroke accumulation, the OSC 133 handler and the CSI
+ * bracketed-paste observers are simply absent, and the paste takeover still
+ * runs on the screen container.
+ */
+describe('terminal-bottom: command history, paste takeover, and the no-null placeholder', () => {
+  /** A paste event with a clipboardData stand-in (jsdom's is read-only null). */
+  function dispatchPaste(target: Element, text: string | undefined): void {
+    const event = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'clipboardData', { value: { getData: () => text } })
+    target.dispatchEvent(event)
+  }
+
+  it('renders a status placeholder — never a bare null — while the model resolves', async () => {
+    // The service exists but view() answered nothing (host reshuffle): the
+    // old `return null` emptied the whole workbench pane (the reported
+    // "white screen, then the terminal vanished").
+    const terminals = new FakeTerminals()
+    terminals.view = () => undefined as unknown as HostTerminalView
+    const { ctx } = viewSetup(terminals)
+    const { container, unmount } = render(ctx, bottomTab())
+    await flush()
+    const section = container.querySelector('[data-dsh-bottom-terminal]')
+    expect(section?.getAttribute('data-terminal-state')).toBe('loading')
+    expect(section?.textContent).toContain(t('loading'))
+    unmount()
+  })
+
+  it('the 「执行命令历史」 button opens the popover, empty state included', async () => {
+    const terminals = new FakeTerminals()
+    const { ctx } = viewSetup(terminals)
+    const unique = `history-empty-${Math.random().toString(36).slice(2)}`
+    const { container, unmount } = render(
+      ctx,
+      bottomTab(),
+      true,
+      { sessionId: unique },
+    )
+    await flush()
+    const button = container.querySelector(`button[aria-label="${t('terminalHistory')}"]`)
+    expect(button, 'the history button sits in the terminal view').not.toBeNull()
+    expect(button?.getAttribute('aria-haspopup')).toBe('dialog')
+    act(() => { button!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    const dialog = document.body.querySelector('[role="dialog"]')
+    expect(dialog?.textContent).toContain(t('terminalHistory'))
+    expect(dialog?.textContent).toContain(t('terminalHistoryEmpty'))
+    // Escape closes (the AnchoredPopover contract).
+    act(() => {
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull()
+    unmount()
+  })
+
+  it('records typed commands into the shared session log and shows them live', async () => {
+    const terminals = new FakeTerminals()
+    const { ctx } = viewSetup(terminals)
+    const unique = `history-live-${Math.random().toString(36).slice(2)}`
+    const { container, unmount } = render(ctx, bottomTab(), true, { sessionId: unique })
+    await flush()
+    // No buffer on the stub: the keystroke fallback names the command.
+    act(() => { xterm.emulators[0]!.dataHandlers[0]!('echo hi\r') })
+    act(() => { xterm.emulators[0]!.dataHandlers[0]!('\x1b[A') }) // an ESC run: never corrupts the record
+    const button = container.querySelector(`button[aria-label="${t('terminalHistory')}"]`)!
+    act(() => { button.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    const dialog = document.body.querySelector('[role="dialog"]')!
+    expect(dialog.textContent).toContain('echo hi')
+    expect(dialog.textContent).toContain(t('terminalHistoryStatusRunning'))
+    unmount()
+  })
+
+  it('paste events reach the model sanitized (ANSI + literal markers gone)', async () => {
+    const terminals = new FakeTerminals()
+    const { ctx } = viewSetup(terminals)
+    const { container, unmount } = render(ctx, bottomTab())
+    await flush()
+    const view = terminals.views.get('s1\u0000' + bottomTerminalContentId(0))!
+    const screen = container.querySelector('[data-testid="terminal-screen"]')
+    expect(screen).not.toBeNull()
+    // Colored clipboard content + the literal `^[[200~` spelling + \n newlines:
+    // the two reported symptoms, gone before the model ever sees them.
+    dispatchPaste(screen!, '\x1b[32mgit status\x1b[0m\n^[[200~extra^[[201~')
+    expect(view.writes.at(-1)).toBe('git status\rextra')
+    unmount()
   })
 })

@@ -876,4 +876,16 @@ export const id: Record<string, string> = {
   cmdRunInputAria: 'Kirim satu baris ke terminal',
   cmdRunInputPlaceholder: 'Ketik lalu tekan Enter untuk mengirim…',
   cmdRunInputEnded: 'Proses telah berakhir',
+
+  terminalHistory: 'Riwayat eksekusi perintah',
+  terminalHistoryEmpty: 'Belum ada perintah: perintah yang dijalankan di tab ini (dengan output dan status) muncul di sini; hanya entri terbaru yang disimpan, dan memuat ulang halaman mengosongkan daftarnya.',
+  terminalHistoryNoOutput: '(tidak ada output)',
+  terminalHistoryStatusRunning: 'Berjalan',
+  terminalHistoryStatusSuccess: 'Berhasil',
+  terminalHistoryStatusFailed: 'Gagal',
+  terminalHistoryStatusFailedCode: 'Gagal (kode keluar {code})',
+  terminalHistoryStatusInterrupted: 'Dihentikan',
+  terminalHistoryStatusDone: 'Selesai (kode keluar tidak diketahui)',
+  settingsTerminalHistoryLimitTitle: 'Jumlah riwayat perintah terminal',
+  settingsTerminalHistoryLimitDesc: 'Berapa banyak perintah terakhir yang disimpan popover riwayat (10–1000, bawaan 100; hanya di memori, hilang saat dimuat ulang)',
 }

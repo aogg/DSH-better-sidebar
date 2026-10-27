@@ -871,4 +871,16 @@ export const fr: Record<string, string> = {
   cmdRunInputAria: 'Envoyer une ligne au terminal',
   cmdRunInputPlaceholder: 'Saisissez puis Entrée pour envoyer…',
   cmdRunInputEnded: 'Le processus est terminé',
+
+  terminalHistory: 'Historique des commandes',
+  terminalHistoryEmpty: 'Aucune commande pour l\'instant : les commandes exécutées dans cet onglet (avec sortie et statut) apparaissent ici ; seules les plus récentes sont conservées, et le rechargement de la page vide la liste.',
+  terminalHistoryNoOutput: '(aucune sortie)',
+  terminalHistoryStatusRunning: 'En cours',
+  terminalHistoryStatusSuccess: 'Succès',
+  terminalHistoryStatusFailed: 'Échec',
+  terminalHistoryStatusFailedCode: 'Échec (code de sortie {code})',
+  terminalHistoryStatusInterrupted: 'Interrompu',
+  terminalHistoryStatusDone: 'Terminé (code de sortie inconnu)',
+  settingsTerminalHistoryLimitTitle: 'Nombre de commandes conservées dans l\'historique du terminal',
+  settingsTerminalHistoryLimitDesc: 'Nombre de commandes récentes conservées par la fenêtre d\'historique (10–1000, 100 par défaut ; en mémoire uniquement, vidé au rechargement)',
 }

@@ -879,4 +879,16 @@ export const ar: Record<string, string> = {
   cmdRunInputAria: 'إرسال سطر إلى الطرفية',
   cmdRunInputPlaceholder: 'اكتب واضغط Enter للإرسال…',
   cmdRunInputEnded: 'انتهت العملية',
+
+  terminalHistory: 'سجل تنفيذ الأوامر',
+  terminalHistoryEmpty: 'لا توجد أوامر بعد: ستظهر هنا الأوامر التي شُغّلت في هذا التبويب (مع المخرجات والحالة)؛ يُحتفظ بأحدث N إدخال فقط، ويُمسح السجل عند تحديث الصفحة.',
+  terminalHistoryNoOutput: '(لا مخرجات)',
+  terminalHistoryStatusRunning: 'قيد التشغيل',
+  terminalHistoryStatusSuccess: 'نجح',
+  terminalHistoryStatusFailed: 'فشل',
+  terminalHistoryStatusFailedCode: 'فشل (رمز الخروج {code})',
+  terminalHistoryStatusInterrupted: 'قُطع',
+  terminalHistoryStatusDone: 'انتهى (رمز الخروج غير معروف)',
+  settingsTerminalHistoryLimitTitle: 'عدد أوامر سجل الطرفية المحفوظة',
+  settingsTerminalHistoryLimitDesc: 'عدد الأوامر الأخيرة التي يحتفظ بها منبثق سجل الأوامر (10–1000، الافتراضي 100؛ في الذاكرة فقط، ويُمسح عند التحديث)',
 }

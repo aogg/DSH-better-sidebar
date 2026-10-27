@@ -893,4 +893,16 @@ export const zhHK: Record<string, string> = {
   cmdRunInputAria: '傳送一行到終端機',
   cmdRunInputPlaceholder: '輸入並按 Enter 傳送…',
   cmdRunInputEnded: '處理程序已結束',
+
+  terminalHistory: '執行命令歷史',
+  terminalHistoryEmpty: '暫無命令記錄：在本頁執行的命令（含輸出與狀態）會顯示在這裏；只保留最近 N 條，重新整理頁面後清空。',
+  terminalHistoryNoOutput: '（無輸出）',
+  terminalHistoryStatusRunning: '執行中',
+  terminalHistoryStatusSuccess: '成功',
+  terminalHistoryStatusFailed: '失敗',
+  terminalHistoryStatusFailedCode: '失敗（退出碼 {code}）',
+  terminalHistoryStatusInterrupted: '已中斷',
+  terminalHistoryStatusDone: '完成（未知退出碼）',
+  settingsTerminalHistoryLimitTitle: '終端命令歷史保留條數',
+  settingsTerminalHistoryLimitDesc: '「執行命令歷史」彈窗保留的最近命令條數（10–1000，預設 100；僅記憶體保存，重新整理後清空）',
 }

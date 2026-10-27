@@ -56,6 +56,9 @@ import { isSidechatFloating } from '../sidechat-windows.ts'
 import { HistoryView } from '../HistoryView.tsx'
 import { LazyTerminalBottom } from '../terminal-lazy.tsx'
 import { CWD_FIELD, INSTANCE_FIELD, closeBottomTerminal, consumeBottomTerminalCwd, webTerminals } from '../terminal-client.ts'
+import {
+  TERMINAL_HISTORY_MAX, TERMINAL_HISTORY_MIN, TERMINAL_HISTORY_SETTING_KEY,
+} from '../../prefs-shared.ts'
 import { api } from '../api.ts'
 import { WebviewPagesSettings } from '../WebviewPagesSettings.tsx'
 import { WebviewPageView } from '../WebviewPageView.tsx'
@@ -508,6 +511,21 @@ export function builtinTabs(ctx: Context): readonly TabDescriptor[] {
       // without the host terminal controller): a missing service shows a
       // disabled menu row instead of a terminal that cannot start.
       available: (ctx) => webTerminals(ctx) !== undefined,
+      // 「执行命令历史」的保留条数（plugin-owned 全局设置：设置页的终端卡片
+      // 齿轮弹窗里的数字行，写入 pluginSettings['terminal-bottom']）。数值行
+      // 的夹取在提交处按 min/max 完成；读取侧的默认值兜底在
+      // prefs-shared.ts 的 terminalHistoryLimitOf（缺省=100）。
+      settings: {
+        pluginToggles: [{
+          key: TERMINAL_HISTORY_SETTING_KEY,
+          title: () => t('settingsTerminalHistoryLimitTitle'),
+          desc: () => t('settingsTerminalHistoryLimitDesc'),
+          type: 'number',
+          min: TERMINAL_HISTORY_MIN,
+          max: TERMINAL_HISTORY_MAX,
+          placeholder: '100',
+        }],
+      },
       // The bottom terminal never declares a title override: the tab strip
       // reads the descriptor's own title.
       component: LazyTerminalBottom,

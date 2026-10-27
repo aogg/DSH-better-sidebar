@@ -878,4 +878,16 @@ export const th: Record<string, string> = {
   cmdRunInputAria: 'ส่งข้อความหนึ่งบรรทัดไปที่เทอร์มินัล',
   cmdRunInputPlaceholder: 'พิมพ์แล้วกด Enter เพื่อส่ง…',
   cmdRunInputEnded: 'โปรเซสจบแล้ว',
+
+  terminalHistory: 'ประวัติการรันคำสั่ง',
+  terminalHistoryEmpty: 'ยังไม่มีคำสั่ง: คำสั่งที่รันในแท็บนี้ (พร้อมเอาต์พุตและสถานะ) จะแสดงที่นี่; เก็บเฉพาะรายการล่าสุด และรีเฟรชหน้าจะล้างรายการ',
+  terminalHistoryNoOutput: '(ไม่มีเอาต์พุต)',
+  terminalHistoryStatusRunning: 'กำลังรัน',
+  terminalHistoryStatusSuccess: 'สำเร็จ',
+  terminalHistoryStatusFailed: 'ล้มเหลว',
+  terminalHistoryStatusFailedCode: 'ล้มเหลว (รหัสออก {code})',
+  terminalHistoryStatusInterrupted: 'ถูกขัดจังหวะ',
+  terminalHistoryStatusDone: 'เสร็จสิ้น (ไม่ทราบรหัสออก)',
+  settingsTerminalHistoryLimitTitle: 'จำนวนคำสั่งที่เก็บในประวัติเทอร์มินัล',
+  settingsTerminalHistoryLimitDesc: 'จำนวนคำสั่งล่าสุดที่ป๊อปโอเวอร์ประวัติเก็บไว้ (10–1000, ค่าเริ่มต้น 100; เก็บในหน่วยความจำเท่านั้น รีเฟรชแล้วล้าง)',
 }

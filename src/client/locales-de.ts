@@ -864,4 +864,16 @@ export const de: Record<string, string> = {
   cmdRunInputAria: 'Eine Zeile an das Terminal senden',
   cmdRunInputPlaceholder: 'Eingeben und mit Enter senden…',
   cmdRunInputEnded: 'Der Prozess wurde beendet',
+
+  terminalHistory: 'Befehlsverlauf',
+  terminalHistoryEmpty: 'Noch keine Befehle: In diesem Tab ausgeführte Befehle (mit Ausgabe und Status) erscheinen hier; nur die letzten Einträge bleiben erhalten, ein Neuladen der Seite leert die Liste.',
+  terminalHistoryNoOutput: '(keine Ausgabe)',
+  terminalHistoryStatusRunning: 'Läuft',
+  terminalHistoryStatusSuccess: 'Erfolgreich',
+  terminalHistoryStatusFailed: 'Fehlgeschlagen',
+  terminalHistoryStatusFailedCode: 'Fehlgeschlagen (Exit-Code {code})',
+  terminalHistoryStatusInterrupted: 'Abgebrochen',
+  terminalHistoryStatusDone: 'Abgeschlossen (Exit-Code unbekannt)',
+  settingsTerminalHistoryLimitTitle: 'Behaltene Einträge im Terminal-Befehlsverlauf',
+  settingsTerminalHistoryLimitDesc: 'Wie viele letzte Befehle das Verlauf-Popup behält (10–1000, Standard 100; nur im Speicher, beim Neuladen verworfen)',
 }

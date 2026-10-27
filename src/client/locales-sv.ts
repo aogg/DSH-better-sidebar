@@ -861,4 +861,16 @@ export const sv: Record<string, string> = {
   cmdRunInputAria: 'Skicka en rad till terminalen',
   cmdRunInputPlaceholder: 'Skriv och tryck Enter för att skicka…',
   cmdRunInputEnded: 'Processen har avslutats',
+
+  terminalHistory: 'Kommandohistorik',
+  terminalHistoryEmpty: 'Inga kommandon än: kommandon som körts i den här fliken (med utdata och status) visas här; bara de senaste behålls och en sidomläsning tömmer listan.',
+  terminalHistoryNoOutput: '(ingen utdata)',
+  terminalHistoryStatusRunning: 'Kör',
+  terminalHistoryStatusSuccess: 'Lyckades',
+  terminalHistoryStatusFailed: 'Misslyckades',
+  terminalHistoryStatusFailedCode: 'Misslyckades (exitkod {code})',
+  terminalHistoryStatusInterrupted: 'Avbruten',
+  terminalHistoryStatusDone: 'Klar (exitkod okänd)',
+  settingsTerminalHistoryLimitTitle: 'Antal sparade terminalkommandon',
+  settingsTerminalHistoryLimitDesc: 'Hur många senaste kommandon historikrutan behåller (10–1000, standard 100; endast i minnet, töms vid omläsning)',
 }

@@ -861,4 +861,16 @@ export const pt: Record<string, string> = {
   cmdRunInputAria: 'Enviar uma linha para o terminal',
   cmdRunInputPlaceholder: 'Escreva e prima Enter para enviar…',
   cmdRunInputEnded: 'O processo terminou',
+
+  terminalHistory: 'Histórico de comandos',
+  terminalHistoryEmpty: 'Ainda sem comandos: os comandos executados neste separador (com saída e estado) aparecem aqui; apenas os mais recentes são mantidos e recarregar a página limpa a lista.',
+  terminalHistoryNoOutput: '(sem saída)',
+  terminalHistoryStatusRunning: 'Em execução',
+  terminalHistoryStatusSuccess: 'Êxito',
+  terminalHistoryStatusFailed: 'Falha',
+  terminalHistoryStatusFailedCode: 'Falha (código de saída {code})',
+  terminalHistoryStatusInterrupted: 'Interrompido',
+  terminalHistoryStatusDone: 'Concluído (código de saída desconhecido)',
+  settingsTerminalHistoryLimitTitle: 'Comandos mantidos no histórico do terminal',
+  settingsTerminalHistoryLimitDesc: 'Quantos comandos recentes o balão de histórico mantém (10–1000, predefinição 100; apenas em memória, limpo ao recarregar)',
 }

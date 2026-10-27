@@ -878,4 +878,16 @@ export const vi: Record<string, string> = {
   cmdRunInputAria: 'Gửi một dòng tới terminal',
   cmdRunInputPlaceholder: 'Nhập rồi nhấn Enter để gửi…',
   cmdRunInputEnded: 'Tiến trình đã kết thúc',
+
+  terminalHistory: 'Lịch sử thực thi lệnh',
+  terminalHistoryEmpty: 'Chưa có lệnh nào: các lệnh chạy trong thẻ này (kèm đầu ra và trạng thái) sẽ hiện ở đây; chỉ giữ các mục gần nhất và tải lại trang sẽ xóa danh sách.',
+  terminalHistoryNoOutput: '(không có đầu ra)',
+  terminalHistoryStatusRunning: 'Đang chạy',
+  terminalHistoryStatusSuccess: 'Thành công',
+  terminalHistoryStatusFailed: 'Thất bại',
+  terminalHistoryStatusFailedCode: 'Thất bại (mã kết thúc {code})',
+  terminalHistoryStatusInterrupted: 'Bị gián đoạn',
+  terminalHistoryStatusDone: 'Hoàn tất (không rõ mã kết thúc)',
+  settingsTerminalHistoryLimitTitle: 'Số mục lịch sử lệnh của terminal',
+  settingsTerminalHistoryLimitDesc: 'Số lệnh gần nhất mà bảng lịch sử giữ lại (10–1000, mặc định 100; chỉ lưu trong bộ nhớ, tải lại là xóa)',
 }

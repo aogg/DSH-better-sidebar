@@ -878,4 +878,16 @@ export const tr: Record<string, string> = {
   cmdRunInputAria: 'Terminale bir satır gönder',
   cmdRunInputPlaceholder: 'Yazıp Enter ile gönderin…',
   cmdRunInputEnded: 'İşlem sona erdi',
+
+  terminalHistory: 'Komut geçmişi',
+  terminalHistoryEmpty: 'Henüz komut yok: bu sekmede çalıştırılan komutlar (çıktı ve durumla birlikte) burada görünür; yalnızca en sonuncular tutulur ve sayfayı yenilemek listeyi temizler.',
+  terminalHistoryNoOutput: '(çıktı yok)',
+  terminalHistoryStatusRunning: 'Çalışıyor',
+  terminalHistoryStatusSuccess: 'Başarılı',
+  terminalHistoryStatusFailed: 'Başarısız',
+  terminalHistoryStatusFailedCode: 'Başarısız (çıkış kodu {code})',
+  terminalHistoryStatusInterrupted: 'Kesildi',
+  terminalHistoryStatusDone: 'Tamamlandı (çıkış kodu bilinmiyor)',
+  settingsTerminalHistoryLimitTitle: 'Terminal komut geçmişi boyutu',
+  settingsTerminalHistoryLimitDesc: 'Geçmiş açılır penceresinin tuttuğu son komut sayısı (10–1000, varsayılan 100; yalnızca bellekte, yenilemede temizlenir)',
 }

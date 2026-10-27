@@ -878,4 +878,16 @@ export const ja: Record<string, string> = {
   cmdRunInputAria: 'ターミナルに 1 行送信',
   cmdRunInputPlaceholder: '入力して Enter で送信…',
   cmdRunInputEnded: 'プロセスは終了しました',
+
+  terminalHistory: 'コマンド実行履歴',
+  terminalHistoryEmpty: '履歴はまだありません。このタブで実行したコマンド（出力と状態つき）がここに並びます。最新の N 件のみ保持し、ページ再読み込みで消えます。',
+  terminalHistoryNoOutput: '（出力なし）',
+  terminalHistoryStatusRunning: '実行中',
+  terminalHistoryStatusSuccess: '成功',
+  terminalHistoryStatusFailed: '失敗',
+  terminalHistoryStatusFailedCode: '失敗（終了コード {code}）',
+  terminalHistoryStatusInterrupted: '中断',
+  terminalHistoryStatusDone: '完了（終了コード不明）',
+  settingsTerminalHistoryLimitTitle: 'ターミナルコマンド履歴の保持件数',
+  settingsTerminalHistoryLimitDesc: 'コマンド履歴ポップアップが保持する最新コマンドの件数（10〜1000、既定 100。メモリ上のみで、再読み込みで消えます）',
 }

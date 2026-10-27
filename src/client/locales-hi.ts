@@ -878,4 +878,16 @@ export const hi: Record<string, string> = {
   cmdRunInputAria: 'टर्मिनल को एक पंक्ति भेजें',
   cmdRunInputPlaceholder: 'टाइप करें और भेजने के लिए Enter दबाएँ…',
   cmdRunInputEnded: 'प्रक्रिया समाप्त हो गई',
+
+  terminalHistory: 'कमांड निष्पादन इतिहास',
+  terminalHistoryEmpty: 'अभी कोई कमांड नहीं: इस टैब में चलाई गई कमांड (आउटपुट और स्थिति सहित) यहाँ दिखेंगी; केवल हाल की प्रविष्टियाँ रखी जाती हैं, पेज रीलोड होने पर सूची साफ़ हो जाती है।',
+  terminalHistoryNoOutput: '(कोई आउटपुट नहीं)',
+  terminalHistoryStatusRunning: 'चल रहा है',
+  terminalHistoryStatusSuccess: 'सफल',
+  terminalHistoryStatusFailed: 'विफल',
+  terminalHistoryStatusFailedCode: 'विफल (एग्ज़िट कोड {code})',
+  terminalHistoryStatusInterrupted: 'बाधित',
+  terminalHistoryStatusDone: 'पूर्ण (एग्ज़िट कोड अज्ञात)',
+  settingsTerminalHistoryLimitTitle: 'टर्मिनल कमांड इतिहास की संख्या',
+  settingsTerminalHistoryLimitDesc: 'कमांड-इतिहास पॉपओवर कितने हाल के कमांड रखता है (10–1000, डिफ़ॉल्ट 100; केवल मेमोरी में, रीलोड पर साफ़)',
 }

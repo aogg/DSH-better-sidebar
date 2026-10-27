@@ -880,4 +880,16 @@ export const pl: Record<string, string> = {
   cmdRunInputAria: 'Wyślij wiersz do terminala',
   cmdRunInputPlaceholder: 'Wpisz i naciśnij Enter, aby wysłać…',
   cmdRunInputEnded: 'Proces został zakończony',
+
+  terminalHistory: 'Historia wykonywania poleceń',
+  terminalHistoryEmpty: 'Brak poleceń: polecenia uruchomione w tej karcie (z wyjściem i statusem) pojawią się tutaj; przechowywane są tylko najnowsze wpisy, a odświeżenie strony czyści listę.',
+  terminalHistoryNoOutput: '(brak wyjścia)',
+  terminalHistoryStatusRunning: 'Uruchomione',
+  terminalHistoryStatusSuccess: 'Powodzenie',
+  terminalHistoryStatusFailed: 'Niepowodzenie',
+  terminalHistoryStatusFailedCode: 'Niepowodzenie (kod wyjścia {code})',
+  terminalHistoryStatusInterrupted: 'Przerwane',
+  terminalHistoryStatusDone: 'Zakończone (kod wyjścia nieznany)',
+  settingsTerminalHistoryLimitTitle: 'Liczba przechowywanych poleceń terminala',
+  settingsTerminalHistoryLimitDesc: 'Ile ostatnich poleceń zachowuje wyskakujące okno historii (10–1000, domyślnie 100; tylko w pamięci, czyszczone po odświeżeniu)',
 }

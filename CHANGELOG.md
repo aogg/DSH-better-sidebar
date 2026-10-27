@@ -2,6 +2,15 @@
 
 > 本文档收录 dsh-better-sidebar 的完整发布历史（最新版摘要见 [README](README.md)；同步发布于 [GitHub Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)）。
 
+### v0.28.28
+
+- 🧾 **终端新增「执行命令历史」按钮 + 弹窗（纯客户端，无后端接口、无轮询）**。底部工作台终端视图右上角新增「执行命令历史」按钮（`VscHistory` 图标 + 文案，`aria-label`/`aria-haspopup="dialog"`，11 个新 locale key 覆盖 locales.ts + 19 个语言文件），点击经 AnchoredPopover 弹出会话级命令记录浮层：列表最新在上，每条带状态点（运行中/成功/失败/已中断/完成(未知退出码) 四态配色全走 `--dsw-alias-state-*` 令牌）+ 命令 + 状态文案；点行展开完整输出（等宽字体、`max-height: 240px` 内部滚动、头部+尾部各 4000 字符中间 `[…]` 截断）；空态有文案（含「仅内存、刷新清空」说明）。运行中记录经 `useSyncExternalStore` 订阅日志 revision 实时刷新，数据按 sessionId 共享同一份内存环形队列（同会话所有终端 tab 与「命令」执行 tab 都喂进同一份），刷新页面即清空。
+- 🎛 **保留条数进设置页**：终端卡片齿轮弹窗新增数值行「终端命令历史保留条数」（`pluginSettings['terminal-bottom'].terminalHistoryLimit`，默认 100，夹取 10–1000，提交处按 min/max clamp），读取侧 `terminalHistoryLimitOf` 带默认值兜底（缺省/损坏值都落 100），录制器每次开新记录时重读设置，改完即对下一条生效、无需重挂。
+- 🩹 **终端粘贴修复（R2）**：粘贴带 ANSI 转义（如复制的 `ls --color` 输出）不再变黑底黑字——粘贴前剥离全部转义序列（CSI/OSC/DCS/SOS/PM/APC、nF、两字节 ESC 及截断尾巴）；字面 `^[[200~`/`^[[201~` 标记也被净化；接管 textarea 的 paste 事件（容器 capture 阶段 `preventDefault`+`stopPropagation`，先于 xterm 自身监听），换行统一 `\r`，仅当 shell 开启括号粘贴（DECSET 2004，经 `registerCsiHandler` 跟踪、handler 返回 false 不改 xterm 内部状态）时才以 `\x1b[200~…\x1b[201~` 包裹写入。「命令」执行 tab 同套修复。
+- 🩹 **「新建终端」白屏排查与防御（R0）**：根因之一是旧主题桥在启动窗口读到未落地令牌（`getComputedStyle` 答 `rgba(0,0,0,0)`/透明）后写进 xterm 且此后无 scheme/phase 变化就永不重读——整块终端冻在透明底上（玻璃皮肤半透明底同理）；之二是一处 `return null` 在 model/state 未就绪时把整个工作台面板清空。防御：`readPaintColors` 只在颜色真的可画时不透明才返回（玻璃半透明也算未就绪），未就绪时经 `subscribeStylesReady`（`<head>` MutationObserver，非轮询）在样式落地一刻补读；加载期永远渲染 `data-terminal-state="loading"` 状态行占位，不再返回 null；「新建终端」mint 加同拍去重锁（连点/点按+快捷键同 tick 只铸一次，微任务即释放不碍真点击）。
+- 🧪 测试：新增 `tests/terminal-paste.spec.ts`（净化纯函数 11 例 + 接管 DOM 行为 4 例）、`tests/terminal-history.spec.ts`（OSC 133 解析、输出截断、提交推导、环形队列、录制器输入侧状态机、shell integration 精确边界 vs 400ms 静默启发、^C 中断、容量设置 12 组）；`tests/terminal-tab.spec.tsx` 补 4 例（加载期占位不返回 null、历史按钮开/关弹窗与空态、按键录制进共享日志、粘贴净化到 model）；`tests/theme.spec.ts` 补守卫主题桥 4 例（不可画时拒绝写主题、`<head>` 样式落地补读、watcher 幂等）。
+- **版本**：`SIDEBAR_SERVICE_VERSION` 与 package.json / dsh.plugin.json 一起升到 **0.28.28**。
+
 ### v0.28.27
 
 - 🧹 **「历史发送」分组展示去重：单条会话组不再渲染组头，多条组头去掉项目名**。总发送历史页过去每个只有 1 条记录的会话组都渲染「组头 + 行」两行重复信息（时间两遍、项目名每组建一遍），整页成一堵重复的墙。现在 `count === 1` 的组完全不渲染组头并去掉边框圆角（`.sessionGroupSolo`），读起来就是一条平铺行（时间已在行 meta 里）；`count > 1` 的组头只保留最近时间 + `{count} 条记录`（完整 sessionId 放组头 title 提示），项目名 span 连同 `baseNameOf` 一起移除。

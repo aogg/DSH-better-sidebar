@@ -876,4 +876,16 @@ export const nl: Record<string, string> = {
   cmdRunInputAria: 'Stuur een regel naar de terminal',
   cmdRunInputPlaceholder: 'Typ en druk op Enter om te verzenden…',
   cmdRunInputEnded: 'Het proces is beëindigd',
+
+  terminalHistory: 'Opdrachtgeschiedenis',
+  terminalHistoryEmpty: 'Nog geen opdrachten: opdrachten die in dit tabblad zijn uitgevoerd (met uitvoer en status) verschijnen hier; alleen de meest recente blijven bewaard en een paginaherlaad leegt de lijst.',
+  terminalHistoryNoOutput: '(geen uitvoer)',
+  terminalHistoryStatusRunning: 'Bezig',
+  terminalHistoryStatusSuccess: 'Geslaagd',
+  terminalHistoryStatusFailed: 'Mislukt',
+  terminalHistoryStatusFailedCode: 'Mislukt (exitcode {code})',
+  terminalHistoryStatusInterrupted: 'Afgebroken',
+  terminalHistoryStatusDone: 'Voltooid (exitcode onbekend)',
+  settingsTerminalHistoryLimitTitle: 'Bewaarde terminal-opdrachtgeschiedenis',
+  settingsTerminalHistoryLimitDesc: 'Hoeveel recente opdrachten de geschiedenis-popover bewaart (10–1000, standaard 100; alleen in geheugen, gewist bij herladen)',
 }

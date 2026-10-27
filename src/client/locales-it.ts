@@ -869,4 +869,16 @@ export const it: Record<string, string> = {
   cmdRunInputAria: 'Invia una riga al terminale',
   cmdRunInputPlaceholder: 'Digita e premi Invio per inviare…',
   cmdRunInputEnded: 'Il processo è terminato',
+
+  terminalHistory: 'Cronologia comandi',
+  terminalHistoryEmpty: 'Nessun comando: i comandi eseguiti in questa scheda (con output e stato) compaiono qui; vengono conservati solo i più recenti e il ricaricamento della pagina svuota l\'elenco.',
+  terminalHistoryNoOutput: '(nessun output)',
+  terminalHistoryStatusRunning: 'In esecuzione',
+  terminalHistoryStatusSuccess: 'Riuscito',
+  terminalHistoryStatusFailed: 'Non riuscito',
+  terminalHistoryStatusFailedCode: 'Non riuscito (codice di uscita {code})',
+  terminalHistoryStatusInterrupted: 'Interrotto',
+  terminalHistoryStatusDone: 'Completato (codice di uscita sconosciuto)',
+  settingsTerminalHistoryLimitTitle: 'Voci conservate nella cronologia del terminale',
+  settingsTerminalHistoryLimitDesc: 'Quanti comandi recenti conserva il popup della cronologia (10–1000, predefinito 100; solo in memoria, svuotato al ricaricamento)',
 }

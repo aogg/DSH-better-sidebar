@@ -870,4 +870,16 @@ export const ko: Record<string, string> = {
   cmdRunInputAria: '터미널에 한 줄 보내기',
   cmdRunInputPlaceholder: '입력 후 Enter로 전송…',
   cmdRunInputEnded: '프로세스가 종료되었습니다',
+
+  terminalHistory: '명령 실행 기록',
+  terminalHistoryEmpty: '아직 기록이 없습니다. 이 탭에서 실행한 명령(출력과 상태 포함)이 여기에 표시됩니다. 최근 항목만 유지되며 페이지를 새로 고치면 지워집니다.',
+  terminalHistoryNoOutput: '(출력 없음)',
+  terminalHistoryStatusRunning: '실행 중',
+  terminalHistoryStatusSuccess: '성공',
+  terminalHistoryStatusFailed: '실패',
+  terminalHistoryStatusFailedCode: '실패(종료 코드 {code})',
+  terminalHistoryStatusInterrupted: '중단됨',
+  terminalHistoryStatusDone: '완료(종료 코드 알 수 없음)',
+  settingsTerminalHistoryLimitTitle: '터미널 명령 기록 보존 수',
+  settingsTerminalHistoryLimitDesc: '명령 기록 팝업이 유지하는 최근 명령 수(10–1000, 기본값 100. 메모리에만 저장되며 새로 고치면 지워집니다)',
 }
