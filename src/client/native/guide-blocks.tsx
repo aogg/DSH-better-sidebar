@@ -336,6 +336,14 @@ export function registerGuideBlocks(ctx: Context, service: BetterSidebarService)
       // 追加到 guide 根**末尾**：藏在原入口列表之后，罗盘 hero 保持在最上。
       const host = doc.createElement('div')
       host.setAttribute('data-dsh-guide-blocks-host', '')
+      // 宿主 guide 根是 column + center 的 flex 容器：无宽度样式的 flex 项会
+      // 收缩成 fit-content（≈最宽子元素），.container 的 width:100% 只解析到
+      // 百来 px，minmax 网格永远只出一轨。显式撑满 flex 根修掉收缩根因。
+      host.style.width = '100%'
+      // .module.css 的 @container 按**最近的容器查询锚**取尺寸：host 自身设
+      // inline-size 容器（只约束行内尺寸、不影响高度生长），分块网格的
+      // 跨行分档才有正确的查询宽度。
+      host.style.setProperty('container-type', 'inline-size')
       rootElement.appendChild(host)
       const root = createRoot(host)
       root.render(createElement(GuideBlocks, { ctx, service }))

@@ -4,26 +4,38 @@
  * 皮肤契约（指南 §12）：颜色一律走 `--dsw-alias-*` 令牌，本模块零字面量；
  * `tests/theme.spec.ts` 抓 `color:` 的令牌解析。宿主 guide 的原生入口列表被
  * 隐藏（见 guide-blocks.tsx 注入的那条规则），罗盘 hero 保留，本组件在 guide
- * 根末尾 portal 出「块 → tile」的分组结构：块是留白卡片（16px 圆角 +
- * layer-2 填充），auto-fill minmax(140px) 让块在窄侧栏并排两列（更宽自动
- * 三列），奇数落单的末块跨满整行；tile 是放大版入口按钮（46px 高、20px
- * 图标、13px 标签），块内为纵向列表行（一行一个、占满块宽），间隔刻度
+ * 根末尾 portal 出「块 → tile」的分组结构：portal 宿主 div 由 tsx 内联
+ * width:100% 撑满 flex 根（否则 flex 项收缩成 fit-content，见该处注释）并设
+ * container-type:inline-size 作为本文件 @container 的查询锚。块是留白卡片
+ * （16px 圆角 + layer-2 填充），auto-fit minmax(140px) 让块在窄侧栏并排两列
+ * （更宽自动三列），块少时空轨坍缩、块均匀拉满可用宽度，960px 上限在超宽
+ * 面板下保持居中观感；落单末块跨满整行的规则仅在 ≤443px 两列档生效
+ * （444px 起三轨，3 块正好占满不需跨行）；tile 是放大版入口按钮（46px 高、
+ * 20px 图标、13px 标签），块内为纵向列表行（一行一个、占满块宽），间隔刻度
  * 6/8/12。hover/focus 态用插件的交互令牌（写法对齐 sidebar/start-links.module.css）。
  */
 
 .container {
   width: 100%;
   display: grid;
-  /* 140px 下限：~400px 侧栏并排两列，侧栏更宽时自动升三列。 */
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  /* 140px 下限：~400px 侧栏并排两列，侧栏更宽时自动升三列。
+     auto-fit：块少时空轨坍缩，剩下的块均匀拉满可用宽度。 */
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  /* 超宽面板下网格不无限拉伸，保持居中观感。 */
+  max-width: 960px;
+  margin: 0 auto;
   gap: 12px;
   align-content: center;
   padding: 4px 0 8px;
 }
 
-/* 奇数落单的末块跨满整行，避免 3 块时右侧留出空位。 */
-.container > :last-child:nth-child(odd) {
-  grid-column: 1 / -1;
+/* 落单末块跨满整行：仅在 ≤443px 的两列档需要（444px 起三轨，3 块正好
+   占满，宽面板上跨行反而会破相成「两块 + 一整行一块」）。查询锚是
+   tsx 里设了 container-type:inline-size 的 portal 宿主 div。 */
+@container (max-width: 443px) {
+  .container > :last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
 }
 
 .block {
