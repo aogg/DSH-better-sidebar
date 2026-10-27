@@ -33,6 +33,8 @@ import { registerImeGuard } from './ime-guard.ts'
 import { createPrefsWriter, loadBootDecision } from './prefs.ts'
 import { createRightbarWidthSync } from './sidebar/rightbar-width.ts'
 import { registerTransferToast } from './TransferToast.tsx'
+import { registerWorkspaceLinkMenu } from './workspace-link-menu.ts'
+import { registerWorkspaceFocus } from './workspace-focus-dom.ts'
 import { api } from './api.ts'
 import { LOCALE_NS, attachLocale, attachBetterLocale, zh, en } from './locales.ts'
 import { loadChunk } from './chunk-loader.ts'
@@ -271,6 +273,21 @@ export function apply(ctx: Context): void {
   ctx.effect(
     () => registerTransferToast(),
     'dsh-better-sidebar: paste transfer toast',
+  )
+  // 工作区行「更多」菜单的「复制工作区独立链接」：核心的工作区菜单是硬编码
+  // 数组（rename/delete），没有工作区级菜单 slot，故走 DOM 注入先例
+  // （捕获锚按钮 aria-label → portal 菜单挂载时追加一项 → 复制 ?ws= 链接 +
+  // toast）。核心改模板/行键时静默降级为原菜单（见 workspace-link-menu.ts）。
+  ctx.effect(
+    () => registerWorkspaceLinkMenu(ctx),
+    'dsh-better-sidebar: workspace copy-link menu item',
+  )
+  // 单工作区专注模式（URL 带 ?ws=<workspaceId> 时）：把左侧工作区树过滤成
+  // 只剩该工作区（工作区头/会话行/展开按钮三层），树上方注入「退出专注」
+  // 横幅（清参数就地恢复）。未带参数零启动零影响（见 workspace-focus-dom.ts）。
+  ctx.effect(
+    () => registerWorkspaceFocus(ctx),
+    'dsh-better-sidebar: single-workspace focus mode',
   )
   // The right sidebar's open-width ratio: applies the configured width once per
   // host expansion (a hidden → tracked transition) and writes the dragged width

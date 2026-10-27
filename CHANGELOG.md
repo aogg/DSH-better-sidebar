@@ -2,6 +2,14 @@
 
 > 本文档收录 dsh-better-sidebar 的完整发布历史（最新版摘要见 [README](README.md)；同步发布于 [GitHub Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)）。
 
+### v0.28.31
+
+- 🔗 **左侧「工作区」行的「更多」(…) 菜单新增「复制工作区独立链接」**：核心的工作区菜单是组件内硬编码数组（重命名/删除两项），`sidebar.workspaces` 只有会话级菜单孔位、没有工作区级 slot，故按本仓库 DOM 注入先例实现（`src/client/workspace-link-menu.ts`）——捕获阶段识别「更多」锚按钮（核心 locale 模板的 aria-label，zh/en 双档），从所属行的 `data-row-key="workspace:<id>"` 记下工作区；portal 菜单（`body > [role="menu"]`）挂载时把「分隔线 + 菜单项」追加进内容区末尾（键盘上下键导航天然覆盖注入项）。点击拼 `http://<host>:<port>/<path>?ws=<workspaceId>`（当前页地址 + `ws` 参数：核心 web 前端不消费 query、无路由冲突，刷新/转发均保持）写入剪贴板——Clipboard API 优先，http 非安全上下文（如局域网 IP 访问）退 `execCommand('copy')`；成功/失败都有 toast 反馈（`role=status` + `aria-live`，颜色全走 `--dsw-*` 令牌），随后复用锚按钮的原生 click 按核心自己的 toggle 语义收起菜单。「已有 portal 菜单挂在 body 下」的锚点击视为收起而非打开（不 arm pending，紧跟着打开的无关菜单不会被误注入）。核心改 aria 模板/行键 → 静默降级为原菜单，绝不坏页。
+- 🎯 **单工作区专注模式**（URL 带 `?ws=<workspaceId>` 时生效，`src/client/workspace-focus.ts` 纯逻辑 + `workspace-focus-dom.ts` DOM 层）：左侧只剩这一个工作区——工作区分组头、会话行（活跃/待确认会话都是会话行，随成员集合一起过滤）、其它分组的「展开其余」按钮按 `data-row-key` 行级隐藏，未分组桶一并隐藏；侧边栏本身保留（搜索/加工作区/视图选项一概不动、不收起、不空白）。树上方注入「专注模式」横幅 + 「退出专注」按钮：`history.replaceState` 清掉 `ws` 参数并**就地**摘除全部标记恢复全量（不刷新页面）。实现选 DOM 行过滤而非改核心数据：过滤 `workspaces.list` 会把其它工作区的会话赶进核心推导的「未分组」桶，过滤 `sessions.list` 会伤到主对话区（它按 id 读会话摘要）——行级隐藏对共享 store 零写入，`data-row-key` 是核心自己也在消费的稳定 DOM 契约，核心改名时规则不再命中、静默不过滤。当前主视图会话有入组在途保护（保底并进过滤集合，正开着的会话绝不闪没）；主视图开的不是该工作区的会话时自动转到该工作区最近的会话（每次激活至多一次，不与用户后续导航打架）；链接过期（工作区已删）→ 不过滤，宁可多显示也不空白。未带 `?ws` 时模块整体不启动（无观察器/无样式/无监听），对现有行为零影响。
+- 🌐 **国际化**：5 个新 locale key（`workspaceCopyLink`/`workspaceLinkCopied`/`workspaceLinkCopyFailed`/`focusBannerLabel`/`focusExit`）覆盖 locales.ts 的 zh/en，其余语言走 zh/en 回退链。
+- 🧪 测试：`tests/workspace-focus.spec.ts`（URL 参数读/拼/清 + 成员集合 + 行判定 11 例）、`tests/workspace-focus-dom.spec.tsx`（未带参零启动/过滤与横幅/重渲染重对齐/订阅重对齐/过期链接/主视图保底/纠偏开最近会话/退出恢复/dispose 10 例）、`tests/workspace-link-menu.spec.tsx`（注入/双语言锚/复制链接+toast+经锚收起/execCommand 兜底失败反馈/未分组跳过/无 pending 不碰菜单/pending 800ms 窗口/dispose 8 例）。
+- **版本**：`SIDEBAR_SERVICE_VERSION` 与 package.json / dsh.plugin.json 一起升到 **0.28.31**。
+
 ### v0.28.30
 
 - 🔌 **新增对 dsh-ssh-workspace（远程 SSH 工作区插件）的集成支持：开始页标识 + 状态页 + 网关工厂封装，插件未安装时全程优雅降级（零痕迹）**。所有 ssh-workspace 逻辑封装在独立文件夹 `src/client/ssh-workspace/` 内（工厂模式创建），外面唯一的接入点是 start-links.tsx 引一个胶囊组件与 client/index.tsx 的一个 `ctx.effect`：
