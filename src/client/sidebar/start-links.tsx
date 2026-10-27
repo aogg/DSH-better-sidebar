@@ -39,6 +39,9 @@ import type { SidebarStore } from '../state.ts'
 import type { BetterSidebarService } from '../service.ts'
 import { SideCardSection } from '../SideCardSection.tsx'
 import { openSettingsEntry } from './settings-entry.ts'
+// dsh-ssh-workspace 集成的唯一接入点：胶囊组件未安装时自渲染 null（零痕
+// 迹）。除这一处 import + 渲染外，本文件不含任何 ssh-workspace 逻辑。
+import { SshWorkspaceStartPill } from '../ssh-workspace/start-pill.tsx'
 import css from './start-links.module.css'
 
 /** 一个入口的展示与动作（kind 也写进 data-dsh-start-link 供测试/样式锚定）。 */
@@ -233,33 +236,40 @@ export function StartLinks(props: { ctx: Context; service: BetterSidebarService;
     },
     { kind: 'settings', label: () => t('startSettings'), icon: settingsStartIcon },
   ]
+  // 「设置」恒最后：其余胶囊按数组序渲染，「远程工作区」胶囊（dsh-ssh-
+  // workspace 未安装时自渲染 null）落在 commands 与 settings 之间。
+  const mainLinks = links.filter(link => link.kind !== 'settings')
+  const settingsLink = links.find(link => link.kind === 'settings')
+  const renderLink = (link: StartLink): React.ReactNode => (
+    <button
+      key={link.kind}
+      type="button"
+      className={css.pill}
+      data-dsh-start-link={link.kind}
+      aria-label={link.aria}
+      {...(link.title !== undefined ? { title: link.title } : {})}
+      aria-expanded={link.kind === 'settings' && store !== undefined ? settingsOpen : undefined}
+      onClick={() => {
+        if (link.kind === 'settings' && store !== undefined) {
+          setSettingsOpen(open => !open)
+          return
+        }
+        openStartLink(link.kind, ctx, service)
+      }}
+    >
+      <span className={css.icon} aria-hidden="true">{link.icon(14)}</span>
+      <span className={css.label}>{link.label()}</span>
+      {link.keys !== undefined && link.keys.length > 0 && (
+        <ShortcutKeys keys={link.keys} className={css.keys} />
+      )}
+    </button>
+  )
   return (
     <>
       <div className={css.row} data-dsh-start-links="" aria-label={t('startLinksAria')}>
-        {links.map(link => (
-          <button
-            key={link.kind}
-            type="button"
-            className={css.pill}
-            data-dsh-start-link={link.kind}
-            aria-label={link.aria}
-            {...(link.title !== undefined ? { title: link.title } : {})}
-            aria-expanded={link.kind === 'settings' && store !== undefined ? settingsOpen : undefined}
-            onClick={() => {
-              if (link.kind === 'settings' && store !== undefined) {
-                setSettingsOpen(open => !open)
-                return
-              }
-              openStartLink(link.kind, ctx, service)
-            }}
-          >
-            <span className={css.icon} aria-hidden="true">{link.icon(14)}</span>
-            <span className={css.label}>{link.label()}</span>
-            {link.keys !== undefined && link.keys.length > 0 && (
-              <ShortcutKeys keys={link.keys} className={css.keys} />
-            )}
-          </button>
-        ))}
+        {mainLinks.map(renderLink)}
+        <SshWorkspaceStartPill ctx={ctx} service={service} />
+        {settingsLink !== undefined && renderLink(settingsLink)}
       </div>
       {settingsOpen && store !== undefined && (
         <StartSettingsPanel ctx={ctx} service={service} store={store} onClose={closeSettings} />

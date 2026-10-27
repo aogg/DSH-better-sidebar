@@ -26,6 +26,7 @@ import { registerStripWheel } from './native/strip-wheel.ts'
 import { registerGuideBlocks } from './native/guide-blocks.tsx'
 import { registerBottomToggle } from './sidebar/bottom-toggle.tsx'
 import { registerStartLinks } from './sidebar/start-links.tsx'
+import { registerSshWorkspaceSupport } from './ssh-workspace/index.ts'
 import { createNativeSurface } from './native/surface.ts'
 import { isTargetAvailable, openInterceptedLink, registerLinkInterception, shouldTakeOverLink } from './link-intercept.ts'
 import { registerImeGuard } from './ime-guard.ts'
@@ -300,6 +301,15 @@ export function apply(ctx: Context): void {
   ctx.effect(
     () => registerBuiltins(ctx, service),
     'dsh-better-sidebar: register built-in tabs and viewers',
+  )
+  // dsh-ssh-workspace（远程 SSH 工作区插件，**不一定安装**）的集成：网关
+  // 探测其 status 路由（404/网络错 = 优雅降级，零痕迹），available 后才
+  // 注册「远程工作区」状态页 tab（开始页胶囊由 start-links 引的组件自管
+  // 显隐）。disposer 反注册 + 销毁网关（HMR 安全）。全部逻辑封装在
+  // ssh-workspace/ 文件夹内（工厂 + Null-object；见 ssh-workspace/index.ts）。
+  ctx.effect(
+    () => registerSshWorkspaceSupport(ctx, service),
+    'dsh-better-sidebar: ssh-workspace integration',
   )
   try {
     // rc.8+ exposes the client module system as the `ctx.modules` service;

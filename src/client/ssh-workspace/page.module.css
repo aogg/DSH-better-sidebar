@@ -1,0 +1,278 @@
+/*
+ * 「远程工作区」状态页（src/client/ssh-workspace/page.tsx）。
+ *
+ * 只读展示：概览统计 / 当前会话工作区 / 已挂载工作区 / SSH 主机 / 端口转发 /
+ * 最近事件，全部数据来自 dsh-ssh-workspace 的 status 接口（经 gateway.ts）。
+ * 皮肤契约（指南 §12）：颜色一律走 `--dsw-alias-*` 令牌（含回退链），
+ * 本模块零颜色字面量；tests/theme.spec.ts 抓 `color:` 的令牌解析。
+ */
+
+.view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 16px;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* ── 头部：标题 + 连接状态点 + 手动刷新 ─────────────────────────────── */
+
+.head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.headTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.refresh {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.refresh:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.refresh:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l4);
+  outline-offset: 1px;
+}
+
+/* ── 状态点（连接 / 转发活性行内小圆点）────────────────────────────── */
+
+.dot {
+  flex: none;
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dsw-alias-label-dimmed);
+}
+
+.dotOk {
+  background: var(--dsw-alias-state-success-primary, var(--dsw-alias-label-primary));
+}
+
+.dotBroken {
+  background: var(--dsw-alias-state-warn-primary, var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary)));
+}
+
+/* ── 读取失败行 / 加载行 / 不可用空态 ───────────────────────────────── */
+
+.errorRow {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-layer-1));
+  color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary));
+}
+
+.errorText {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.errorRetry {
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.errorRetry:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.errorRetry:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l4);
+  outline-offset: 1px;
+}
+
+.stateLine {
+  flex: none;
+  padding: 12px 10px;
+  text-align: center;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* ── 概览统计 chips ─────────────────────────────────────────────────── */
+
+.stats {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-layer-1));
+}
+
+.statLabel {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.statValue {
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* ── 分区卡片与行 ───────────────────────────────────────────────────── */
+
+.section {
+  flex: none;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-layer-1));
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sectionTitle {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
+  padding: 3px 0;
+}
+
+.rowMain {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-primary);
+}
+
+.rowSub {
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.muted {
+  color: var(--dsw-alias-label-dimmed);
+}
+
+/* 小徽标（「远程」标记 / 转发别名 / 事件 kind 等）。 */
+.chip {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-3);
+  border: 1px solid var(--dsw-alias-border-l1);
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+}
+
+.chipRemote {
+  color: var(--dsw-alias-state-business-primary, var(--dsw-alias-brand-primary, var(--dsw-alias-label-primary)));
+  border-color: var(--dsw-alias-border-l2);
+}
+
+.chipWarn {
+  color: var(--dsw-alias-state-warn-primary, var(--dsw-alias-label-primary));
+  border-color: var(--dsw-alias-border-l2);
+}
+
+/* 复制按钮（复制 ssh:// 原始拼写）。 */
+.copy {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-dimmed);
+  font-size: 10px;
+  line-height: 16px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.copy:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.copy:focus-visible {
+  outline: 2px solid var(--dsw-alias-border-l4);
+  outline-offset: 1px;
+}
+
+/* 转发目标（等宽读法：local:port → remote:port）。 */
+.fwdTarget {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* 事件行时间。 */
+.eventTime {
+  flex: none;
+  color: var(--dsw-alias-label-dimmed);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}

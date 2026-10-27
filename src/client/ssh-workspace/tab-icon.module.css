@@ -1,0 +1,12 @@
+/*
+ * 「远程工作区」tab 图标的配色（src/client/ssh-workspace/tab-icon.tsx）。
+ *
+ * 与 builtins/tab-icons.module.css 同一套契约：所有 `color` 一律解析到
+ * `--dsw-alias-*` 令牌（含回退链，宿主未定义品牌/状态族时退主墨色），
+ * 插件零颜色字面量（tests/theme.spec.ts 抓两半）。
+ */
+.glyph {
+  /* 远程工作区是一扇通往远端内容的管理门：与 webview/commands 配置 chip
+     同一 business 族（the door family）。 */
+  color: var(--dsw-alias-state-business-primary, var(--dsw-alias-brand-primary, var(--dsw-alias-label-primary)));
+}

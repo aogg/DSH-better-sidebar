@@ -1,0 +1,48 @@
+/*
+ * 「远程工作区」开始页胶囊的附加徽章（src/client/ssh-workspace/start-pill.tsx）。
+ *
+ * 胶囊本体（.pill/.icon/.label）复用 sidebar/start-links.module.css 的类，
+ * 这里只画三样附加物：已挂载数字 chip、连接状态小圆点、「远程」小标记。
+ * 皮肤契约（指南 §12）：颜色一律走 `--dsw-alias-*` 令牌（含回退链），
+ * 零颜色字面量；tests/theme.spec.ts 抓 `color:` 的令牌解析。
+ */
+
+/* 已挂载数量数字 chip。 */
+.count {
+  flex: none;
+  min-width: 14px;
+  padding: 0 5px;
+  border-radius: 7px;
+  background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-layer-1));
+  border: 1px solid var(--dsw-alias-border-l1);
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 连接状态小圆点：全部 connected = 正常色，任一 broken = 警示色。 */
+.dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dsw-alias-state-success-primary, var(--dsw-alias-label-primary));
+}
+
+.dotBroken {
+  background: var(--dsw-alias-state-warn-primary, var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary)));
+}
+
+/* 「远程」小标记：当前会话工作区是 ssh:// 时追加（辨别当前会话在远端）。 */
+.remote {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 7px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--dsw-alias-state-business-primary, var(--dsw-alias-brand-primary, var(--dsw-alias-label-primary)));
+  white-space: nowrap;
+}

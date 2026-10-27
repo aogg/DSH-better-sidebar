@@ -2,6 +2,16 @@
 
 > 本文档收录 dsh-better-sidebar 的完整发布历史（最新版摘要见 [README](README.md)；同步发布于 [GitHub Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)）。
 
+### v0.28.30
+
+- 🔌 **新增对 dsh-ssh-workspace（远程 SSH 工作区插件）的集成支持：开始页标识 + 状态页 + 网关工厂封装，插件未安装时全程优雅降级（零痕迹）**。所有 ssh-workspace 逻辑封装在独立文件夹 `src/client/ssh-workspace/` 内（工厂模式创建），外面唯一的接入点是 start-links.tsx 引一个胶囊组件与 client/index.tsx 的一个 `ctx.effect`：
+  - **网关工厂**（`ssh-workspace/gateway.ts`）：`createSshWorkspaceGateway()` 铸造真实网关——GET `api/dsh-ssh-workspace/status`（ssh 插件挂宿主 webServer 的只读路由；走 `hostRouteUrl` 反向代理前缀安全，`no-store` + AbortController 4s 超时），2xx → available 并缓存宽松解析的 status（字段形状按 `lib/routes.js` 766-830 行 / `lib/remote-fs.js` / `lib/forward.js` 定义，缺省字段消费端兜底）；404（未装/被禁用）→ 定论不可用并清空 status；网络错/超时 → 有旧数据则保可用并记「读取失败」，无旧数据判不可用。TTL 60s 定期重试让后装插件能浮出徽章，重试失败不刷 console（只在「可用→不可用」翻转上 warn 一次，失败原因落在快照 `error` 给状态页展示）；Null-object 模式的 `UnavailableSshWorkspaceGateway`（available 恒 false、方法安全 no-op）承接「未注册」与「已 dispose」窗口的迟到读取；模块级单例由 `getSshWorkspaceGateway` / `disposeSshWorkspaceGateway` 管（HMR 安全，probe 之前零定时器零请求）。
+  - **开始页标识**（`ssh-workspace/start-pill.tsx`，start-links.tsx 最小接入）：hero 入口网格里 commands 与 settings 之间新增「远程工作区」胶囊——仅网关 available 才渲染（未安装 = 连 DOM 都不留）；点击 `service.openTab({ type: 'ssh-workspace' })`。胶囊带三样徽章：已挂载数量数字 chip（>0 才显示）、连接状态小圆点（全部 connected=正常色，任一 broken=警示色）、当前会话工作区是 `ssh://` 时追加「远程」小标记；title/aria 注明来源（「dsh-ssh-workspace 插件 · 已挂载远端工作区一览」）；胶囊类复用 start-links.module.css，附加徽章样式在本文件夹 css 模块内。
+  - **状态页**（`ssh-workspace/page.tsx`，tab id `ssh-workspace`）：`single: true`、order 42（commands 40 / terminal-bottom 41 之后、settings 50 之前）、不 hidden、`available` 回调按网关可用态返回（不可用时宿主渲染 disabled 行）；图形是本文件夹内的 `VscRemoteExplorer` 令牌上色（对齐 builtins/tab-icons.tsx 形制）。只读内容：概览统计（主机数/已挂载/停用/转发数 + 连接状态点）、「当前会话工作区」行（`ssh://` 时显示展示拼写 `ssh://别名@/路径` + 复制按钮复制原始拼写 + 「远程」标记；读法同 conversation-draft.ts 的 WorkspaceView 按会话成员匹配）、已挂载工作区列表（title、展示路径+复制、会话数、disabled 灰显）、SSH 主机（alias + connected/broken 状态点；status 接口不携带密钥信息）、端口转发（活动 + 已存，老插件无 forwardRows 时退活动列表）、最近事件 ≤5 条。页面可见时 8s 一轮强拉 + 手动刷新按钮，不可见即停；读取失败显示「读取失败 + 重试」行；网关不可用显示安装提示空态。
+  - **优雅降级**：ssh 插件未安装/被禁用时路由 404 → 网关判不可用 → tab 从不注册、胶囊渲染 null，宿主 + 菜单/guide/tab 条零痕迹；本插件不做 ssh 插件的管理界面（那是它自带「远程工作区」面板的事），只做状态展示与入口标识。
+- 🌐 **国际化**：18 个新 locale key（胶囊名/说明/页面区块标题/刷新/复制·已复制/当前会话工作区/远程标记/不可用空态/读取失败/重试/已停用等）覆盖 locales.ts 的 zh/en + 全部 19 个 locales-*.ts 语言文件。
+- **版本**：`SIDEBAR_SERVICE_VERSION` 与 package.json / dsh.plugin.json 一起升到 **0.28.30**。
+
 ### v0.28.29
 
 - ⚡ **文件页 Git 图标状态改为「逐文件增量刷新 + localStorage 缓存上色」，不再一有变动就整仓库重拉**。文件树每行的 M/U/⊘/✓ 徽标此前在任何 git 变动通知（`/sidebar/ws/git` 失效帧）到达时都会整体重拉一次 `git.status` 全量快照（全仓库变更行 + 全 ignored 列表，5 个 git 进程），文件树随新快照整体重渲染。现在三段一起收：

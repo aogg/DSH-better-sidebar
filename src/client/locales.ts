@@ -894,6 +894,27 @@ export const zh = {
   settingsTerminalHistoryLimitTitle: '终端命令历史保留条数',
   settingsTerminalHistoryLimitDesc: '「执行命令历史」弹窗保留的最近命令条数（10–1000，默认 100；仅内存保存，刷新后清空）',
   historyEmptyText: '（未提取到文本）',
+  // 「远程工作区」（dsh-ssh-workspace 插件集成，src/client/ssh-workspace/）。
+  // zh 是文案源头；en 必须同步，其余语言按 locales.spec.ts 的 key 检查
+  // 全量补齐（见 locales-*.ts）。
+  sshWorkspacePage: '远程工作区',
+  guideDescSshWorkspace: 'dsh-ssh-workspace 插件 · 已挂载远端工作区一览',
+  sshStatHosts: 'SSH 主机',
+  sshStatMounted: '已挂载',
+  sshStatDisabled: '已停用',
+  sshStatForwards: '端口转发',
+  sshConnBroken: '{count} 个连接异常',
+  sshCurrentWorkspace: '当前会话工作区',
+  sshRemoteMark: '远程',
+  sshCopy: '复制',
+  sshCopied: '已复制',
+  sshSectionWorkspaces: '已挂载工作区',
+  sshSectionEvents: '最近事件',
+  sshSessionsCount: '{count} 个会话',
+  sshUnavailable: '未检测到 dsh-ssh-workspace 插件：安装并启用后，这里会显示远端工作区状态。',
+  sshLoadFailed: '读取失败',
+  sshRetry: '重试',
+  sshRefresh: '刷新',
 }
 
 /** The en dictionary (key-set-equal to zh, enforced by the type annotation). */
@@ -1768,6 +1789,25 @@ export const en: Record<keyof typeof zh, string> = {
   settingsTerminalHistoryLimitTitle: 'Terminal command history size',
   settingsTerminalHistoryLimitDesc: 'How many recent commands the command-history popover keeps (10–1000, default 100; memory only, cleared on reload)',
   historyEmptyText: '(no text captured)',
+  // 「远程工作区」（the dsh-ssh-workspace integration, src/client/ssh-workspace/）.
+  sshWorkspacePage: 'Remote Workspaces',
+  guideDescSshWorkspace: 'dsh-ssh-workspace plugin · mounted remote workspaces at a glance',
+  sshStatHosts: 'SSH hosts',
+  sshStatMounted: 'Mounted',
+  sshStatDisabled: 'Disabled',
+  sshStatForwards: 'Port forwards',
+  sshConnBroken: '{count} broken',
+  sshCurrentWorkspace: 'Current session workspace',
+  sshRemoteMark: 'Remote',
+  sshCopy: 'Copy',
+  sshCopied: 'Copied',
+  sshSectionWorkspaces: 'Mounted workspaces',
+  sshSectionEvents: 'Recent events',
+  sshSessionsCount: '{count} sessions',
+  sshUnavailable: 'The dsh-ssh-workspace plugin was not detected; install and enable it to see remote workspace status here.',
+  sshLoadFailed: 'Load failed',
+  sshRetry: 'Retry',
+  sshRefresh: 'Refresh',
 }
 
 /**
