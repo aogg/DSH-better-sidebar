@@ -15,7 +15,10 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { resolve, sep } from 'node:path'
-import { colorAlpha, effectiveTokenValue, tokenValue } from '../src/client/theme.ts'
+import { colorAlpha, effectiveTokenValue, readPaintColors, subscribeStylesReady, tokenValue } from '../src/client/theme.ts'
+// `bindSurfaceTheme` is the terminal-surface wiring (theme.ts keeps only the
+// token reads); the guarded-bridge behavior is tested from its real home.
+import { bindSurfaceTheme } from '../src/client/terminal-surface.ts'
 
 afterEach(() => {
   document.body.removeAttribute('style')
@@ -80,6 +83,74 @@ describe('effectiveTokenValue', () => {
     document.body.style.setProperty('--probe', 'transparent')
     expect(tokenValue('--probe')).toBe('transparent')
     expect(effectiveTokenValue('--probe')).toBe('')
+  })
+})
+
+/**
+ * The guarded surface-theme bridge (the terminal's white-screen defense, R0):
+ * `readPaintColors` answers undefined while the computed colors do not paint,
+ * and `bindSurfaceTheme` defers to a <head> style mutation instead of writing
+ * a transparent theme into the emulator.
+ */
+describe('guarded surface theme (white-screen defense)', () => {
+  it('answers undefined while the computed colors do not paint, then the pair', () => {
+    const node = document.createElement('div')
+    // Mount first: the terminal surface this guard serves is always in the
+    // document, and jsdom only recomputes styles for connected elements.
+    document.body.appendChild(node)
+    // jsdom's default: `rgba(0, 0, 0, 0)` on background — visually inert.
+    expect(readPaintColors(node)).toBeUndefined()
+    node.style.backgroundColor = 'rgb(10, 20, 30)'
+    node.style.color = 'rgb(200, 210, 220)'
+    expect(readPaintColors(node)).toEqual({
+      background: 'rgb(10, 20, 30)',
+      foreground: 'rgb(200, 210, 220)',
+    })
+    node.remove()
+  })
+
+  it('treats a translucent glass surface as unpainted (issue #90)', () => {
+    const node = document.createElement('div')
+    document.body.appendChild(node)
+    node.style.backgroundColor = 'rgba(10, 22, 54, 0.45)'
+    node.style.color = '#fff'
+    expect(readPaintColors(node)).toBeUndefined()
+    // The opaque floor passes through (the skin still owns the surface).
+    node.style.backgroundColor = 'rgba(10, 22, 54, 0.96)'
+    const pair = readPaintColors(node)
+    expect(pair?.background).toBe('rgba(10, 22, 54, 0.96)')
+    expect(pair?.foreground).toBeTruthy()
+    node.remove()
+  })
+
+  it('bindSurfaceTheme applies when paintable, and defers to a head mutation otherwise', async () => {
+    const node = document.createElement('div')
+    const xterm = { options: {} as Record<string, unknown> }
+    const dispose = bindSurfaceTheme(node, xterm as never)
+    // Not paintable yet: NO theme was written (a transparent background here
+    // is the white screen — the emulator stays on its own default instead).
+    expect(xterm.options.theme).toBeUndefined()
+
+    node.style.backgroundColor = 'rgb(1, 2, 3)'
+    node.style.color = 'rgb(4, 5, 6)'
+    const tag = document.createElement('style')
+    document.head.appendChild(tag) // the "styles landed" signal
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(xterm.options.theme).toMatchObject({ background: 'rgb(1, 2, 3)', foreground: 'rgb(4, 5, 6)' })
+
+    // After satisfaction the watcher is done: further head churn is inert.
+    dispose()
+    node.style.backgroundColor = ''
+    document.head.appendChild(document.createElement('style'))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(xterm.options.theme).toMatchObject({ background: 'rgb(1, 2, 3)' })
+    tag.remove()
+  })
+
+  it('subscribeStylesReady returns an idempotent disposer', () => {
+    const dispose = subscribeStylesReady(() => {})
+    dispose()
+    dispose() // second call must not throw
   })
 })
 

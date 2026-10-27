@@ -79,20 +79,71 @@ export function colorAlpha(color: string): number | null {
  * keywords, transparent, and any color below the opacity floor) so the
  * caller's fallback chain engages; effectively opaque values pass through.
  */
-export function effectiveTokenValue(name: string): string {
-  const raw = tokenValue(name)
-  switch (raw) {
+export function isPaintableColor(color: string): boolean {
+  switch (color) {
     case '':
     case 'transparent':
     case 'initial':
     case 'inherit':
     case 'unset':
-      return ''
+      return false
     default: {
-      const alpha = colorAlpha(raw)
-      if (alpha !== null && alpha < OPAQUE_ALPHA_MIN) return ''
-      return raw
+      const alpha = colorAlpha(color)
+      if (alpha !== null && alpha < OPAQUE_ALPHA_MIN) return false
+      return true
     }
+  }
+}
+
+export function effectiveTokenValue(name: string): string {
+  const raw = tokenValue(name)
+  return isPaintableColor(raw) ? raw : ''
+}
+
+/**
+ * Read the surface pair a text surface needs off its own element — the same
+ * values the stylesheet paints from tokens, resolved through the live cascade
+ * (skin scoped overrides included). `undefined` while the values do not
+ * PAINT yet: the boot window where the host's token stylesheets have not
+ * landed (getComputedStyle answers `rgba(0,0,0,0)`/inherit) and glass skins'
+ * translucent surfaces (issue #90 — a translucent background would render the
+ * terminal over the skin's backdrop art, and over a white workbench that is
+ * the reported "white screen"). Callers MUST treat `undefined` as "not yet"
+ * and re-read (subscribeStylesReady below), never fall back to a guessed
+ * color.
+ */
+export function readPaintColors(node: Element): { background: string; foreground: string } | undefined {
+  if (typeof document === 'undefined') return undefined
+  const style = getComputedStyle(node)
+  const background = style.backgroundColor
+  const foreground = style.color
+  if (!isPaintableColor(background) || !isPaintableColor(foreground)) return undefined
+  return { background, foreground }
+}
+
+/**
+ * Fire `callback` when stylesheets under `<head>` change — the event-driven
+ * signal that token values MAY have become available (the host injecting its
+ * theme styles, a skin landing, a media query flipping). The callback re-reads
+ * and, once satisfied, disposes the returned watcher itself; the watcher is
+ * idempotent so both the "satisfied" and effect-cleanup paths can call it.
+ * This is a MutationObserver, not polling: it only fires while the terminal
+ * surface is actually waiting for styles.
+ */
+export function subscribeStylesReady(callback: () => void): () => void {
+  if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') return () => {}
+  const observer = new MutationObserver(() => { callback() })
+  observer.observe(document.head, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['media', 'disabled', 'href'],
+  })
+  let done = false
+  return () => {
+    if (done) return
+    done = true
+    observer.disconnect()
   }
 }
 
