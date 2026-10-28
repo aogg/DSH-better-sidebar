@@ -6,7 +6,7 @@
  * 自己不用任何 query 参数做路由（shell 无 pushState/replaceState，查询串一直
  * 为空），`ws` 因此不与既有路由冲突；参数留在 URL 上，刷新/转发链接都保持
  * 专注态。DOM 层消费者见 `workspace-focus-dom.ts`（行隐藏 + 退出入口），
- * 「复制工作区独立链接」见 `workspace-link-menu.ts`。
+ * 「独立工作区链接」两项（复制 / 新窗口打开）见 `workspace-link-menu.ts`。
  *
  * 本模块不碰任何服务与 DOM——全部输入显式传参，vitest 直测
  * （tests/workspace-focus.spec.ts）。

@@ -274,10 +274,11 @@ export function apply(ctx: Context): void {
     () => registerTransferToast(),
     'dsh-better-sidebar: paste transfer toast',
   )
-  // 工作区行「更多」菜单的「复制工作区独立链接」：核心的工作区菜单是硬编码
-  // 数组（rename/delete），没有工作区级菜单 slot，故走 DOM 注入先例
-  // （捕获锚按钮 aria-label → portal 菜单挂载时追加一项 → 复制 ?ws= 链接 +
-  // toast）。核心改模板/行键时静默降级为原菜单（见 workspace-link-menu.ts）。
+  // 工作区行「更多」菜单的「独立工作区链接」两项（复制 / 新窗口打开）：
+  // 核心的工作区菜单是硬编码数组（rename/delete），没有工作区级菜单 slot，
+  // 故走 DOM 注入先例（捕获锚按钮 aria-label → portal 菜单挂载时追加
+  // 分隔线+两项 → 复制 ?ws= 链接 + toast / window.open 新窗口打开）。
+  // 核心改模板/行键时静默降级为原菜单（见 workspace-link-menu.ts）。
   ctx.effect(
     () => registerWorkspaceLinkMenu(ctx),
     'dsh-better-sidebar: workspace copy-link menu item',

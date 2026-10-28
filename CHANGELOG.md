@@ -2,6 +2,14 @@
 
 > 本文档收录 dsh-better-sidebar 的完整发布历史（最新版摘要见 [README](README.md)；同步发布于 [GitHub Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)）。
 
+### v0.28.32
+
+- 🪟 **工作区「更多」(…) 菜单新增「新窗口打开独立工作区」**（`src/client/workspace-link-menu.ts`）：注入从「分隔线 + 1 项」扩为「分隔线 + 2 项」——「复制独立工作区链接」（逻辑不变）之下新增第二项，点击拼与复制项相同的 `?ws=<workspaceId>` 独立链接，并在用户点击手势内同步 `window.open(url, '_blank', 'noopener')` 打开（不受弹窗拦截；`noopener` 断开 opener），随后复用锚按钮的原生 click 按核心 toggle 语义收起菜单；不写剪贴板、不弹 toast。两项均为 `role=menuitem` + aria-label 的原生 button（键盘可达性走核心菜单的上下键漫游，注入项天然在序），图标为同规格 14px 外链 SVG，样式仍全走 `--dsw-*` 令牌；核心改 aria 模板/行键 → 静默降级策略不变（缺两项，绝不坏页）。
+- ✏️ **菜单项改名**：「复制工作区独立链接」→「复制独立工作区链接」，en 同步 "Copy workspace link" → "Copy standalone workspace link"；成功 toast 等所有含「工作区独立链接」字样的文案按新语序统一（"Standalone workspace link copied — …"）。
+- 🌐 **国际化**：新增 locale key `workspaceOpenStandalone`（zh「新窗口打开独立工作区」/ en "Open standalone workspace in new window"）覆盖 locales.ts 的 zh/en，其余语言走 zh/en 回退链。
+- 🧪 测试：`tests/workspace-link-menu.spec.tsx` 更新改名断言 + 新增 2 例（双项注入的顺序/role/aria-label/分隔线位置、新窗口项拼参 `_blank`+`noopener` + 不写剪贴板不弹 toast + 经锚收起），共 10 例。
+- **版本**：`SIDEBAR_SERVICE_VERSION` 与 package.json / dsh.plugin.json 一起升到 **0.28.32**。
+
 ### v0.28.31
 
 - 🔗 **左侧「工作区」行的「更多」(…) 菜单新增「复制工作区独立链接」**：核心的工作区菜单是组件内硬编码数组（重命名/删除两项），`sidebar.workspaces` 只有会话级菜单孔位、没有工作区级 slot，故按本仓库 DOM 注入先例实现（`src/client/workspace-link-menu.ts`）——捕获阶段识别「更多」锚按钮（核心 locale 模板的 aria-label，zh/en 双档），从所属行的 `data-row-key="workspace:<id>"` 记下工作区；portal 菜单（`body > [role="menu"]`）挂载时把「分隔线 + 菜单项」追加进内容区末尾（键盘上下键导航天然覆盖注入项）。点击拼 `http://<host>:<port>/<path>?ws=<workspaceId>`（当前页地址 + `ws` 参数：核心 web 前端不消费 query、无路由冲突，刷新/转发均保持）写入剪贴板——Clipboard API 优先，http 非安全上下文（如局域网 IP 访问）退 `execCommand('copy')`；成功/失败都有 toast 反馈（`role=status` + `aria-live`，颜色全走 `--dsw-*` 令牌），随后复用锚按钮的原生 click 按核心自己的 toggle 语义收起菜单。「已有 portal 菜单挂在 body 下」的锚点击视为收起而非打开（不 arm pending，紧跟着打开的无关菜单不会被误注入）。核心改 aria 模板/行键 → 静默降级为原菜单，绝不坏页。

@@ -662,9 +662,10 @@ export const zh = {
   tasksNodeTasks: '共享任务',
   jobCopyOutput: '复制输出',
   jobCopied: '已复制',
-  // 「工作区独立链接 + 单工作区专注模式」（src/client/workspace-*.ts）。
-  workspaceCopyLink: '复制工作区独立链接',
-  workspaceLinkCopied: '已复制工作区独立链接，打开后左侧仅显示该工作区',
+  // 「独立工作区链接 + 单工作区专注模式」（src/client/workspace-*.ts）。
+  workspaceCopyLink: '复制独立工作区链接',
+  workspaceOpenStandalone: '新窗口打开独立工作区',
+  workspaceLinkCopied: '已复制独立工作区链接，打开后左侧仅显示该工作区',
   workspaceLinkCopyFailed: '复制失败，请手动复制地址后在链接后附加 ?ws= 工作区参数',
   focusBannerLabel: '专注模式：左侧仅显示此工作区',
   focusExit: '退出专注',
@@ -1565,9 +1566,10 @@ export const en: Record<keyof typeof zh, string> = {
   tasksNodeTasks: 'Shared tasks',
   jobCopyOutput: 'Copy output',
   jobCopied: 'Copied',
-  // 「Workspace link + single-workspace focus mode」(src/client/workspace-*.ts).
-  workspaceCopyLink: 'Copy workspace link',
-  workspaceLinkCopied: 'Workspace link copied — opening it shows only this workspace',
+  // 「Standalone workspace link + single-workspace focus mode」(src/client/workspace-*.ts).
+  workspaceCopyLink: 'Copy standalone workspace link',
+  workspaceOpenStandalone: 'Open standalone workspace in new window',
+  workspaceLinkCopied: 'Standalone workspace link copied — opening it shows only this workspace',
   workspaceLinkCopyFailed: 'Copy failed; append the ?ws= workspace parameter to the address manually',
   focusBannerLabel: 'Focus mode: this workspace only',
   focusExit: 'Exit focus',

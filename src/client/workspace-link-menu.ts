@@ -1,5 +1,6 @@
 /**
- * 工作区行「更多」(…) 菜单的「复制工作区独立链接」项（DOM 注入）。
+ * 工作区行「更多」(…) 菜单的「独立工作区链接」两项注入（DOM 注入）：
+ * 「复制独立工作区链接」+「新窗口打开独立工作区」。
  *
  * 为什么是 DOM 注入：核心 WorkspaceBrowser 的菜单项是组件内硬编码数组
  * （rename/delete 两项），`sidebar.workspaces` 只有会话级菜单孔位
@@ -13,11 +14,16 @@
  *    命中即记下所属行的 `data-row-key="workspace:<id>"`（未分组行没有 id，
  *    跳过）。
  * 2. 菜单是 `portal: true` 的 React portal（`[role="menu"]` 直接挂在 body
- *    下）；body 观察器看到它在 pending 窗口内出现，就把「分隔线 + 菜单项」
- *    追加进菜单内容区末尾。
- * 3. 点击注入项：拼 `?ws=<id>` 独立链接（workspace-focus.ts 的纯函数）→
- *    写剪贴板（Clipboard API 优先，http 非安全上下文退 execCommand）→
- *    toast 反馈 → 复原锚按钮的 click 让核心按自己的语义收起菜单（锚已被
+ *    下）；body 观察器看到它在 pending 窗口内出现，就把「分隔线 + 2 个
+ *    菜单项」追加进菜单内容区末尾。
+ * 3. 点击注入项：
+ *    - 「复制独立工作区链接」：拼 `?ws=<id>` 独立链接（workspace-focus.ts
+ *      的纯函数）→ 写剪贴板（Clipboard API 优先，http 非安全上下文退
+ *      execCommand）→ toast 反馈；
+ *    - 「新窗口打开独立工作区」：拼同一个 `?ws=<id>` 链接 →
+ *      `window.open(url, '_blank', 'noopener')`——在用户点击手势内同步
+ *      调用，不受弹窗拦截；`noopener` 断开 opener，新窗口拿不到本页引用。
+ *    两项随后都复用锚按钮的 click 让核心按自己的语义收起菜单（锚已被
  *    卸载时退化为派发 Escape，走核心菜单自己的关闭路径）。
  *
  * 降级契约（同族先例）：核心改了 aria 模板或行键 → 捕获不命中，菜单保持
@@ -55,6 +61,9 @@ const LINK_ITEM_CSS = `
 /** 链条图标（14px、stroke=currentColor，与核心菜单 14px 图标同规格）。 */
 const LINK_ICON_SVG = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.7 9.3l2.6-2.6"/><path d="M7.4 4.9l1.5-1.5a2.6 2.6 0 0 1 3.7 3.7L11.1 8.6"/><path d="M8.6 11.1l-1.5 1.5a2.6 2.6 0 0 1-3.7-3.7l1.5-1.5"/></svg>'
 
+/** 外链图标（同规格）：「新窗口打开独立工作区」项——方框 + 右上箭头。 */
+const EXTERNAL_LINK_ICON_SVG = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 3.5H4.75A1.25 1.25 0 0 0 3.5 4.75v6.5a1.25 1.25 0 0 0 1.25 1.25h6.5a1.25 1.25 0 0 0 1.25-1.25V9.5"/><path d="M9.5 2.5h4v4"/><path d="M13.5 2.5L7.75 8.25"/></svg>'
+
 /** 工作区「更多」锚按钮的 aria-label 形状（核心 locale 模板，zh/en 两档）。 */
 function isWorkspaceMenuAnchor(anchor: Element): boolean {
   const label = anchor.getAttribute('aria-label') ?? ''
@@ -87,8 +96,8 @@ async function copyText(text: string): Promise<boolean> {
 }
 
 /**
- * 注册「复制工作区独立链接」菜单项。返回 disposer：摘监听、断观察器、
- * 清计时器、移除样式表与仍在屏的 toast。
+ * 注册「独立工作区链接」两个菜单项（复制 + 新窗口打开）。返回 disposer：
+ * 摘监听、断观察器、清计时器、移除样式表与仍在屏的 toast。
  */
 export function registerWorkspaceLinkMenu(ctx: Context): () => void {
   // ctx 眼下面未消费（链接是纯前端 URL 拼装）；保留形参对齐本仓库
@@ -142,6 +151,23 @@ export function registerWorkspaceLinkMenu(ctx: Context): () => void {
     document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
   }
 
+  /** 造一个注入菜单项：`role=menuitem` + aria-label + 图标 + 文案（键盘可达性走核心菜单自身的上下键漫游，注入项天然在漫游序里）。 */
+  const buildMenuItem = (label: string, iconSvg: string, onClick: (event: MouseEvent) => void): HTMLButtonElement => {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.setAttribute('role', 'menuitem')
+    button.setAttribute('aria-label', label)
+    const icon = document.createElement('span')
+    icon.className = 'icon'
+    icon.innerHTML = iconSvg
+    const text = document.createElement('span')
+    text.className = 'text'
+    text.textContent = label
+    button.append(icon, text)
+    button.addEventListener('click', onClick)
+    return button
+  }
+
   const onItemMounted = (menu: Element): void => {
     if (pendingWorkspaceId === null || disposed) return
     if (menu.querySelector(`[${ITEM_MARKER}]`) !== null) return
@@ -159,19 +185,8 @@ export function registerWorkspaceLinkMenu(ctx: Context): () => void {
     separator.setAttribute('role', 'separator')
     wrap.appendChild(separator)
 
-    const button = document.createElement('button')
-    button.type = 'button'
-    button.setAttribute('role', 'menuitem')
-    const label = t('workspaceCopyLink')
-    button.setAttribute('aria-label', label)
-    const icon = document.createElement('span')
-    icon.className = 'icon'
-    icon.innerHTML = LINK_ICON_SVG
-    const text = document.createElement('span')
-    text.className = 'text'
-    text.textContent = label
-    button.append(icon, text)
-    button.addEventListener('click', (event) => {
+    // 复制项（逻辑原样）：拼 `?ws=<id>` 链接 → 剪贴板 → toast → 收起。
+    wrap.appendChild(buildMenuItem(t('workspaceCopyLink'), LINK_ICON_SVG, (event) => {
       event.stopPropagation()
       // 点击时刻的 location.href：SPA 不改 URL，但万一未来改了也拿的是当下。
       const link = buildWorkspaceFocusLink(window.location.href, workspaceId)
@@ -179,8 +194,15 @@ export function registerWorkspaceLinkMenu(ctx: Context): () => void {
         showToast(ok ? t('workspaceLinkCopied') : t('workspaceLinkCopyFailed'))
       })
       closeMenu(anchor)
-    })
-    wrap.appendChild(button)
+    }))
+    // 新窗口项：同一链接 `window.open(url, '_blank', 'noopener')`——在点击
+    // 手势内同步调用，不受弹窗拦截；noopener 断 opener。随后同样收起菜单。
+    wrap.appendChild(buildMenuItem(t('workspaceOpenStandalone'), EXTERNAL_LINK_ICON_SVG, (event) => {
+      event.stopPropagation()
+      const link = buildWorkspaceFocusLink(window.location.href, workspaceId)
+      window.open(link, '_blank', 'noopener')
+      closeMenu(anchor)
+    }))
     viewport.appendChild(wrap)
   }
 
