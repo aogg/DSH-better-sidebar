@@ -33,8 +33,8 @@ import { createProbeGate, listDirectory, messageOf, parentOf, requireAbsolute, r
 import { resolveSessionPath } from './session-path.ts'
 import { createWorkspaceFile, mkdirWorkspaceEntry, renameWorkspaceEntry, removeWorkspaceEntry, writeWorkspaceText, writeWorkspaceUpload } from './fs-operations.ts'
 import { startWorkspaceTransfer, onTransferUpdate, transferCancel, transferStatus, type TransferConflict, type TransferMode } from './fs-transfer.ts'
-// `ensureWorkspacePath` stays for the WRITE/watch destinations (archive
-// selection, fs-watch registration), which must keep their lexical meaning;
+// `ensureWorkspacePath` stays for the WRITE destinations (archive selection,
+// the write routes), which must keep their lexical meaning;
 // the READ routes resolve through `resolveTargetCompat` below.
 import { ensureWorkspacePath, pathExists, resolveTargetCompat } from './path-security.ts'
 import { workspaceDirPrefixRemainder } from './workspace-prefix.ts'
@@ -45,11 +45,12 @@ import { compileExcludePatterns, EXCLUDE_PATTERN_LIMIT, EXCLUDE_PATTERN_MAX_LENG
 import { decodeHtmlUrl } from './html-route.ts'
 import { isTrustedApiRequest } from './trust-fence.ts'
 import { registerBundleRoute } from './bundle-route.ts'
-import { createDirectoryWatchers, type DirectoryWatchers } from './fs-watch.ts'
 import { createGitWatchHub } from './git-push.ts'
 import { createFsJobsPushHub } from './fs-jobs-push.ts'
 import { createSidechatPushHub, type SidechatPushHub } from './sidechat-push.ts'
 import { createSessionPushHub } from './session-push.ts'
+import { attachFeedSocket, type FeedChannelHandler } from './ws-feed.ts'
+import { createFeedChannelHandlers } from './feed-channels.ts'
 import { launchExternal } from './open-external.ts'
 import { createArchiveTasks, respondArchiveDownload, type ArchiveTasks } from './archive-route.ts'
 import * as git from './git.ts'
@@ -2244,31 +2245,19 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
   }), 'dsh-better-sidebar: agent-opens push WebSocket')
 
   // ── File-tree directory watch WebSocket ────────────────────────────────
-  // The file tree lists a folder when it is expanded and would otherwise stay
-  // stale for the rest of the session. One socket per session carries the
-  // reader's expanded-folder set; the host watches exactly those directories
-  // and pushes a debounced notice per change, so the tree re-lists in place.
-  // Paths are resolved exactly like `fs.tree`'s (same resolution, same
-  // lexical rules), so the watch observes what the tree can list.
-  const fsWatchWss = new WebSocketServer({ noServer: true })
-  ctx.effect(() => ctx.webServer.registerUpgrade({
-    path: '/sidebar/ws/fs-watch',
-    handler: (req, socket, head) => {
-      if (!fence(req)) {
-        socket.destroy()
-        return
-      }
-      fsWatchWss.handleUpgrade(req as unknown as IncomingMessage, socket as unknown as Duplex, head as Buffer, (ws) => {
-        void attachFsWatch(ctx, ws, req)
-      })
-    },
-  }), 'dsh-better-sidebar: file-tree watch WebSocket')
+  // RETIRED: the file tree no longer watches directory changes — the tree
+  // re-lists through the surfaces that own the writes (mutations invalidate
+  // their own caches) plus one catch-up pull per mount. The endpoint and its
+  // per-connection watcher module (fs-watch.ts) were removed with the
+  // client's calls; `/sidebar/ws/feed` multiplexes every surviving push
+  // channel over one socket.
 
   // ── Git change push WebSocket ─────────────────────────────────────────
   // The git-domain surfaces (the shared status store's ink, the changes
   // tab's worktree inventory / branches / history, the round lenses' log
   // and range diff) used to advance on client-side `usePolling` timers.
-  // This socket replaces them with the fs-watch model: the host watches
+  // This socket replaces them with the host-side watch model: the host
+  // watches
   // each subscribed worktree's files AND its git metadata (HEAD / index /
   // refs / logs / linked-worktree admin dirs — every branch switch,
   // commit, stage and `git worktree add` lands there) and pushes one
@@ -2389,21 +2378,24 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
   // `{kind:'cwd', sessionId}` frame current clients ignore — the next
   // tool/call burst re-resolves and re-pushes over the same socket.
   const sessionWss = new WebSocketServer({ noServer: true })
+  // The two live answers, hoisted so the legacy hub AND the feed's session
+  // channel resolve through the very same closures (no second implementation):
+  // 同源：直接调用 `session.phase` / `session.cwd` 路由实现本身（HTTP 派发同样是
+  // handler(payload)）—— 推送答案即路由答案，不存在第二份实现。
+  // （类型层收窄掉 noUncheckedIndexedAccess 给 Record 查找附加的 undefined，
+  // buildApi 的字面量返回保证这两个方法存在；纯类型断言，无运行时行为。）
+  const resolveSessionPhase = async (sessionId: string): Promise<{ blank: boolean }> => {
+    const answer = await (api['session.phase'] as ApiMethod)({ sessionId })
+    return answer as { blank: boolean }
+  }
+  const resolveSessionCwd = async (sessionId: string): Promise<{ sessionId: string; cwd: string; root: string; parent: string | null }> => {
+    // `fresh: true` 跳过 3s TTL 缓存。
+    const answer = await (api['session.cwd'] as ApiMethod)({ sessionId, fresh: true })
+    return answer as { sessionId: string; cwd: string; root: string; parent: string | null }
+  }
   const sessionPush = createSessionPushHub(ctx, {
-    resolvePhase: async (sessionId) => {
-      // 同源：直接调用 `session.phase` 路由实现本身（HTTP 派发同样是 handler(payload)），
-      // 与下方 resolveCwd 同一模式 —— 推送答案即路由答案，不存在第二份实现。
-      // （类型层收窄掉 noUncheckedIndexedAccess 给 Record 查找附加的 undefined，
-      // buildApi 的字面量返回保证这两个方法存在；纯类型断言，无运行时行为。）
-      const answer = await (api['session.phase'] as ApiMethod)({ sessionId })
-      return answer as { blank: boolean }
-    },
-    resolveCwd: async (sessionId) => {
-      // 同源：直接调用 `session.cwd` 路由实现本身（HTTP 派发同样是 handler(payload)），
-      // `fresh: true` 跳过 3s TTL 缓存 —— 推送答案即路由答案，不存在第二份实现。
-      const answer = await (api['session.cwd'] as ApiMethod)({ sessionId, fresh: true })
-      return answer as { sessionId: string; cwd: string; root: string; parent: string | null }
-    },
+    resolvePhase: resolveSessionPhase,
+    resolveCwd: resolveSessionCwd,
   })
   ctx.effect(() => () => { sessionPush.dispose() }, 'dsh-better-sidebar: session push hub')
   // The prompt-history recorder was built BEFORE this hub (the api table needs
@@ -2435,107 +2427,72 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
     },
   }), 'dsh-better-sidebar: session push WebSocket')
 
+  // ── Multiplexed feed WebSocket ─────────────────────────────────────────
+  // One socket for every push channel the five endpoints above used to cost
+  // one connection each: the client opens `/sidebar/ws/feed` once per view
+  // and speaks `{"op":"sub"|"unsub","channel",...}` control frames; every
+  // (channel, sessionId, args) triple is one subscription with its own
+  // refcounted server-side resource, and frames ride a
+  // `{"channel","sessionId"?,"data"}` envelope. The protocol and the
+  // multiplexer live in ws-feed.ts, the per-channel semantics (what a sub
+  // means, which args each channel takes) in feed-channels.ts — both built
+  // on the SAME hub seams the legacy endpoint shells above attach through,
+  // so the two transports cannot drift. The legacy endpoints stay mounted
+  // for the not-yet-switched clients (conservative release) and become dead
+  // code only once no client opens them; `/sidebar/ws/fs-watch` was removed
+  // outright with the feature (no channel here multiplexes it).
+  const feedHandlers: Record<string, FeedChannelHandler> = createFeedChannelHandlers({
+    sessionRootOf: async (sessionId) => activeWorktreeRootOf(ctx, sessionId, await sessionCwdOf(ctx, sessionId)),
+    agentOpenRegistry,
+    gitPush,
+    fsJobsPush,
+    sessionPush,
+    sidechatPush,
+  })
+  const feedWss = new WebSocketServer({ noServer: true })
+  ctx.effect(() => ctx.webServer.registerUpgrade({
+    path: '/sidebar/ws/feed',
+    handler: (req, socket, head) => {
+      if (!fence(req)) {
+        socket.destroy()
+        return
+      }
+      feedWss.handleUpgrade(req as unknown as IncomingMessage, socket as unknown as Duplex, head as Buffer, (ws) => {
+        attachFeedSocket(feedHandlers, ws)
+      })
+    },
+  }), 'dsh-better-sidebar: multiplexed feed WebSocket')
+
   ctx.effect(() => () => {
     openToolsDisposers?.()
     agentOpenRegistry.dispose()
     agentOpenWss.close()
-    fsWatchWss.close()
     gitWss.close()
     fsJobsWss.close()
     sidechatWss.close()
     sessionWss.close()
+    feedWss.close()
   }, 'dsh-better-sidebar: teardown')
 }
 
-/** One `watch` / `unwatch` frame from the file tree. */
-interface FsWatchFrame {
-  op?: unknown
-  path?: unknown
-}
-
 /**
- * Serve one session's directory-watch socket until it closes.
- *
- * Frames are `{ op: 'watch' | 'unwatch', path }`, where `path` is relative to
- * the session's workspace exactly like `fs.tree`'s. A path that fails
- * resolution, or a rejection past the watcher cap, is answered with
- * `{ dir, ok: false }` so the client can stop asking rather than retry.
- * @param ctx - host plugin context (session cwd).
- * @param ws - the accepted socket.
- * @param req - the upgrade request carrying `?sessionId=`.
+ * Open one agent-opens subscription — the shared seam both transports ride:
+ * the legacy `/sidebar/ws/agent-opens` endpoint shell (one per socket) and
+ * the feed's `agent-opens` channel (one per sub key). Attach replays the
+ * queued (undelivered) requests for the session; the returned disposer
+ * detaches the view again so later opens queue instead of accumulating on
+ * a dead socket.
+ * @param registry - the open-request registry.
+ * @param sessionId - the session whose sidebar the view serves.
+ * @param send - delivers one open request to the view.
+ * @returns the disposer.
  */
-async function attachFsWatch(
-  ctx: Context,
-  ws: WebSocket,
-  req: SidebarHttpRequest,
-): Promise<void> {
-  try {
-    const url = new URL(req.url ?? '/', 'http://dsh.internal')
-    const sessionId = url.searchParams.get('sessionId')
-    if (sessionId === null) {
-      ws.close(1008, 'sessionId is required')
-      return
-    }
-    const watchers = createDirectoryWatchers(
-      (event) => {
-        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ dir: event.dir }))
-      },
-      (dir, error) => {
-        ctx.logger.warn('dsh-better-sidebar: cannot watch %s', dir)
-        ctx.logger.warn(error)
-        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ dir, ok: false }))
-      },
-    )
-    ws.on('close', () => { watchers.close() })
-    ws.on('error', () => { watchers.close() })
-    ws.on('message', (data) => {
-      void handleFsWatchFrame(ctx, ws, watchers, sessionId, data)
-    })
-  } catch (error) {
-    ws.close(1011, error instanceof Error ? error.message : String(error))
-  }
-}
-
-/**
- * Apply one watch frame.
- * @param ctx - host plugin context.
- * @param ws - the owning socket.
- * @param watchers - the socket's watcher set.
- * @param sessionId - the session the socket was opened for.
- * @param data - the raw frame text.
- */
-async function handleFsWatchFrame(
-  ctx: Context,
-  ws: WebSocket,
-  watchers: DirectoryWatchers,
+function openAgentOpensSubscription(
+  registry: AgentOpenRegistry,
   sessionId: string,
-  data: unknown,
-): Promise<void> {
-  let frame: FsWatchFrame
-  try {
-    frame = JSON.parse(typeof data === 'string' ? data : String(data)) as FsWatchFrame
-  } catch {
-    return
-  }
-  const path = typeof frame.path === 'string' ? frame.path : undefined
-  if (path === undefined || path === '') return
-  try {
-    const cwd = await activeWorktreeRootOf(ctx, sessionId, await sessionCwdOf(ctx, sessionId))
-    const dir = await ensureWorkspacePath(cwd, path)
-    if (frame.op === 'unwatch') {
-      watchers.remove(dir)
-      return
-    }
-    if (frame.op !== 'watch') return
-    const ok = watchers.add(dir)
-    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ dir, ok }))
-  } catch (error) {
-    // The tree keeps working without live refresh; a refused path is reported
-    // once so the client stops asking for it.
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ dir: path, ok: false, reason: error instanceof Error ? error.message : String(error) }))
-    }
-  }
+  send: (request: AgentOpenRequest) => void,
+): () => void {
+  return registry.attach(sessionId, send)
 }
 
 /** Push queued `sidebar_open` requests for one session to a connected view. */
@@ -2551,15 +2508,11 @@ async function attachAgentOpen(
       ws.close(1008, 'sessionId is required')
       return
     }
-    const send = (request: AgentOpenRequest): void => {
+    const unsubscribe = openAgentOpensSubscription(registry, sessionId, (request) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify(request))
       }
-    }
-    // Attach replays the queued (undelivered) requests for this session; the
-    // disposer detaches the view on socket close/error so later opens queue
-    // instead of accumulating on a dead socket.
-    const unsubscribe = registry.attach(sessionId, send)
+    })
     ws.on('close', () => { unsubscribe() })
     ws.on('error', () => { unsubscribe() })
   } catch (error) {

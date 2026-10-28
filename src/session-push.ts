@@ -173,7 +173,16 @@ interface WatchFrame {
 
 /** The host-side push hub: one event feed, any number of sockets. */
 export interface SessionPushHub {
-  /** Attach one accepted socket (reads its watch frames, pushes notices). */
+  /**
+   * Open one subscription: its watch set is held until it closes, its
+   * frames ride its own sink. The feed multiplexer opens one per (channel,
+   * key); the legacy endpoint one per socket.
+   * @param options - the frame sink plus whether the subscription hears the
+   *   project-level `history-seed` broadcasts (the feed's session-less
+   *   project subscription turns it on, a session-scoped sub leaves it off).
+   */
+  subscribe(options: SessionSubscribeOptions): SessionSubscription
+  /** Attach one accepted socket — a thin shell over {@link subscribe}. */
   attach(ws: WebSocket): void
   /**
    * Push one batch of freshly recorded prompt-history records to every socket
@@ -190,6 +199,30 @@ export interface SessionPushHub {
   dispose(): void
 }
 
+/** What one subscription contributes: its frame sink and its seed scope. */
+export interface SessionSubscribeOptions {
+  /** Receives this subscription's frames (never called after `close`). */
+  onFrame: (frame: SessionPushFrame) => void
+  /**
+   * Whether this subscription hears the project-level `history-seed`
+   * broadcasts. The legacy endpoint turns it on for every socket (the
+   * historical all-sockets broadcast); the feed carries the seed state on
+   * the channel's session-LESS subscription, so a session-scoped feed sub
+   * leaves it off.
+   */
+  seed?: boolean
+}
+
+/** One subscription (a legacy endpoint socket, or one feed sub) of the hub. */
+export interface SessionSubscription {
+  /** Full replacement of the watched session set. */
+  watch(sessionIds: readonly string[]): void
+  /** Apply one raw client frame (the legacy endpoint socket's inbound feed). */
+  onMessage(data: unknown): void
+  /** Release the subscription; no further frames. */
+  close(): void
+}
+
 /**
  * Register the session push feed.
  * @param ctx - host plugin context (its `on` subscribes the append feed).
@@ -199,11 +232,29 @@ export interface SessionPushHub {
  * @returns the hub plus a disposer unbinding the listener.
  */
 export function createSessionPushHub(ctx: Context, options?: SessionPushHubOptions): SessionPushHub {
-  const sockets = new Set<SessionSocket>()
+  const subscriptions = new Set<SessionSubscriptionImpl>()
+  const noSubscription = (): SessionSubscription => {
+    const noop = (): void => {}
+    return { watch: noop, onMessage: noop, close: noop }
+  }
+  const openSubscription = (sub: SessionSubscribeOptions): SessionSubscription => {
+    const subscription = new SessionSubscriptionImpl(
+      sub,
+      { onClosed: () => { subscriptions.delete(subscription) }, resolveCwd: options?.resolveCwd, resolvePhase: options?.resolvePhase },
+    )
+    subscriptions.add(subscription)
+    return subscription
+  }
   if (typeof ctx.on !== 'function') {
     // Test doubles without the event API still accept sockets, which then
     // simply never hear anything.
-    return { attach: () => {}, notifyHistory: () => {}, notifyHistorySeed: () => {}, dispose: () => {} }
+    return {
+      subscribe: noSubscription,
+      attach: () => {},
+      notifyHistory: () => {},
+      notifyHistorySeed: () => {},
+      dispose: () => {},
+    }
   }
   const offEvent = ctx.on('session/event', (session, event) => {
     const sessionId = (session as { id?: unknown } | null)?.id
@@ -213,17 +264,17 @@ export function createSessionPushHub(ctx: Context, options?: SessionPushHubOptio
     // subset of the log, so the one honest signal is "a row landed", with the
     // per-socket 250ms window bounding a burst. The specific kinds below stay
     // exactly as they were.
-    for (const socket of sockets) socket.notifyOps(sessionId, event.seq)
+    for (const subscription of subscriptions) subscription.notifyOps(sessionId, event.seq)
     // Same verdict as the `session.phase` route: the first user/assistant
     // message is the flip out of blank.
     if (event.type === 'user/message' || event.type === 'assistant/message') {
-      for (const socket of sockets) socket.notifyPhase(sessionId)
+      for (const subscription of subscriptions) subscription.notifyPhase(sessionId)
       // A durable `assistant/message` row is one SETTLED reply step (stream
       // frames never reach the log) — each row schedules its own coalesced
       // turn beat, so the turn's last row pushes the completion frame. A
       // `user/message` is the ask, not an answer: no turn frame for it.
       if (event.type === 'assistant/message') {
-        for (const socket of sockets) socket.notifyTurn(sessionId)
+        for (const subscription of subscriptions) subscription.notifyTurn(sessionId)
       }
       return
     }
@@ -231,47 +282,64 @@ export function createSessionPushHub(ctx: Context, options?: SessionPushHubOptio
     // window bounds the frequency, and the window's frame resolves the answer
     // itself (fresh), so the client never has to re-ask over HTTP.
     if (event.type === 'tool/call') {
-      for (const socket of sockets) socket.notifyCwd(sessionId)
+      for (const subscription of subscriptions) subscription.notifyCwd(sessionId)
     }
   })
   return {
+    subscribe: (sub) => openSubscription(sub),
     attach: (ws) => {
-      const socket = new SessionSocket(
-        ws,
-        () => { sockets.delete(socket) },
-        options?.resolveCwd,
-        options?.resolvePhase,
-      )
-      sockets.add(socket)
+      // The endpoint shell: one subscription (the historical all-sockets
+      // seed broadcast included), its frames on the socket, its lifetime
+      // the socket's — the feed opens the same shape per sub key.
+      const subscription = openSubscription({
+        seed: true,
+        onFrame: (frame) => {
+          try {
+            ws.send(JSON.stringify(frame))
+          } catch {
+            // A send on a dying socket is expected; the close handler cleans up.
+          }
+        },
+      })
+      ws.on('message', (data: unknown) => { subscription.onMessage(data) })
+      ws.on('close', () => { subscription.close() })
+      ws.on('error', () => { subscription.close() })
     },
     notifyHistory: (sessionId, records) => {
       // Event level, no one-shot/debounce: each record batch goes out as-is to
       // every socket watching the session (unwatched sockets stay silent).
       if (records.length === 0) return
-      for (const socket of sockets) socket.notifyHistory(sessionId, records)
+      for (const subscription of subscriptions) subscription.notifyHistory(sessionId, records)
     },
     notifyHistorySeed: (projectRoot, seeding) => {
       // Project-scoped: broadcast, no watch filter (the seeding tab may not
       // watch every session the scan covers yet — that is exactly the gap the
       // completion frame's client-side refetch closes).
-      for (const socket of sockets) socket.notifyHistorySeed(projectRoot, seeding)
+      for (const subscription of subscriptions) subscription.notifyHistorySeed(projectRoot, seeding)
     },
     dispose: () => {
       offEvent()
-      for (const socket of sockets) socket.close()
-      sockets.clear()
+      for (const subscription of subscriptions) subscription.close()
+      subscriptions.clear()
     },
   }
 }
 
-/** One attached socket's watch set, phase one-shots and cwd/turn coalescing timers. */
-class SessionSocket {
-  private readonly socket: WebSocket
-  private readonly onClosed: () => void
-  private readonly resolveCwd: ((sessionId: string) => Promise<SessionCwdAnswer>) | undefined
-  private readonly resolvePhase: ((sessionId: string) => Promise<SessionPhaseAnswer>) | undefined
+/** The per-subscription seam the hub hands each {@link SessionSubscriptionImpl}. */
+interface SessionSocketHub {
+  onClosed: () => void
+  resolveCwd: ((sessionId: string) => Promise<SessionCwdAnswer>) | undefined
+  resolvePhase: ((sessionId: string) => Promise<SessionPhaseAnswer>) | undefined
+}
+
+/** One attached subscription's watch set, phase one-shots and coalescing timers. */
+class SessionSubscriptionImpl {
+  private readonly onFrame: (frame: SessionPushFrame) => void
+  private readonly hub: SessionSocketHub
+  /** Whether this subscription hears the project-level seed broadcasts. */
+  private readonly seed: boolean
   private readonly watched = new Set<string>()
-  /** Sessions this socket already heard the blank flip for (one frame, ever). */
+  /** Sessions this subscription already heard the blank flip for (one frame, ever). */
   private readonly phased = new Set<string>()
   /** Pending cwd windows, keyed by session id. */
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -286,28 +354,18 @@ class SessionSocket {
   private closed = false
 
   /**
-   * @param socket - the accepted WebSocket.
-   * @param onClosed - hub-side cleanup (idempotent).
-   * @param resolveCwd - cwd answer source; omitted, cwd frames stay bare.
-   * @param resolvePhase - phase answer source; omitted, watch stays phase-silent.
+   * @param options - the subscription's own frame sink and seed scope.
+   * @param hub - the hub seam: close registration and the answer resolvers.
    */
-  constructor(
-    socket: WebSocket,
-    onClosed: () => void,
-    resolveCwd?: (sessionId: string) => Promise<SessionCwdAnswer>,
-    resolvePhase?: (sessionId: string) => Promise<SessionPhaseAnswer>,
-  ) {
-    this.socket = socket
-    this.onClosed = onClosed
-    this.resolveCwd = resolveCwd
-    this.resolvePhase = resolvePhase
-    socket.on('message', (data: unknown) => { this.onMessage(data) })
-    socket.on('close', () => { this.close() })
-    socket.on('error', () => { this.close() })
+  constructor(options: SessionSubscribeOptions, hub: SessionSocketHub) {
+    this.onFrame = options.onFrame
+    this.seed = options.seed === true
+    this.hub = hub
   }
 
   /** Apply one client frame (an unparseable frame is ignored, never fatal). */
-  private onMessage(data: unknown): void {
+  onMessage(data: unknown): void {
+    if (this.closed) return
     let frame: WatchFrame
     try {
       frame = JSON.parse(typeof data === 'string' ? data : String(data)) as WatchFrame
@@ -318,12 +376,24 @@ class SessionSocket {
     const ids = Array.isArray(frame.sessionIds)
       ? frame.sessionIds.filter((id): id is string => typeof id === 'string' && id !== '')
       : []
+    this.watch(ids)
+  }
+
+  /**
+   * Full replacement of the watched session set. Unwatched sessions drop
+   * their pending notice, timer and phase one-shot with them. A later
+   * re-watch may notify again — a client re-subscribing is exactly the case
+   * that must hear the flip once more. A NEWLY watched session hears its
+   * CURRENT answers right away: a client re-subscribing (every reconnect
+   * re-sends the whole watch set on a fresh socket) is exactly the case that
+   * must not wait for the next event — cwd's live root AND the phase's
+   * current blank state. A repeated identical watch adds nothing.
+   */
+  watch(sessionIds: readonly string[]): void {
+    if (this.closed) return
     const previous = new Set(this.watched)
     this.watched.clear()
-    for (const id of ids.slice(0, MAX_WATCHED)) this.watched.add(id)
-    // Unwatched sessions drop their pending notice, timer and phase one-shot
-    // with them. A later re-watch may notify again — a client re-subscribing
-    // is exactly the case that must hear the flip once more.
+    for (const id of sessionIds.slice(0, MAX_WATCHED)) this.watched.add(id)
     for (const id of [...this.phased]) {
       if (!this.watched.has(id)) this.phased.delete(id)
     }
@@ -346,11 +416,6 @@ class SessionSocket {
       clearTimeout(pending.timer)
       this.opsTimers.delete(id)
     }
-    // A NEWLY watched session hears its CURRENT answers right away: a client
-    // re-subscribing (every reconnect re-sends the whole watch set on a fresh
-    // socket) is exactly the case that must not wait for the next event —
-    // cwd's live root AND the phase's current blank state. A repeated
-    // identical watch frame adds nothing, so it pushes nothing.
     for (const id of this.watched) {
       if (!previous.has(id)) {
         this.pushCwdAnswer(id)
@@ -388,12 +453,15 @@ class SessionSocket {
    * Broadcast a project seed-scan state change. Not watch-gated: the scan's
    * scope routinely covers sessions the client has never listed, and the
    * completion frame is what tells the tab to refetch and discover them.
+   * Only seed-enabled subscriptions hear it — the legacy endpoint turns the
+   * flag on for every socket; the feed carries the seed state on the
+   * channel's session-LESS subscription.
    * @param projectRoot - the project root, identical to `history.list`'s
    *   `project.cwd` (same resolution, so the client can string-compare).
    * @param seeding - true = scan started, false = scan finished.
    */
   notifyHistorySeed(projectRoot: string, seeding: boolean): void {
-    if (this.closed) return
+    if (this.closed || !this.seed) return
     this.send({ kind: 'history-seed', cwd: projectRoot, seeding })
   }
 
@@ -453,7 +521,7 @@ class SessionSocket {
    * is itself the "keep waiting" state).
    */
   private pushPhaseAnswer(sessionId: string): void {
-    const resolve = this.resolvePhase
+    const resolve = this.hub.resolvePhase
     if (resolve === undefined || this.closed || !this.watched.has(sessionId)) return
     void resolve(sessionId)
       .then(answer => {
@@ -483,7 +551,7 @@ class SessionSocket {
       this.timers.delete(sessionId)
       // Without a resolver the frame stays the bare invalidation (the
       // pre-answer-wire format, kept for older clients).
-      if (this.resolveCwd === undefined) {
+      if (this.hub.resolveCwd === undefined) {
         this.send({ kind: 'cwd', sessionId })
         return
       }
@@ -503,7 +571,7 @@ class SessionSocket {
    * degradation path, not a silently swallowed error.
    */
   private pushCwdAnswer(sessionId: string): void {
-    const resolve = this.resolveCwd
+    const resolve = this.hub.resolveCwd
     if (resolve === undefined || this.closed || !this.watched.has(sessionId)) return
     void resolve(sessionId)
       .then(answer => {
@@ -527,14 +595,10 @@ class SessionSocket {
       })
   }
 
-  /** Push one notice (silently dropped once the socket is gone). */
+  /** Push one notice (silently dropped once the subscription is gone). */
   private send(frame: SessionPushFrame): void {
     if (this.closed) return
-    try {
-      this.socket.send(JSON.stringify(frame))
-    } catch {
-      // A send on a dying socket is expected; the close handler cleans up.
-    }
+    this.onFrame(frame)
   }
 
   /** Release every timer and de-register (idempotent). */
@@ -549,6 +613,6 @@ class SessionSocket {
     this.opsTimers.clear()
     this.watched.clear()
     this.phased.clear()
-    this.onClosed()
+    this.hub.onClosed()
   }
 }

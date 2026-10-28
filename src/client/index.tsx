@@ -33,6 +33,7 @@ import { registerImeGuard } from './ime-guard.ts'
 import { createPrefsWriter, loadBootDecision } from './prefs.ts'
 import { createRightbarWidthSync } from './sidebar/rightbar-width.ts'
 import { registerTransferToast } from './TransferToast.tsx'
+import { attachFeedRelease } from './feed-release.ts'
 import { registerWorkspaceLinkMenu } from './workspace-link-menu.ts'
 import { registerWorkspaceFocus } from './workspace-focus-dom.ts'
 import { api } from './api.ts'
@@ -273,6 +274,15 @@ export function apply(ctx: Context): void {
   ctx.effect(
     () => registerTransferToast(),
     'dsh-better-sidebar: paste transfer toast',
+  )
+  // 会话切走延时释放: after the active session changes, a timer (default 30s,
+  // 0 = off, project-overridable) suspends the OLD session's push
+  // subscriptions on the shared feed socket; switching back inside the
+  // window cancels it, switching back after re-subscribes (seed snapshots
+  // restore the data). One controller per activation, over the one store.
+  ctx.effect(
+    () => attachFeedRelease(sidebarStore),
+    'dsh-better-sidebar: feed subscription release timer',
   )
   // 工作区行「更多」菜单的「独立工作区链接」两项（复制 / 新窗口打开）：
   // 核心的工作区菜单是硬编码数组（rename/delete），没有工作区级菜单 slot，

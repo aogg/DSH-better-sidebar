@@ -85,10 +85,35 @@ export interface SidechatThreadsNotifier {
 
 /** The host-side push hub: one set of feeds, any number of sockets. */
 export interface SidechatPushHub extends SidechatThreadsNotifier {
-  /** Attach one accepted socket (reads its watch frames, pushes notices). */
+  /**
+   * Open one subscription: its watch set is held until it closes, its
+   * frames ride its own sink. The feed multiplexer opens one per (channel,
+   * key); the legacy endpoint one per socket.
+   */
+  subscribe(options: SidechatSubscribeOptions): SidechatSubscription
+  /** Attach one accepted socket — a thin shell over {@link subscribe}. */
   attach(ws: WebSocket): void
   /** Release the session feeds (socket teardown stays with the server). */
   dispose(): void
+}
+
+/** What one subscription contributes: its frame sink. */
+export interface SidechatSubscribeOptions {
+  /** Receives this subscription's frames (never called after `close`). */
+  onFrame: (frame: SidechatPushFrame) => void
+}
+
+/** One subscription (a legacy endpoint socket, or one feed sub) of the hub. */
+export interface SidechatSubscription {
+  /**
+   * Full replacement of the watch set: the watched thread ids plus whether
+   * the GLOBAL thread-set channel is subscribed (absent = not).
+   */
+  setWatch(threadIds: readonly string[], threads: boolean): void
+  /** Apply one raw client frame (the legacy endpoint socket's inbound feed). */
+  onMessage(data: unknown): void
+  /** Release the subscription; no further frames. */
+  close(): void
 }
 
 /**
@@ -97,21 +122,30 @@ export interface SidechatPushHub extends SidechatThreadsNotifier {
  * @returns the hub plus a disposer unbinding both listeners.
  */
 export function createSidechatPushHub(ctx: Context): SidechatPushHub {
-  const sockets = new Set<SidechatSocket>()
+  const subscriptions = new Set<SidechatSubscriptionImpl>()
+  const noSubscription = (): SidechatSubscription => {
+    const noop = (): void => {}
+    return { setWatch: noop, onMessage: noop, close: noop }
+  }
+  const openSubscription = (options: SidechatSubscribeOptions): SidechatSubscription => {
+    const subscription = new SidechatSubscriptionImpl(options, () => { subscriptions.delete(subscription) })
+    subscriptions.add(subscription)
+    return subscription
+  }
   if (typeof ctx.on !== 'function') {
     // Test doubles without the event API still accept sockets, which then
     // simply never hear anything.
-    return { attach: () => {}, dispose: () => {}, notifyThreads: () => {} }
+    return { subscribe: noSubscription, attach: () => {}, dispose: () => {}, notifyThreads: () => {} }
   }
   const offEvent = ctx.on('session/event', (session) => {
     const sessionId = (session as { id?: unknown } | null)?.id
     if (typeof sessionId !== 'string') return
-    for (const socket of sockets) {
-      socket.notify(sessionId, DURABLE_DEBOUNCE_MS)
+    for (const subscription of subscriptions) {
+      subscription.notify(sessionId, DURABLE_DEBOUNCE_MS)
       // ANY durable append may move the global groups: a turn/start or
       // turn/end flips `running`, any other append bumps last activity —
       // and both are exactly what the threads channel exists to announce.
-      socket.notifyThreads(THREADS_DEBOUNCE_MS)
+      subscription.notifyThreads(THREADS_DEBOUNCE_MS)
     }
   })
   const offStream = ctx.on('agent/assistant-stream', (payload) => {
@@ -119,59 +153,70 @@ export function createSidechatPushHub(ctx: Context): SidechatPushHub {
     const session = (record?.agent as { session?: { id?: unknown } } | undefined)?.session
     const sessionId = typeof session?.id === 'string' ? session.id : undefined
     if (sessionId === undefined) return
-    for (const socket of sockets) {
-      socket.notify(sessionId, STREAM_DEBOUNCE_MS)
+    for (const subscription of subscriptions) {
+      subscription.notify(sessionId, STREAM_DEBOUNCE_MS)
       // Stream deltas prove the thread is running RIGHT NOW — the strongest
       // possible 「全局运行中」 signal, so they ride the threads channel too.
-      socket.notifyThreads(THREADS_DEBOUNCE_MS)
+      subscription.notifyThreads(THREADS_DEBOUNCE_MS)
     }
   })
   return {
+    subscribe: (options) => openSubscription(options),
     attach: (ws) => {
-      const socket = new SidechatSocket(ws, () => { sockets.delete(socket) })
-      sockets.add(socket)
+      // The endpoint shell: one subscription, its frames on the socket, its
+      // lifetime the socket's — the feed opens the same shape per sub key.
+      const subscription = openSubscription({
+        onFrame: (frame) => {
+          try {
+            ws.send(JSON.stringify(frame))
+          } catch {
+            // A send on a dying socket is expected; the close handler cleans up.
+          }
+        },
+      })
+      ws.on('message', (data: unknown) => { subscription.onMessage(data) })
+      ws.on('close', () => { subscription.close() })
+      ws.on('error', () => { subscription.close() })
     },
     notifyThreads: () => {
       // Route-driven poke (thread created / renamed / disposed): same
       // coalescing window, so a create that immediately streams folds into
       // the notice the feeds are already arming.
-      for (const socket of sockets) socket.notifyThreads(THREADS_DEBOUNCE_MS)
+      for (const subscription of subscriptions) subscription.notifyThreads(THREADS_DEBOUNCE_MS)
     },
     dispose: () => {
       offEvent()
       offStream()
-      for (const socket of sockets) socket.close()
-      sockets.clear()
+      for (const subscription of subscriptions) subscription.close()
+      subscriptions.clear()
     },
   }
 }
 
-/** One attached socket's watch set and per-channel coalescing timers. */
-class SidechatSocket {
-  private readonly socket: WebSocket
+/** One subscription's watch set and per-channel coalescing timers. */
+class SidechatSubscriptionImpl {
+  private readonly onFrame: (frame: SidechatPushFrame) => void
   private readonly onClosed: () => void
   private readonly watched = new Set<string>()
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>()
-  /** Whether this socket also hears the GLOBAL thread-set channel. */
+  /** Whether this subscription also hears the GLOBAL thread-set channel. */
   private threads = false
-  /** The armed threads-coalescing timer (one per socket, not per thread). */
+  /** The armed threads-coalescing timer (one per subscription, not per thread). */
   private threadsTimer: ReturnType<typeof setTimeout> | undefined
   private closed = false
 
   /**
-   * @param socket - the accepted WebSocket.
+   * @param options - the subscription's frame sink.
    * @param onClosed - hub-side cleanup (idempotent).
    */
-  constructor(socket: WebSocket, onClosed: () => void) {
-    this.socket = socket
+  constructor(options: SidechatSubscribeOptions, onClosed: () => void) {
+    this.onFrame = options.onFrame
     this.onClosed = onClosed
-    socket.on('message', (data: unknown) => { this.onMessage(data) })
-    socket.on('close', () => { this.close() })
-    socket.on('error', () => { this.close() })
   }
 
   /** Apply one client frame (an unparseable frame is ignored, never fatal). */
-  private onMessage(data: unknown): void {
+  onMessage(data: unknown): void {
+    if (this.closed) return
     let frame: WatchFrame
     try {
       frame = JSON.parse(typeof data === 'string' ? data : String(data)) as WatchFrame
@@ -182,12 +227,20 @@ class SidechatSocket {
     const ids = Array.isArray(frame.threadIds)
       ? frame.threadIds.filter((id): id is string => typeof id === 'string' && id !== '')
       : []
+    this.setWatch(ids, frame.threads === true)
+  }
+
+  /**
+   * Full replacement of the watch set. The threads channel is opt-in
+   * (absent flag = not subscribed — the backward-compatible shape).
+   * Unsubscribing drops the pending notice with its timer, like an
+   * unwatched thread does.
+   */
+  setWatch(threadIds: readonly string[], threads: boolean): void {
+    if (this.closed) return
     this.watched.clear()
-    for (const id of ids.slice(0, MAX_WATCHED)) this.watched.add(id)
-    // The threads channel is opt-in per watch frame (absent key = not
-    // subscribed — the backward-compatible shape). Unsubscribing drops the
-    // pending notice with its timer, like an unwatched thread does.
-    this.threads = frame.threads === true
+    for (const id of threadIds.slice(0, MAX_WATCHED)) this.watched.add(id)
+    this.threads = threads
     if (!this.threads && this.threadsTimer !== undefined) {
       clearTimeout(this.threadsTimer)
       this.threadsTimer = undefined
@@ -229,14 +282,10 @@ class SidechatSocket {
     }, delayMs)
   }
 
-  /** Push one notice (silently dropped once the socket is gone). */
+  /** Push one notice (silently dropped once the subscription is gone). */
   private send(frame: SidechatPushFrame): void {
     if (this.closed) return
-    try {
-      this.socket.send(JSON.stringify(frame))
-    } catch {
-      // A send on a dying socket is expected; the close handler cleans up.
-    }
+    this.onFrame(frame)
   }
 
   /** Release every timer and de-register (idempotent). */

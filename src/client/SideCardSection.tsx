@@ -57,6 +57,12 @@ import type { SidebarPrefs } from '../prefs-shared.ts'
 import { PROJECT_SETTINGS_KEY, RIGHTBAR_RATIO_MAX, RIGHTBAR_RATIO_MIN } from '../prefs-shared.ts'
 import { api } from './api.ts'
 import { parsePrefs } from './prefs.ts'
+import {
+  FEEDS_SETTINGS_BLOB_ID,
+  RELEASE_DELAY_DEFAULT_SEC,
+  RELEASE_DELAY_KEY,
+  RELEASE_DELAY_MAX_SEC,
+} from './feed-release-settings.ts'
 import { AddPluginModal, type PluginKind } from './add-plugin-modal.tsx'
 import { OpenWithSettings } from './open-with-settings.tsx'
 import { baseName } from './paths.ts'
@@ -559,6 +565,55 @@ function HistoryStoragePathDraft(props: {
 }
 
 /**
+ * The 推送订阅释放延时 input (the 会话切走释放 setting): a controlled number
+ * input whose draft is local state, committed on blur/Enter through the
+ * parent's onCommit (seconds; 0 = the release is off). Keyed by the stored
+ * value so an external commit remounts it with the canonical text (same
+ * pattern as TypedRow / HistoryStoragePathDraft).
+ */
+function ReleaseDelayDraft(props: {
+  value: number
+  onCommit: (next: number) => void
+  label: string
+}) {
+  const { value, onCommit, label } = props
+  const [draft, setDraft] = useState(String(value))
+  const commit = (): void => {
+    const parsed = Number(draft)
+    if (!Number.isFinite(parsed)) {
+      setDraft(String(value))
+      return
+    }
+    const clamped = Math.min(RELEASE_DELAY_MAX_SEC, Math.max(0, Math.round(parsed)))
+    if (clamped === value) {
+      setDraft(String(value))
+      return
+    }
+    onCommit(clamped)
+  }
+  return (
+    <span className={css.control}>
+      <Input
+        type="number"
+        className={css.typedInputNumber}
+        value={draft}
+        min={0}
+        max={RELEASE_DELAY_MAX_SEC}
+        step={1}
+        placeholder={String(RELEASE_DELAY_DEFAULT_SEC)}
+        aria-label={label}
+        onChange={event => { setDraft(event.currentTarget.value) }}
+        onBlur={commit}
+        onKeyDown={event => {
+          if (event.key === 'Enter') event.currentTarget.blur()
+        }}
+      />
+      <span className={css.suffix}>{t('feedReleaseDelayUnit')}</span>
+    </span>
+  )
+}
+
+/**
  * The reusable dropdown — the primitives Menu, NOT a native <select>: a
  * closed anchor button (picked option text + chevron) opening one Menu item
  * per option (big-icon cards when any option carries an icon). Single-pick
@@ -1037,6 +1092,28 @@ export function SideCardSection({ store, service }: SideCardSectionProps) {
     applyPref({ historyStoragePath: raw })
   }
 
+  /**
+   * The 推送订阅释放延时 (会话切走后释放推送订阅延时, seconds; 0 = off): the
+   * GLOBAL value lives in the plugin-owned `pluginSettings['feeds']` blob
+   * (no host PrefsSchema field — the blob maps pass the schema untouched),
+   * and the PROJECT value in the reserved `__project` blob keyed by the
+   * workspace root, resolved by feed-release-settings (project wins). Both
+   * rows commit through the same optimistic pipeline as every other row.
+   */
+  const feedsBlob = prefs.pluginSettings[FEEDS_SETTINGS_BLOB_ID] ?? EMPTY_PROJECT_BLOB
+  const releaseDelayGlobal = typeof feedsBlob[RELEASE_DELAY_KEY] === 'number'
+    ? (feedsBlob[RELEASE_DELAY_KEY] as number)
+    : RELEASE_DELAY_DEFAULT_SEC
+  const releaseDelayProject = typeof projectBlob[RELEASE_DELAY_KEY] === 'number'
+    ? (projectBlob[RELEASE_DELAY_KEY] as number)
+    : RELEASE_DELAY_DEFAULT_SEC
+  const commitGlobalReleaseDelay = (next: number): void => {
+    applyPluginSetting(FEEDS_SETTINGS_BLOB_ID, RELEASE_DELAY_KEY, next)
+  }
+  const commitProjectReleaseDelay = (next: number): void => {
+    writeProjectBlob(RELEASE_DELAY_KEY, next)
+  }
+
   /** Persist one plugin-owned setting of one descriptor (merged into the pluginSettings blob). */
   const applyPluginSetting = (descriptorId: string, key: string, value: unknown): void => {
     applyPref({ pluginSettings: mergePluginSetting(optimisticRef.current.pluginSettings, descriptorId, key, value) })
@@ -1176,6 +1253,21 @@ export function SideCardSection({ store, service }: SideCardSectionProps) {
               pluginSettings={projectBlob}
               updatePluginSetting={writeProjectBlob}
             />
+            {/* The project override of the feed-release delay: wins over the
+                global value for THIS workspace (0 here disables the release
+                for this project even when the global value is positive). */}
+            <div className={css.row} data-dsh-release-delay-project="">
+              <span className={css.rowText}>
+                <span className={css.title}>{t('feedReleaseDelayProjectTitle')}</span>
+                <span className={css.desc}>{t('feedReleaseDelayProjectDesc')}</span>
+              </span>
+              <ReleaseDelayDraft
+                key={releaseDelayProject}
+                value={releaseDelayProject}
+                label={t('feedReleaseDelayProjectTitle')}
+                onCommit={commitProjectReleaseDelay}
+              />
+            </div>
           </div>
         )
       )}
@@ -1253,6 +1345,22 @@ export function SideCardSection({ store, service }: SideCardSectionProps) {
               onCommit={commitHistoryStoragePath}
             />
           </span>
+        </div>
+        {/* 工作区切走后释放推送订阅延时（秒）: the GLOBAL feed-release delay
+            (pluginSettings['feeds'].workspaceReleaseDelaySec; 0 = the old
+            session's push subscriptions stay for the run). The project tab
+            carries the per-workspace override. */}
+        <div className={css.row} data-dsh-release-delay-global="">
+          <span className={css.rowText}>
+            <span className={css.title}>{t('feedReleaseDelayTitle')}</span>
+            <span className={css.desc}>{t('feedReleaseDelayDesc')}</span>
+          </span>
+          <ReleaseDelayDraft
+            key={releaseDelayGlobal}
+            value={releaseDelayGlobal}
+            label={t('feedReleaseDelayTitle')}
+            onCommit={commitGlobalReleaseDelay}
+          />
         </div>
       </div>
 

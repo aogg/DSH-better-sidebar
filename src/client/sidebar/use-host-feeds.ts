@@ -9,19 +9,13 @@ import { useEffect, useRef } from 'react'
 import type { Context, SidebarJobView, SidebarSessionList } from '../../context-types.ts'
 import type { SidebarStore } from '../state.ts'
 import { isNarrowWidth } from '../breakpoints.ts'
-import { hostWebSocketUrl } from '../host-route-url.ts'
+import { feedSubscribe } from '../feed-hub.ts'
 import { detectNewDirectSubagent } from '../subagent-detect.ts'
 import { detectNewJob } from '../subagent-jobs.ts'
 import { clientJobs, useJobsSnapshot } from '../jobs-client.ts'
 import { activateFilesPage } from '../sidebar-folder.ts'
 import { mountedSessionId } from '../native/surface.ts'
 import { t } from '../locales.ts'
-
-/** How long to wait before re-opening a dropped agent-opens socket. The
- * push rule (必须遵守规范): a dropped socket reconnects FOREVER with an
- * exponential backoff to the cap — no failure limit, no polling fallback. */
-const RETRY_BASE_MS = 1000
-const RETRY_MAX_MS = 15_000
 
 /**
  * Subagent auto-open debounce (ms). The host delivers a new child's origin
@@ -149,79 +143,49 @@ export function useHostFeeds(feeds: {
    * matching built-in tab: a file opens in the editor (per-path dedupe), a
    * folder activates the plugin's 「文件」page and reveals the folder row in
    * its tree ({@link activateFilesPage}), and a URL opens in DSH's own
-   * browser tab type. A disconnected socket
-   * reconnects forever with an exponential backoff (1 s → 15 s, reset on
-   * success; never a failure limit, never a polling fallback): the
-   * host queue keeps undelivered requests and replays them on the first
-   * attach, so a refresh or a session switch lands the opens the model
-   * queued while no view was connected.
-   * While the side-card setting is off, pushes are ignored as a defensive
-   * gate — the host already unregisters the tool and drains the queue.
+   * browser tab type. The subscription rides the ONE multiplexed feed socket
+   * (feed-hub.ts, channel `'agent-opens'`), which reconnects forever with an
+   * exponential backoff (1 s → 15 s ±30% jitter, reset on success; never a
+   * failure limit, never a polling fallback): the host queue keeps
+   * undelivered requests and replays them on the first attach, so a refresh
+   * or a session switch lands the opens the model queued while no view was
+   * connected. While the side-card setting is off, pushes are ignored as a
+   * defensive gate — the host already unregisters the tool and drains the
+   * queue.
    */
   useEffect(() => {
     if (sessionId === undefined) return
-    let socket: WebSocket | null = null
-    let retry: number | undefined
-    let closed = false
-    let failures = 0
-    const connect = (): void => {
-      if (closed) return
-      const url = hostWebSocketUrl('sidebar/ws/agent-opens')
-      url.search = new URLSearchParams({ sessionId }).toString()
-      socket = new WebSocket(url.toString())
-      socket.onopen = () => {
-        failures = 0
-      }
-      socket.onmessage = (event) => {
-        if (typeof event.data !== 'string') return
-        try {
-          const request = JSON.parse(event.data) as { kind?: unknown; target?: unknown; title?: unknown }
-          if (request === null || typeof request !== 'object') return
-          if (request.kind !== 'file' && request.kind !== 'folder' && request.kind !== 'url') return
-          if (typeof request.target !== 'string' || request.target === '') return
-          if (store.getPrefs().agentOpenTools !== true) return
-          const scope = { sessionId }
-          const title = typeof request.title === 'string' && request.title !== '' ? request.title : undefined
-          if (request.kind === 'url') {
-            // DSH's own browser tab type (absent from the plugin's registry
-            // since 0.20.0); an unregistered kind throws, so the agent-open
-            // path degrades to doing nothing rather than breaking the push.
-            try {
-              ctx.get('sidebarRight')?.openTab('browser', { params: { url: request.target } })
-            } catch {
-              // Host without a browser tab type: nothing to open into.
-            }
-          } else if (request.kind === 'folder') {
-            // A folder link lands on the plugin's 「文件」page: activate it
-            // (single instance — no folder window) and reveal the folder row
-            // in its tree ({@link activateFilesPage}).
-            activateFilesPage(ctx, store, sessionId, request.target)
-          } else {
-            ctx.get('betterSidebar')?.openFile(scope, request.target, title)
+    const subscription = feedSubscribe({
+      channel: 'agent-opens',
+      sessionId,
+      onData: (data) => {
+        if (data === null || typeof data !== 'object') return
+        const request = data as { kind?: unknown; target?: unknown; title?: unknown }
+        if (request.kind !== 'file' && request.kind !== 'folder' && request.kind !== 'url') return
+        if (typeof request.target !== 'string' || request.target === '') return
+        if (store.getPrefs().agentOpenTools !== true) return
+        const scope = { sessionId }
+        const title = typeof request.title === 'string' && request.title !== '' ? request.title : undefined
+        if (request.kind === 'url') {
+          // DSH's own browser tab type (absent from the plugin's registry
+          // since 0.20.0); an unregistered kind throws, so the agent-open
+          // path degrades to doing nothing rather than breaking the push.
+          try {
+            ctx.get('sidebarRight')?.openTab('browser', { params: { url: request.target } })
+          } catch {
+            // Host without a browser tab type: nothing to open into.
           }
-        } catch {
-          // Malformed push: ignore (the next push carries its own request).
+        } else if (request.kind === 'folder') {
+          // A folder link lands on the plugin's 「文件」page: activate it
+          // (single instance — no folder window) and reveal the folder row
+          // in its tree ({@link activateFilesPage}).
+          activateFilesPage(ctx, store, sessionId, request.target)
+        } else {
+          ctx.get('betterSidebar')?.openFile(scope, request.target, title)
         }
-      }
-      socket.onclose = () => {
-        if (closed) return
-        failures += 1
-        // Never give up (the push rule): each consecutive failure only
-        // widens the gap, up to the cap. The log is throttled so a long
-        // outage cannot spam — the first drop, then every 10th failure.
-        if (failures === 1 || failures % 10 === 0) {
-          console.error('[dsh-better-sidebar] agent-opens connection dropped; reconnecting', sessionId)
-        }
-        retry = window.setTimeout(connect, Math.min(RETRY_BASE_MS * 2 ** (failures - 1), RETRY_MAX_MS))
-      }
-      socket.onerror = () => { socket?.close() }
-    }
-    connect()
-    return () => {
-      closed = true
-      window.clearTimeout(retry)
-      socket?.close()
-    }
+      },
+    })
+    return () => { subscription.close() }
   }, [sessionId, ctx, store])
 
   /**

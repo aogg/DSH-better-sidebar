@@ -43,13 +43,16 @@ class FakeWebSocket {
   onclose: (() => void) | null = null
   onerror: (() => void) | null = null
   close = (): void => {}
+  sent: string[] = []
+  send(data: string): void { this.sent.push(data) }
   constructor(readonly url: string) { sockets.push(this) }
 }
 
-/** The agent-opens socket the shell opened for this mount. */
+/** The feed socket the shell opened for this mount (the agent-opens
+ *  channel rides the multiplexer now). */
 function agentOpensSocket(): FakeWebSocket {
-  const socket = sockets.find(candidate => candidate.url.includes('agent-opens'))
-  if (socket === undefined) throw new Error(`no agent-opens socket in ${JSON.stringify(sockets.map(s => s.url))}`)
+  const socket = sockets.find(candidate => candidate.url.includes('ws/feed'))
+  if (socket === undefined) throw new Error(`no feed socket in ${JSON.stringify(sockets.map(s => s.url))}`)
   return socket
 }
 
@@ -179,8 +182,24 @@ function mountSidebar(prefs: Record<string, unknown> = {}): MountedSidebar {
 }
 
 /** Push one agent-open frame into the feed the shell subscribed to. */
+/** The sessionIds a feed socket subscribed on one channel (its sub frames). */
+function agentOpensSessions(socket: FakeWebSocket): string[] {
+  const ids: string[] = []
+  for (const frame of socket.sent) {
+    try {
+      const parsed = JSON.parse(frame) as { op?: string; channel?: string; sessionId?: string }
+      if (parsed.op === 'sub' && parsed.channel === 'agent-opens' && typeof parsed.sessionId === 'string') ids.push(parsed.sessionId)
+    } catch {
+      // Not a control frame.
+    }
+  }
+  return ids
+}
+
 function push(socket: FakeWebSocket, request: Record<string, unknown>): void {
-  act(() => { socket.onmessage?.({ data: JSON.stringify(request) }) })
+  const sessions = agentOpensSessions(socket)
+  if (sessions.length === 0) throw new Error('the agent-opens channel was never subscribed')
+  act(() => { socket.onmessage?.({ data: JSON.stringify({ channel: 'agent-opens', sessionId: sessions[0], data: request }) }) })
 }
 
 beforeEach(() => {
@@ -202,8 +221,8 @@ describe('agent-opens folder link → the files page + reveal', () => {
   it('activates the files page and reveals the folder row (opened, not just pointed at)', () => {
     const sidebar = mountSidebar()
     const socket = agentOpensSocket()
-    // The feed subscribed for THIS session.
-    expect(socket.url).toContain(`sessionId=${encodeURIComponent(sidebar.sessionId)}`)
+    // The channel is subscribed for THIS session (the sub frame's sessionId).
+    expect(agentOpensSessions(socket)).toEqual([sidebar.sessionId])
 
     push(socket, { kind: 'folder', target: '/tmp/src/sub', title: 'sub' })
 

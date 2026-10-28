@@ -125,11 +125,11 @@ describe('host plugin smoke', () => {
     ])
     expect(upgrades.map(route => route.path)).toEqual([
       '/sidebar/ws/agent-opens',
-      '/sidebar/ws/fs-watch',
       '/sidebar/ws/git',
       '/sidebar/ws/fs-jobs',
       '/sidebar/ws/sidechat',
       '/sidebar/ws/session',
+      '/sidebar/ws/feed',
     ])
     // Teardown runs without throwing.
     for (const cleanup of effects) cleanup()
@@ -1262,11 +1262,22 @@ describe('session cwd resolution over the API route', () => {
       const route = mount({ sessions: { get: () => ({ header: { cwd: workspace } }) } })
       const empty = await invoke(route, 'fs.trees', { sessionId: 's-tree', paths: [] })
       expect(empty).toMatchObject({ ok: false, status: 400, error: { code: 'bad-request' } })
+      // The outright cap is 10 now (FS_TREES_MAX_PATHS — the client chunks its
+      // batches at the same constant), and the refusal names the bound.
       const tooMany = await invoke(route, 'fs.trees', {
         sessionId: 's-tree',
         paths: Array.from({ length: FS_TREES_MAX_PATHS + 1 }, () => workspace),
       })
       expect(tooMany).toMatchObject({ ok: false, status: 400, error: { code: 'bad-request' } })
+      expect(tooMany.error!.message).toContain(`too many paths (max ${FS_TREES_MAX_PATHS})`)
+      expect(FS_TREES_MAX_PATHS).toBe(10)
+      // The boundary itself still passes: exactly the cap's worth of rows.
+      const atCap = await invoke(route, 'fs.trees', {
+        sessionId: 's-tree',
+        paths: Array.from({ length: FS_TREES_MAX_PATHS }, () => workspace),
+      })
+      expect(atCap).toMatchObject({ ok: true })
+      expect((atCap.value as unknown as { levels: unknown[] }).levels).toHaveLength(FS_TREES_MAX_PATHS)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

@@ -1,40 +1,37 @@
 /**
- * `git` invalidation subscriptions per session (`/sidebar/ws/git`).
+ * `git` invalidation subscriptions per session (feed channel `'git'`).
  *
  * Every git-domain consumer the phase-2 polling audit named — the shared
  * status store (`ui/git-status.ts`), the changes tab's Git lens
  * (`changes/GitLens.tsx`), the round-commits lens and the round-diff
  * lens — used to advance on a `usePolling` timer. They all react to the
  * SAME fact, "some checkout's git state moved", so they all subscribe to
- * the SAME signal instead: the host's `git` frame (see ../git-push.ts),
- * a debounced bare invalidation that names the worktree and says
- * "re-pull once". One frame never carries git output — the one-shot
- * `git.status` / `git.worktrees` / `git.log` / `git.diff-range` fetch
- * stays the single source of data, exactly the ops-push model. A
- * one-shot fetch on notice is NOT polling: no timer drives it.
+ * the SAME signal instead: the host's `git` frame, a debounced bare
+ * invalidation that names the worktree and says "re-pull once". One frame
+ * never carries git output — the one-shot `git.status` / `git.worktrees` /
+ * `git.log` / `git.diff-range` fetch stays the single source of data,
+ * exactly the ops-push model. A one-shot fetch on notice is NOT polling:
+ * no timer drives it.
  *
- * ONE CONNECTION PER SESSION — the endpoint's own fence: the host only
- * accepts `/sidebar/ws/git` with `?sessionId=` on the URL (a bare one
- * is answered with an immediate 1008 close) and resolves every watch
- * spelling against THAT session's cwd chain, so subscribers of
- * different sessions can never share a socket. Each session's hub is
- * the ops-push shape in miniature, keyed by sessionId: one connection
- * whose watch set is the UNION of that session's subscribers'
+ * ONE SUBSCRIPTION SET PER SESSION — the host resolves every watch
+ * spelling against a session's cwd chain, so each session's hub keeps its
+ * own `'git'` subscription on the multiplexed feed socket (feed-hub.ts):
+ * one entry whose `args` is the UNION of that session's subscribers'
  * worktrees — typically the few checkouts of the session's repository —
- * re-announced through {@linkcode GitPushConnection.reconcile} whenever
- * a subscriber joins, leaves or changes its set. The FIRST subscriber
- * of a session opens its connection, every `git` frame of a watched
- * worktree fans out to the subscribers that named it, and a session's
- * LAST unsubscriber closes its connection. Sessions are fully
- * independent — each connection owns its own backoff bookkeeping, so
- * one session's drops and retries never disturb another's.
+ * re-pointed through {@linkcode FeedSubscription.setArgs} whenever a
+ * subscriber joins, leaves or changes its set (a delta `unsub`+`sub` on the
+ * wire, no reconnect). The FIRST subscriber of a session announces it,
+ * every `git` frame of a watched worktree fans out to the subscribers that
+ * named it, and a session's LAST unsubscriber retires the key. Sessions are
+ * fully independent — each key owns its own args — while the SOCKET is one
+ * for the whole client, shared with every other channel.
  *
- * Availability is each socket's own story: reconnects back off 1s → 15s
- * and never give up (openGitPush), there is NO timer-driven HTTP
- * fallback, and a successful re-open fires every subscriber's
- * `onReconnect` so each re-pulls what the outage swallowed. The
- * mount/visibility initial loads stay with the consumers (one-shot
- * fetches, unchanged).
+ * Availability is the socket's own story: reconnects back off 1s → 15s
+ * (±30% jitter) and never give up, there is NO timer-driven HTTP fallback,
+ * the re-open replays every `sub` (the host re-seeds what a fresh watch
+ * answers), and the recovery fires every subscriber's `onReconnect` so each
+ * re-pulls what the outage swallowed. The mount/visibility initial loads
+ * stay with the consumers (one-shot fetches, unchanged).
  *
  * Two entry points share the hubs: the {@linkcode useGitWatch} hook for
  * React consumers (the lenses) and {@linkcode subscribeGitWatch} for the
@@ -43,7 +40,7 @@
  * @module dsh-better-sidebar/git-push
  */
 import { useEffect, useMemo, useRef } from 'react'
-import { hostWebSocketUrl } from './host-route-url.ts'
+import { feedSubscribe, type FeedSubscription } from './feed-hub.ts'
 
 /** One host frame: the worktree it names changed (the client's own spelling).
  *  `paths`, when present, narrows the reaction: the worktree-relative POSIX
@@ -62,35 +59,34 @@ export interface GitPushFrame {
  *  sends more paths than the host will keep. */
 const MAX_WATCHED = 32
 
-/** How long to wait before re-opening a dropped socket; failures back off to the cap. */
-const RETRY_BASE_MS = 1000
-const RETRY_MAX_MS = 15_000
-
-/** A live git push connection: close it, or re-announce its watch set. */
+/** A live git push connection: re-point the watch set, or close it. */
 export interface GitPushConnection {
   /**
-   * Re-send the whole watch frame (a full replacement). For a getter-based
-   * connection whose worktrees change mid-flight — a session hub's union
-   * of subscriber sets — this is how a membership change reaches the host
-   * without a reconnect.
+   * Re-read the worktree union and re-point the session's feed subscription
+   * (a delta on the wire). For a fixed subscriber the set only changes
+   * through the hub's own reconcile below.
    */
   reconcile(): void
-  /** Close the connection and stop its retries (idempotent). */
+  /** Close the connection (retire the session's key when its last subscriber leaves; idempotent). */
   close(): void
 }
 
 /**
- * Open ONE session's git push socket for a mutable watch set.
- * @param sessionId - the session the endpoint is fenced on: it rides the
- *   URL (`?sessionId=` — without it the host closes with 1008) and every
- *   watch spelling resolves against that session's cwd chain.
- * @param worktrees - worktrees to watch, re-read on every open AND every
+ * Open ONE session's git subscription on the shared feed for a mutable watch
+ * set.
+ * @param sessionId - the session the watch resolves against: the
+ *   subscription's session dimension (the host resolves every watch
+ *   spelling against that session's cwd chain).
+ * @param worktrees - worktrees to watch, re-read on every
  *   {@linkcode GitPushConnection.reconcile} (the session hub feeds it the
  *   union of its subscribers' sets).
  * @param onFrame - one validated host frame.
- * @param onState - optional open/close signal (observability; the hub
- *   stays connected either way — a drop just means frames pause until the
- *   next successful reconnect).
+ * @param onState - optional open/close signal of the shared feed socket
+ *   (observability; the hub stays connected either way — a drop just means
+ *   frames pause until the next successful reconnect).
+ * @param onReconnect - the socket re-opened after a drop, OR this session's
+ *   key came back from a release (the release window swallowed frames the
+ *   same way an outage did); fires once per recovery.
  * @returns the live connection (close it to tear down; idempotent).
  */
 export function openGitPush(
@@ -98,59 +94,32 @@ export function openGitPush(
   worktrees: () => readonly string[],
   onFrame: (frame: GitPushFrame) => void,
   onState?: (open: boolean) => void,
+  onReconnect?: () => void,
 ): GitPushConnection {
-  let socket: WebSocket | null = null
-  let retry: number | undefined
-  let closed = false
-  let failures = 0
-
-  /** Push the whole watch set (a full replacement, also after a reconnect). */
-  const sendWatch = (): void => {
-    if (socket !== null && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ op: 'watch', worktrees: [...worktrees()].slice(0, MAX_WATCHED) }))
-    }
+  let sub: FeedSubscription | undefined
+  const onData = (data: unknown): void => {
+    if (data === null || typeof data !== 'object') return
+    const frame = data as GitPushFrame
+    // A malformed or foreign frame is a late/dirty notice, not an invalidation.
+    if (frame.kind !== 'git' || typeof frame.worktree !== 'string' || frame.worktree === '') return
+    onFrame(frame)
   }
-
-  const connect = (): void => {
-    if (closed) return
-    // The session fence rides the URL, exactly like fs-watch's and
-    // agent-opens' sockets: a bare URL is refused with 1008 by the host.
-    const url = hostWebSocketUrl('sidebar/ws/git')
-    url.search = new URLSearchParams({ sessionId }).toString()
-    socket = new WebSocket(url.toString())
-    socket.onopen = () => {
-      failures = 0
-      onState?.(true)
-      sendWatch()
+  /** Join (or re-point) the session's key with the current union. */
+  const sync = (): void => {
+    const args = { worktrees: [...worktrees()].slice(0, MAX_WATCHED) }
+    if (sub === undefined) {
+      sub = feedSubscribe({ channel: 'git', sessionId, args, onData, onState, onReconnect })
+      return
     }
-    socket.onmessage = (event) => {
-      if (typeof event.data !== 'string') return
-      let frame: GitPushFrame
-      try {
-        frame = JSON.parse(event.data) as GitPushFrame
-      } catch {
-        return
-      }
-      if (frame === null || typeof frame !== 'object') return
-      // A malformed or foreign frame is a late/dirty notice, not an invalidation.
-      if (frame.kind !== 'git' || typeof frame.worktree !== 'string' || frame.worktree === '') return
-      onFrame(frame)
-    }
-    socket.onclose = () => {
-      if (closed) return
-      onState?.(false)
-      failures += 1
-      retry = window.setTimeout(connect, Math.min(RETRY_BASE_MS * 2 ** (failures - 1), RETRY_MAX_MS))
-    }
+    sub.setArgs(args)
   }
-  connect()
+  sync()
 
   return {
-    reconcile: sendWatch,
+    reconcile: sync,
     close: () => {
-      closed = true
-      if (retry !== undefined) window.clearTimeout(retry)
-      socket?.close()
+      sub?.close()
+      sub = undefined
     },
   }
 }
@@ -164,11 +133,11 @@ interface GitSubscriber {
    *  narrows the pull to the paths the host saw move (absent = unknown:
    *  the full re-pull). */
   onGit(worktree: string, paths?: string[]): void
-  /** The session's socket re-opened after a drop — catch up on the outage. */
+  /** The feed re-opened after a drop — catch up on the outage. */
   onReconnect(): void
 }
 
-/** One session's hub: one connection alive while at least one of that
+/** One session's hub: one feed key alive while at least one of that
  *  session's subscribers holds it. */
 interface GitHub {
   subscribers: Set<GitSubscriber>
@@ -177,8 +146,8 @@ interface GitHub {
   close(): void
 }
 
-/** The hubs, one per session — keyed by the endpoint's own fence: the
- *  sessionId the URL must carry and the host resolves watch paths against. */
+/** The hubs, one per session — keyed by the session the host resolves watch
+ *  paths against. */
 const hubs = new Map<string, GitHub>()
 
 /** Fan one `git` frame out to the subscribers that named the worktree. */
@@ -224,43 +193,41 @@ function ensureHub(sessionId: string): GitHub {
   const existing = hubs.get(sessionId)
   if (existing !== undefined) return existing
   const subscribers = new Set<GitSubscriber>()
-  // Reconnect bookkeeping: the FIRST open is not a reconnect (nothing was
-  // missed — no frame ever arrived), only an open that follows a
-  // successful connection's close is, because that gap swallowed frames.
-  // The callbacks close over the LOCAL subscriber set, so a frame a dying
-  // socket delivers after teardown fans out to nobody (the set emptied
-  // with that session's last leave).
-  let connectedOnce = false
-  let dropped = false
+  // Recovery is the DIRECT onReconnect line below: the hub fires it on a
+  // re-open after a drop AND on a session-dimension restore — one fan-out
+  // per recovery, never two. The open/close signal stays observability
+  // only (nothing is bookkept off it).
   const connection = openGitPush(
     sessionId,
     () => unionWorktrees(subscribers),
     (frame: GitPushFrame) => { fanOutGit(subscribers, frame) },
-    (open: boolean) => {
-      if (open) {
-        const recovered = dropped
-        dropped = false
-        connectedOnce = true
-        if (recovered) fanOutReconnect(subscribers)
-        return
-      }
-      if (connectedOnce) dropped = true
-    },
+    undefined,
+    // A re-open after a drop, or a session-dimension restore: the window
+    // swallowed frames exactly like an outage did — every consumer re-pulls.
+    () => { fanOutReconnect(subscribers) },
   )
-  const hub: GitHub = { subscribers, reconcile: () => { connection.reconcile() }, close: () => { connection.close() } }
+  const hub: GitHub = {
+    subscribers,
+    reconcile: () => { connection.reconcile() },
+    close: () => {
+      connection.close()
+      // Never unpublish a NEWER hub a re-entrant join may have registered.
+      if (hubs.get(sessionId) === hub) hubs.delete(sessionId)
+    },
+  }
   hubs.set(sessionId, hub)
   return hub
 }
 
 /** Join a subscriber with a non-empty set; the session's first join opens
- *  its socket. */
+ *  its key. */
 function joinGitHub(sessionId: string, subscriber: GitSubscriber): void {
   const hub = ensureHub(sessionId)
   hub.subscribers.add(subscriber)
   hub.reconcile()
 }
 
-/** Leave the session's hub; the session's last leave tears its socket down. */
+/** Leave the session's hub; the session's last leave retires its key. */
 function leaveGitHub(sessionId: string, subscriber: GitSubscriber): void {
   const hub = hubs.get(sessionId)
   if (hub === undefined) return
@@ -274,16 +241,15 @@ function leaveGitHub(sessionId: string, subscriber: GitSubscriber): void {
 /** What a consumer hands the hook. */
 export interface GitWatchOptions {
   /**
-   * The session whose connection this subscriber joins — the endpoint's
-   * own fence: the URL carries it and the host resolves every watch
-   * spelling against that session's cwd chain. `undefined` unsubscribes
-   * (no socket of any session is held for the consumer).
+   * The session whose watch this subscriber joins — the host resolves every
+   * watch spelling against that session's cwd chain. `undefined`
+   * unsubscribes (no key of any session is held for the consumer).
    */
   sessionId: string | undefined
   /**
-   * Worktrees whose changes invalidate. An empty list unsubscribes (no
-   * socket at all when no subscriber remains) — pass `[]` while hidden to
-   * park the consumer, exactly the `enabled: false` the old pollers took.
+   * Worktrees whose changes invalidate. An empty list unsubscribes (no key
+   * at all when no subscriber remains) — pass `[]` while hidden to park the
+   * consumer, exactly the `enabled: false` the old pollers took.
    */
   worktrees: readonly string[]
   /**
@@ -298,16 +264,17 @@ export interface GitWatchOptions {
    */
   onInvalidate: (worktree: string, paths?: string[]) => void
   /**
-   * The session's socket re-opened after at least one failed attempt —
-   * the FIRST open never fires this. Every frame the outage swallowed is
-   * gone, so the consumer re-pulls instead of waiting for the next notice.
+   * The feed re-opened after at least one failed attempt — the FIRST open
+   * never fires this. Every frame the outage swallowed is gone, so the
+   * consumer re-pulls instead of waiting for the next notice. A
+   * session-dimension restore (the release timer) fires it too.
    */
   onReconnect?: () => void
 }
 
 /**
  * Follow the host's `git` invalidations for the given worktrees on the
- * session's ONE push socket.
+ * session's ONE shared feed key.
  * @param options - the session, the watched paths and the
  * invalidation/reconnect callbacks.
  */
@@ -350,12 +317,12 @@ export function useGitWatch(options: GitWatchOptions): void {
       }
     }
     // The session is part of the connection's identity: a session switch
-    // tears the OLD session's subscription down (possibly closing its
-    // socket when this was its last subscriber) and joins the new one's.
+    // tears the OLD session's subscription down (possibly retiring its key
+    // when this was its last subscriber) and joins the new one's.
   }, [subscribed, sessionId])
 
-  // A membership change on the SAME socket only swaps the set and re-sends
-  // the watch frame (a newly created linked worktree joins the set once the
+  // A membership change on the SAME key only swaps the set and re-points the
+  // feed subscription (a newly created linked worktree joins the set once the
   // inventory answer names it; changes before that land are folded by the
   // NEXT notice after the reconcile, so the gap self-heals).
   useEffect(() => {
@@ -379,13 +346,13 @@ export interface GitWatchHandle {
 /**
  * Follow the host's `git` invalidations without a React lifecycle — the
  * shared status store's slots retain/release outside any component.
- * @param sessionId - the session whose connection the subscription joins
- *   (the endpoint's fence; watch spellings resolve against its cwd chain).
+ * @param sessionId - the session whose watch the subscription joins (the
+ *   session the host resolves watch spellings against).
  * @param worktrees - the worktrees to watch (empty: nothing is joined
  *   until {@linkcode GitWatchHandle.setWorktrees} names one).
  * @param onInvalidate - one watched worktree moved; re-pull once. The
  *   optional `paths` argument narrows the pull to what the host saw move.
- * @param onReconnect - the session's socket re-opened after a drop; catch up.
+ * @param onReconnect - the feed re-opened after a drop; catch up.
  * @returns the subscription handle (close it with the slot's release).
  */
 export function subscribeGitWatch(
@@ -401,7 +368,7 @@ export function subscribeGitWatch(
   }
   let joined = false
   /** Join lazily and leave on empty: an empty set must neither open nor
-   * hold the session's socket (the hook's `subscribed` flag, imperatively). */
+   * hold the session's key (the hook's `subscribed` flag, imperatively). */
   const sync = (): void => {
     if (joined) {
       if (subscriber.worktrees.size === 0) {

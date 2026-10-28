@@ -375,10 +375,20 @@ function gitStatusStorageKeyOf(slot: Slot): string {
  * stored document survives, so the next mount pre-colors from it again and
  * recalibrates with the pull that follows. A hydrated snapshot never blocks
  * a fetch — the retain path fetches unconditionally (see retain).
+ *
+ * The retain-time half runs AFTER the remount's first render (retain lives
+ * in an effect), so a cache hit MUST notify: without the version bump the
+ * mounted consumer keeps the pre-hydration null view until the calibration
+ * pull returns — the "colors are already on when the page opens" contract
+ * would hold only for a slot hydrated during creation. A miss stays silent
+ * (the fetch's own loading flip notifies).
  */
 function hydrateSlot(slot: Slot): void {
   if (slot.snapshot !== null) return
-  slot.snapshot = readGitStatusSnapshot(gitStatusStorageKeyOf(slot))
+  const cached = readGitStatusSnapshot(gitStatusStorageKeyOf(slot))
+  if (cached === null) return
+  slot.snapshot = cached
+  notify(slot)
 }
 
 function notify(slot: Slot): void {

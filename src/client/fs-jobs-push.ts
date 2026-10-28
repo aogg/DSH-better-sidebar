@@ -1,6 +1,6 @@
 /**
- * One shared file-tree background-job subscription per session
- * (`/sidebar/ws/fs-jobs`).
+ * One shared file-tree background-job subscription per session (feed channel
+ * `'fs-jobs'`).
  *
  * The two background jobs the phase-3 polling audit named — the file tree's
  * zip-and-download build (FileTree.tsx, `archive.status` every 250ms) and
@@ -8,24 +8,26 @@
  * `fs.transferStatus` every 400ms) — used to advance on timer-driven HTTP
  * polls. They both follow the SAME fact, "one job id's status moved", so
  * they both subscribe to the SAME signal instead: the host's `fs-jobs`
- * frame (see ../fs-jobs-push.ts) carrying that job's status snapshot —
- * progress and terminal states alike, so nothing degrades compared to the
- * polls it replaces. A one-shot fetch on notice is NOT polling: no timer
- * drives it.
+ * frame carrying that job's status snapshot — progress and terminal states
+ * alike, so nothing degrades compared to the polls it replaces. A one-shot
+ * fetch on notice is NOT polling: no timer drives it.
  *
- * One socket per SESSION (the fs-watch model — archive frames are fenced to
- * the socket's `?sessionId=`), not one per consumer (the turn-push rule):
- * each hub's watch set is the UNION of its subscribers' job ids — one
- * archive build and one transfer card, at most — re-announced through
- * {@linkcode FsJobsPushConnection.reconcile} whenever a subscriber joins,
- * leaves or changes its set. The FIRST subscriber opens the shared
- * connection, every frame of a watched id fans out to the subscribers that
- * named it, and the LAST unsubscriber closes it.
+ * ONE SUBSCRIPTION SET PER SESSION (archive frames are fenced to the
+ * session), on the ONE multiplexed feed socket (feed-hub.ts): each hub's
+ * `args` is the UNION of its subscribers' job ids — one archive build and
+ * one transfer card, at most — re-pointed through
+ * {@linkcode FeedSubscription.setArgs} whenever a subscriber joins, leaves
+ * or changes its set (a delta on the wire, no reconnect). The FIRST
+ * subscriber announces the session's key, every frame of a watched id fans
+ * out to the subscribers that named it, and the LAST unsubscriber retires
+ * the key.
  *
- * Availability is the socket's own story: reconnects back off 1s → 15s and
- * never give up, there is NO timer-driven HTTP fallback, and a successful
- * re-open after a drop fires every subscriber's `onReconnect` so each
- * re-pulls once — the frames the outage swallowed are gone, and the host's
+ * Availability is the socket's own story: reconnects back off 1s → 15s
+ * (±30% jitter) and never give up, there is NO timer-driven HTTP fallback,
+ * the re-open replays every `sub` (the host answers each watched id with
+ * its current snapshot), and a recovery — a re-open after a drop, or a
+ * session-dimension restore — fires every subscriber's `onReconnect` so
+ * each re-pulls once: the frames the window swallowed are gone, and the
  * subscribe-time snapshot alone must not be the only catch-up.
  *
  * Two entry points share each hub: the {@linkcode useFsJobsWatch} hook for
@@ -35,7 +37,7 @@
  * @module dsh-better-sidebar/fs-jobs-push
  */
 import { useEffect, useMemo, useRef } from 'react'
-import { hostWebSocketUrl } from './host-route-url.ts'
+import { feedSubscribe, type FeedSubscription } from './feed-hub.ts'
 
 /** One transfer job's status snapshot (the frame payload, never the bytes). */
 export interface TransferPushStatus {
@@ -59,33 +61,31 @@ export type FsJobsFrame =
  *  more ids than the host will keep. */
 const MAX_JOBS = 64
 
-/** How long to wait before re-opening a dropped socket; failures back off to the cap. */
-const RETRY_BASE_MS = 1000
-const RETRY_MAX_MS = 15_000
-
 /** The job id one frame is about, whichever registry holds it. */
 function frameJobId(frame: FsJobsFrame): string {
   return frame.kind === 'archive' ? frame.id : frame.transferId
 }
 
-/** A live fs-jobs push connection: close it, or re-announce its watch set. */
+/** A live fs-jobs push connection: re-point the watch set, or close it. */
 export interface FsJobsPushConnection {
-  /** Re-send the whole watch frame (a full replacement, also after a reconnect). */
+  /** Re-read the job union and re-point the session's feed subscription. */
   reconcile(): void
-  /** Close the connection and stop its retries (idempotent). */
+  /** Close the connection (retire the key with its last subscriber; idempotent). */
   close(): void
 }
 
 /**
- * Open the fs-jobs push socket of one session for a mutable watch set.
- * @param sessionId - the session scope (the archive fence; carried in the URL).
- * @param jobs - job ids to watch, re-read on every open AND every
+ * Open the fs-jobs subscription of one session on the shared feed for a
+ * mutable watch set.
+ * @param sessionId - the session scope (the archive fence).
+ * @param jobs - job ids to watch, re-read on every
  *   {@linkcode FsJobsPushConnection.reconcile} (the hub feeds it the union
  *   of its subscribers' sets).
  * @param onFrame - one validated host frame.
- * @param onState - optional open/close signal (the hub derives its reconnect
- *   bookkeeping from it; it stays connected either way — a drop just means
- *   frames pause until the next successful reconnect).
+ * @param onState - optional open/close signal of the shared feed socket
+ *   (observability).
+ * @param onReconnect - the socket re-opened after a drop, OR the session's
+ *   key came back from a release; fires once per recovery.
  * @returns the live connection (close it to tear down; idempotent).
  */
 export function openFsJobsPush(
@@ -93,64 +93,39 @@ export function openFsJobsPush(
   jobs: () => readonly string[],
   onFrame: (frame: FsJobsFrame) => void,
   onState?: (open: boolean) => void,
+  onReconnect?: () => void,
 ): FsJobsPushConnection {
-  let socket: WebSocket | null = null
-  let retry: number | undefined
-  let closed = false
-  let failures = 0
-
-  /** Push the whole watch set (a full replacement, also after a reconnect). */
-  const sendWatch = (): void => {
-    if (socket !== null && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ op: 'watch', jobs: [...jobs()].slice(0, MAX_JOBS) }))
+  let sub: FeedSubscription | undefined
+  const onData = (data: unknown): void => {
+    if (data === null || typeof data !== 'object' || typeof (data as FsJobsFrame).kind !== 'string') return
+    const frame = data as FsJobsFrame
+    // A malformed or foreign frame is noise, never a status update.
+    if (frame.kind === 'archive') {
+      if (typeof frame.id !== 'string' || frame.id === '') return
+      if (frame.state !== 'building' && frame.state !== 'ready' && frame.state !== 'error') return
+    } else if (frame.kind === 'transfer') {
+      if (typeof frame.transferId !== 'string' || frame.transferId === '') return
+    } else {
+      return
     }
+    onFrame(frame)
   }
-
-  const connect = (): void => {
-    if (closed) return
-    const url = hostWebSocketUrl('sidebar/ws/fs-jobs')
-    url.search = new URLSearchParams({ sessionId }).toString()
-    socket = new WebSocket(url.toString())
-    socket.onopen = () => {
-      failures = 0
-      onState?.(true)
-      sendWatch()
+  /** Join (or re-point) the session's key with the current union. */
+  const sync = (): void => {
+    const args = { jobs: [...jobs()].slice(0, MAX_JOBS) }
+    if (sub === undefined) {
+      sub = feedSubscribe({ channel: 'fs-jobs', sessionId, args, onData, onState, onReconnect })
+      return
     }
-    socket.onmessage = (event) => {
-      if (typeof event.data !== 'string') return
-      let frame: FsJobsFrame
-      try {
-        frame = JSON.parse(event.data) as FsJobsFrame
-      } catch {
-        return
-      }
-      if (frame === null || typeof frame !== 'object' || typeof frame.kind !== 'string') return
-      // A malformed or foreign frame is noise, never a status update.
-      if (frame.kind === 'archive') {
-        if (typeof frame.id !== 'string' || frame.id === '') return
-        if (frame.state !== 'building' && frame.state !== 'ready' && frame.state !== 'error') return
-      } else if (frame.kind === 'transfer') {
-        if (typeof frame.transferId !== 'string' || frame.transferId === '') return
-      } else {
-        return
-      }
-      onFrame(frame)
-    }
-    socket.onclose = () => {
-      if (closed) return
-      onState?.(false)
-      failures += 1
-      retry = window.setTimeout(connect, Math.min(RETRY_BASE_MS * 2 ** (failures - 1), RETRY_MAX_MS))
-    }
+    sub.setArgs(args)
   }
-  connect()
+  sync()
 
   return {
-    reconcile: sendWatch,
+    reconcile: sync,
     close: () => {
-      closed = true
-      if (retry !== undefined) window.clearTimeout(retry)
-      socket?.close()
+      sub?.close()
+      sub = undefined
     },
   }
 }
@@ -165,7 +140,7 @@ interface FsJobsSubscriber {
   onReconnect(): void
 }
 
-/** One session's hub: one connection alive while at least one subscriber holds it. */
+/** One session's hub: one feed key alive while at least one subscriber holds it. */
 interface FsJobsHub {
   subscribers: Set<FsJobsSubscriber>
   /** Re-announce the union watch set (membership changed mid-connection). */
@@ -173,7 +148,7 @@ interface FsJobsHub {
   close(): void
 }
 
-/** One hub per session (archive frames are fenced to the socket's session). */
+/** One hub per session (archive frames are fenced to the session). */
 const hubs = new Map<string, FsJobsHub>()
 
 /** Fan one frame out to the subscribers that named its job id. */
@@ -219,25 +194,18 @@ function ensureHub(sessionId: string): FsJobsHub {
   const existing = hubs.get(sessionId)
   if (existing !== undefined) return existing
   const subscribers = new Set<FsJobsSubscriber>()
-  // Reconnect bookkeeping: the FIRST open is not a reconnect (nothing was
-  // missed — no frame ever arrived), only an open that follows a successful
-  // connection's close is, because that gap swallowed frames.
-  let connectedOnce = false
-  let dropped = false
+  // Recovery is the DIRECT onReconnect line below: the hub fires it on a
+  // re-open after a drop AND on a session-dimension restore — one fan-out
+  // per recovery, never two. The open/close signal stays observability
+  // only (nothing is bookkept off it).
   const connection = openFsJobsPush(
     sessionId,
     () => unionJobs(subscribers),
     (frame: FsJobsFrame) => { fanOutFrame(subscribers, frame) },
-    (open: boolean) => {
-      if (open) {
-        const recovered = dropped
-        dropped = false
-        connectedOnce = true
-        if (recovered) fanOutReconnect(subscribers)
-        return
-      }
-      if (connectedOnce) dropped = true
-    },
+    undefined,
+    // A re-open after a drop, or a session-dimension restore: the window
+    // swallowed frames exactly like an outage did — every consumer re-pulls.
+    () => { fanOutReconnect(subscribers) },
   )
   const hub: FsJobsHub = {
     subscribers,
@@ -252,14 +220,14 @@ function ensureHub(sessionId: string): FsJobsHub {
   return hub
 }
 
-/** Join a subscriber with a non-empty set; the first join opens the socket. */
+/** Join a subscriber with a non-empty set; the first join announces the key. */
 function joinHub(sessionId: string, subscriber: FsJobsSubscriber): void {
   const hub = ensureHub(sessionId)
   hub.subscribers.add(subscriber)
   hub.reconcile()
 }
 
-/** Leave a hub; the last leave tears the shared socket down. */
+/** Leave a hub; the last leave retires the shared key. */
 function leaveHub(sessionId: string, subscriber: FsJobsSubscriber): void {
   const hub = hubs.get(sessionId)
   if (hub === undefined) return
@@ -270,12 +238,12 @@ function leaveHub(sessionId: string, subscriber: FsJobsSubscriber): void {
 /** What a consumer hands the hook. */
 export interface FsJobsWatchOptions {
   /**
-   * The session scope (the archive fence; transfers ride the same socket).
-   * No socket at all while undefined.
+   * The session scope (the archive fence; transfers ride the same key).
+   * No subscription at all while undefined.
    */
   sessionId: string | undefined
   /**
-   * Job ids to follow. An empty list unsubscribes (no socket at all when no
+   * Job ids to follow. An empty list unsubscribes (no key at all when no
    * subscriber of the session remains) — pass `[]` while parked.
    */
   jobs: readonly string[]
@@ -285,23 +253,23 @@ export interface FsJobsWatchOptions {
    * The shared socket re-opened after at least one failed attempt — the
    * FIRST open never fires this. Every frame the outage swallowed is gone,
    * so the consumer re-pulls the job's status once instead of waiting for
-   * the next push.
+   * the next push. A session-dimension restore fires it too.
    */
   onReconnect?: () => void
 }
 
 /**
  * Follow the host's `fs-jobs` frames for the given job ids on the session's
- * ONE shared push socket.
+ * ONE shared feed key.
  * @param options - the session, the watched job ids, and the frame/reconnect
  *   callbacks.
  */
 export function useFsJobsWatch(options: FsJobsWatchOptions): void {
   const { sessionId, jobs } = options
-  // The id list is a fresh array on every render, so neither the
-  // subscription effect nor the membership effect may depend on its
-  // identity. The CONTENT key (NUL-joined — no id can contain one) is what
-  // everything derives from, exactly like git-push's worktree list.
+  // The id list is a fresh array on every render, so neither the subscription
+  // effect nor the membership effect may depend on its identity. The CONTENT
+  // key (NUL-joined — no id can contain one) is what everything derives from,
+  // exactly like git-push's worktree list.
   const setKey = jobs.join('\u0000')
   const wanted = useMemo(() => (setKey === '' ? [] : setKey.split('\u0000')), [setKey])
   const wantedRef = useRef(wanted)
@@ -333,8 +301,8 @@ export function useFsJobsWatch(options: FsJobsWatchOptions): void {
     }
   }, [subscribed, sessionId])
 
-  // A membership change on the SAME socket only swaps the set and re-sends
-  // the watch frame (the terminal frame of a job shrinks the set; a newly
+  // A membership change on the SAME key only swaps the set and re-points the
+  // feed subscription (the terminal frame of a job shrinks the set; a newly
   // started one grows it — and the host answers every NEW id with its
   // current snapshot, so the gap self-heals).
   useEffect(() => {
@@ -357,7 +325,7 @@ export interface FsJobsWatchHandle {
 /**
  * Follow the host's `fs-jobs` frames without a React lifecycle — the
  * transfer card's module store lives outside any component.
- * @param sessionId - the session scope of the socket that carries the job.
+ * @param sessionId - the session scope of the feed key that carries the job.
  * @param jobs - the job ids to watch (empty: nothing is joined until
  *   {@linkcode FsJobsWatchHandle.setJobs} names one).
  * @param onFrame - one watched job's status snapshot arrived.
@@ -377,7 +345,7 @@ export function subscribeFsJobsWatch(
   }
   let joined = false
   /** Join lazily and leave on empty: an empty set must neither open nor
-   *  hold the shared socket (the hook's `subscribed` flag, imperatively). */
+   * hold the shared key (the hook's `subscribed` flag, imperatively). */
   const sync = (): void => {
     if (joined) {
       if (subscriber.jobs.size === 0) {

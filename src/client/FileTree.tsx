@@ -111,7 +111,8 @@ import {
   type GitTone, type StatusTone,
 } from './ui/index.ts'
 import { uploadItemsFromDrop, uploadItemsFromFiles, type UploadItem } from './upload.ts'
-import { useDirectoryWatch } from './use-dir-watch.ts'
+import { fsLevelsGet, fsLevelsInvalidate, fsLevelsPut } from './fs-levels-store.ts'
+import { runFsTreesBatch } from './fs-trees-queue.ts'
 import { useFsJobsWatch } from './fs-jobs-push.ts'
 import css from './sidebar.module.css'
 
@@ -120,6 +121,14 @@ interface LevelData {
   error?: string
   /** The host capped this level's listing (a huge directory). */
   truncated?: boolean
+  /**
+   * The listing was painted from the Storage cache (fs-levels-store) and is
+   * waiting for the usual `fs.trees` refresh to confirm it. Cleared by the
+   * same storeLevel overwrite the fresh answer lands with — it exists so the
+   * tests (and a later surface badge) can tell a cache-painted level from a
+   * wire-settled one; rows render identically either way.
+   */
+  fromCache?: boolean
 }
 
 /** Root label: the last path segment (mirror of the host rootLabel). */
@@ -1111,31 +1120,66 @@ export function FileTree(props: {
    * WHOLE request fails, the levels that already had a listing keep it (plus a
    * hint) and only the levels with nothing to show carry the message.
    *
+   * STORAGE CACHE (fs-levels-store): a level with nothing in memory yet is
+   * first answered SYNCHRONOUSLY from the workspace's persisted bucket — the
+   * rows paint instantly (marked `fromCache`) — and the usual wire request
+   * still runs, overwriting both this tree's level cache and the store when
+   * it lands (a cache hit is never a reason to skip the refresh: with no dir
+   * watch anymore, the wire is the only freshness the tree gets).
+   *
    * `force` re-lists levels even when they are cached — the refresh tick's
    * path — while leaving their current rows untouched until the answer lands.
+   *
+   * Concurrency: the per-cap batches go through the module-global
+   * {@linkcode runFsTreesBatch} gate — at most TWO `fs.trees` requests are on
+   * the wire client-wide (across every tree instance), the rest wait in FIFO
+   * order, so a burst (many trees refreshing at once) cannot stampede the
+   * host's fs layer.
    */
   const loadLevels = useCallback((paths: readonly string[], options?: { force?: boolean }) => {
     const force = options?.force === true
-    const wanted = force
-      ? [...new Set(paths)]
-      : paths.filter((path) => {
-          // Only a LISTING settles a level: both failure branches below store
-          // their error in this same cache, so treating every entry as
-          // "already loaded" made one failed read (a host restart, a transient
-          // fs error) stick for the rest of the mount — the automatic load
-          // path re-ran for the expanded set and skipped the level, and the
-          // only ways out were a refresh tick or a remount. An error entry
-          // stays retryable; the empty `{}` placeholder of an in-flight load
-          // is still a hit (a re-render must not duplicate the open request).
-          const cached = dataRef.current[path]
-          return cached === undefined || cached.error !== undefined
-        })
+    const wanted: string[] = []
+    const hydrated = new Set<string>()
+    for (const path of new Set(paths)) {
+      const cached = dataRef.current[path]
+      if (cached !== undefined) {
+        // Only a LISTING settles a level: both failure branches below store
+        // their error in this same cache, so treating every entry as
+        // "already loaded" made one failed read (a host restart, a transient
+        // fs error) stick for the rest of the mount — the automatic load
+        // path re-ran for the expanded set and skipped the level, and the
+        // only ways out were a refresh tick or a remount. An error entry
+        // stays retryable; the empty `{}` placeholder of an in-flight load
+        // is still a hit (a re-render must not duplicate the open request).
+        if (force || cached.error !== undefined) wanted.push(path)
+        continue
+      }
+      // Nothing in memory: try the persisted bucket for an instant paint
+      // (the wire request below still runs and overwrites it).
+      if (cwd !== undefined) {
+        const hit = fsLevelsGet(cwd, path)
+        if (hit !== undefined) {
+          storeLevel(path, { entries: [...hit.listing], truncated: hit.truncated, fromCache: true })
+          hydrated.add(path)
+        }
+      }
+      wanted.push(path)
+    }
     if (wanted.length === 0) return
     const generation = generationRef.current
     // A FORCED re-list (a refresh tick) keeps the listing on screen until the
     // fresh one arrives: no blank frame, and a failed refresh degrades to the
-    // previous listing plus a hint instead of an empty tree.
-    if (!force) for (const path of wanted) { pendingRef.current.set(path, generation); storeLevel(path, {}) }
+    // previous listing plus a hint instead of an empty tree. The same mercy
+    // applies to cache-painted levels (their rows are on screen too); the
+    // others get the `{}` "Loading…" placeholder as before. Every wanted
+    // path is still owned by this generation in `pendingRef`, so the stale-
+    // answer self-heal below sees them all.
+    if (!force) {
+      for (const path of wanted) {
+        pendingRef.current.set(path, generation)
+        if (!hydrated.has(path)) storeLevel(path, {})
+      }
+    }
     // The host rows ONE `fs.trees` request at FS_TREES_MAX_PATHS and refuses a
     // larger one OUTRIGHT (`too many paths`), which used to blank the WHOLE
     // tree for a session whose persisted expansion set reached the cap. Split
@@ -1153,13 +1197,13 @@ export function FileTree(props: {
     type BatchOutcome =
       | { batch: string[]; ok: true; levels: FsLevel[] }
       | { batch: string[]; ok: false; message: string }
-    void Promise.all(batches.map(async (batch): Promise<BatchOutcome> => {
+    void Promise.all(batches.map((batch) => runFsTreesBatch(async (): Promise<BatchOutcome> => {
       try {
         return { batch, ok: true, levels: (await api.fsTrees({ sessionId, cwd }, batch, excludeKey === '' ? undefined : excludeKey.split('\0'))).levels }
       } catch (error: unknown) {
         return { batch, ok: false, message: error instanceof Error ? error.message : String(error) }
       }
-    })).then((settled) => {
+    }))).then((settled) => {
       if (generation !== generationRef.current) {
         // The DATA is stale and is dropped — but the `{}` placeholders this call
         // wrote are not stale at all: publishing them away is what keeps a
@@ -1185,6 +1229,12 @@ export function FileTree(props: {
               truncated: level.truncated,
               ...(level.error !== undefined ? { error: level.error } : {}),
             })
+            // A settled listing persists into the workspace's Storage bucket
+            // (error levels are refused by the store itself — only listings
+            // are worth an instant paint).
+            if (cwd !== undefined && Array.isArray(level.entries)) {
+              fsLevelsPut(cwd, level.path, level.entries, level.truncated)
+            }
           }
           continue
         }
@@ -1205,16 +1255,15 @@ export function FileTree(props: {
   }, [sessionId, cwd, excludeKey, storeLevel, releasePlaceholders])
 
   /**
-   * Re-list one directory in place (a watch notice, or the parent of a landed
-   * mutation).
+   * Re-list one directory in place (the parent of a landed mutation, or a
+   * paste/new-file settle).
    *
-   * The re-list is FORCED but not preceded by dropping the level: a watch
-   * notice usually lands while the directory is on screen with its rows, and
+   * The re-list is FORCED but not preceded by dropping the level: a re-list
+   * usually lands while the directory is on screen with its rows, and
    * deleting the cached level first replaced every row with a "Loading…"
-   * placeholder — the whole folder blinked and rebuilt on each disk change
-   * (a build, a formatter, the model's own `bash`). The fresh listing simply
-   * overwrites the old one when it arrives; a failed re-list keeps the rows it
-   * has and adds the hint line.
+   * placeholder — the whole folder blinked and rebuilt on each mutation. The
+   * fresh listing simply overwrites the old one when it arrives; a failed
+   * re-list keeps the rows it has and adds the hint line.
    */
   const retryDir = useCallback((dir: string) => {
     loadLevels([dir], { force: true })
@@ -1279,9 +1328,11 @@ export function FileTree(props: {
 
   // The exclude patterns are applied HOST-side, so a changed list makes every
   // cached level stale (the old rows include entries the list now removes, and
-  // miss entries it no longer hides): wipe the cache and let the load effect
-  // below re-list the visible set in one batch. Declared BEFORE it so the wipe
-  // lands first; the first pass only records the list.
+  // miss entries it no longer hides): wipe the cache AND the workspace's
+  // persisted Storage bucket (fs-levels-store — the same staleness applies to
+  // its instant-paint listings) and let the load effect below re-list the
+  // visible set in one batch. Declared BEFORE it so the wipe lands first; the
+  // first pass only records the list.
   const lastExclude = useRef(excludeKey)
   useEffect(() => {
     if (lastExclude.current === excludeKey) return
@@ -1289,7 +1340,8 @@ export function FileTree(props: {
     generationRef.current += 1
     dataRef.current = {}
     setData({})
-  }, [excludeKey])
+    if (cwd !== undefined) fsLevelsInvalidate(cwd)
+  }, [excludeKey, cwd])
 
   useEffect(() => {
     // Load the visible set in ONE batch request; already-loaded levels (kept
@@ -1322,16 +1374,9 @@ export function FileTree(props: {
   // dead component: bumping the generation makes every late response stale.
   useEffect(() => () => { generationRef.current += 1 }, [])
 
-  // Live refresh: the host watches the folders this tree has expanded and
-  // names the one that changed, so exactly that level is dropped and
-  // re-listed instead of the whole tree. Without it a folder listed once when
-  // it was opened stayed stale for the rest of the session.
-  useDirectoryWatch({
-    sessionId,
-    root: cwd,
-    dirs: expanded,
-    onStale: retryDir,
-  })
+  // (Directory watching removed: the tree no longer holds a live dir watch —
+  // the `sidebar/ws/fs-watch` socket per tree instance is gone. Freshness now
+  // comes from the wire refreshes above plus the Storage cache instant paint.)
 
   // Bring a "Show in folder" reveal into view: the ancestors expand above
   // (revealPaths), but the row may not be scrolled into sight — a reveal on

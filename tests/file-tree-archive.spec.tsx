@@ -171,12 +171,29 @@ async function poll(): Promise<void> {
   })
 }
 
-/** One archive status frame the host's `fs-jobs` socket pushes. */
+/** One archive status frame the host's fs-jobs channel pushes (wrapped in
+ *  the feed envelope, routed by the subscribed session). */
 function archiveFrame(id: string, state: 'building' | 'ready' | 'error', bytes = 0, error?: string): void {
   for (const socket of jobSockets) {
-    if (socket.closed) continue
-    socket.onmessage?.({ data: JSON.stringify({ kind: 'archive', id, state, bytes, ...(error === undefined ? {} : { error }) }) })
+    if (socket.closed || !socket.url.includes('/sidebar/ws/feed')) continue
+    for (const sessionId of jobSessionsOf(socket)) {
+      socket.onmessage?.({ data: JSON.stringify({ channel: 'fs-jobs', sessionId, data: { kind: 'archive', id, state, bytes, ...(error === undefined ? {} : { error }) } }) })
+    }
   }
+}
+
+/** The sessionIds a feed socket subscribed on the fs-jobs channel. */
+function jobSessionsOf(socket: JobSocket): string[] {
+  const ids: string[] = []
+  for (const frame of socket.sent) {
+    try {
+      const parsed = JSON.parse(frame) as { op?: string; channel?: string; sessionId?: string }
+      if (parsed.op === 'sub' && parsed.channel === 'fs-jobs' && typeof parsed.sessionId === 'string') ids.push(parsed.sessionId)
+    } catch {
+      // Not a control frame.
+    }
+  }
+  return ids
 }
 
 /**
@@ -204,7 +221,7 @@ const jobSockets: JobSocket[] = []
 /** Complete every pending fs-jobs upgrade (the watch set follows). */
 function openJobSockets(): void {
   for (const socket of jobSockets) {
-    if (socket.closed || !socket.url.includes('/sidebar/ws/fs-jobs')) continue
+    if (socket.closed || !socket.url.includes('/sidebar/ws/feed')) continue
     if (socket.readyState === JobSocket.OPEN) continue
     socket.readyState = JobSocket.OPEN
     socket.onopen?.()
@@ -266,10 +283,14 @@ describe('FileTree zip and download', () => {
     expect(progressLine(harness.container)?.textContent).toBe(t('loading'))
     // …and the job id rides the session's fs-jobs socket, watch set and all.
     openJobSockets()
-    const jobSocket = jobSockets.find(socket => socket.url.includes('/sidebar/ws/fs-jobs'))
+    const jobSocket = jobSockets.find(socket => socket.url.includes('/sidebar/ws/feed'))
     expect(jobSocket).toBeDefined()
-    expect(jobSocket!.url).toContain('sessionId=s1')
-    expect(jobSocket!.sent).toEqual([JSON.stringify({ op: 'watch', jobs: ['job-1'] })])
+    // The watch rides the fs-jobs channel's sub frame (session + args);
+    // the tree's turn subscription shares the socket (session channel).
+    expect(jobSocket!.sent).toEqual([
+      JSON.stringify({ op: 'sub', channel: 'session', sessionId: 's1' }),
+      JSON.stringify({ op: 'sub', channel: 'fs-jobs', sessionId: 's1', args: { jobs: ['job-1'] } }),
+    ])
 
     // …a one-shot read that is still `building` keeps the line, with no
     // counts to show…

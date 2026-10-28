@@ -9,7 +9,6 @@
  *   - 8 expanded directories: 9 × `fs.tree`  →  1 × `fs.trees` (9 paths);
  *   - expanding one more directory lists ONLY that level (batch of 1);
  *   - a refresh tick re-lists the whole visible set in ONE request;
- *   - a watch notice still re-lists ONLY the stale level;
  *   - one level's `error` stays on that level; a whole-request failure keeps
  *     the cached levels and marks only the ones that had nothing.
  */
@@ -20,6 +19,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
 import { FileTree } from '../src/client/FileTree.tsx'
 import { FS_TREES_MAX_PATHS } from '../src/fs-batch.ts'
+import { fsLevelsResetForTests } from '../src/client/fs-levels-store.ts'
 
 import { setupReactAct } from './test-utils.ts'
 setupReactAct()
@@ -139,6 +139,11 @@ let harness: Harness
 beforeEach(() => {
   FakeSocket.instances = []
   vi.stubGlobal('WebSocket', FakeSocket)
+  // The fs-levels cache (memory mirror + Storage) persists within the
+  // file's jsdom: isolate both per test so a previous listing never
+  // instant-paints into the next one.
+  localStorage.clear()
+  fsLevelsResetForTests()
   fsTree.mockReset()
   fsTree.mockImplementation(async (_scope: unknown, path: string) => levelOf(path))
   fsTrees.mockReset()
@@ -171,7 +176,7 @@ describe('FileTree level loading is batched', () => {
   it('splits a visible set larger than the host cap into cap-sized batches', async () => {
     // The expansion set persists per session, so a heavy session can cross the
     // host's row bound. ONE oversized request used to be refused outright
-    // (`too many paths (max 64)`) and every level fell back to an error row;
+    // (`too many paths (max N)`) and every level fell back to an error row;
     // the tree now splits on the same number the host enforces.
     const many = Array.from({ length: FS_TREES_MAX_PATHS + 6 }, (_, index) => `/tmp/d${index + 1}`)
     harness = mountTree(many)
@@ -192,8 +197,8 @@ describe('FileTree level loading is batched', () => {
     // fails marks only ITS paths, never the whole visible set.
     const many = Array.from({ length: FS_TREES_MAX_PATHS + 6 }, (_, index) => `/tmp/d${index + 1}`)
     fsTrees.mockImplementation(async (_scope: unknown, paths: readonly string[]) => {
-      // The trailing (small) batch fails; the leading one keeps working.
-      if (paths.length < 32) throw new Error('too many paths (max 64)')
+      // The trailing (small) batch fails; the leading ones keep working.
+      if (paths.length < FS_TREES_MAX_PATHS) throw new Error('too many paths (max N)')
       return {
         levels: paths.map(path => path === '/tmp'
           ? {
@@ -232,50 +237,30 @@ describe('FileTree level loading is batched', () => {
     expect(batchPaths(0)).toEqual(['/tmp', ...DIRS].sort())
   })
 
-  it('re-lists ONLY the stale level when the directory watcher reports one', async () => {
-    harness = mountTree(DIRS)
-    await flush()
-    const socket = FakeSocket.instances[0]
-    if (socket === undefined) throw new Error('no watch socket opened')
-    act(() => { socket.open() })
-    fsTrees.mockClear()
-    act(() => { socket.frame({ dir: '/tmp/d3' }) })
-    await flush()
-    // A stale notice drops exactly that level and re-lists it — never the
-    // whole visible set (the batch path is for mount/expand/refresh only).
-    expect(fsTrees).toHaveBeenCalledTimes(1)
-    expect(batchPaths(0)).toEqual(['/tmp/d3'])
-  })
-
-  it('keeps the stale level on screen until the fresh listing lands (no blank frame)', async () => {
-    harness = mountTree(DIRS)
-    await flush()
-    const socket = FakeSocket.instances[0]
-    if (socket === undefined) throw new Error('no watch socket opened')
-    act(() => { socket.open() })
-    // Hold the re-list open and answer with DIFFERENT content, so the swap is
-    // observable in both directions.
-    let release: (() => void) | undefined
+  it('instant-paints a cached level from Storage, then confirms it over the wire', async () => {
+    // Seed the workspace's persisted bucket: the root and /tmp/d3 settled in
+    // a previous run (the root too — its cached rows are what make the d3
+    // row itself render, and with it the cached children below it).
+    localStorage.setItem('dsh-sidebar:fslevels:v1:/tmp', JSON.stringify({
+      version: 1,
+      levels: {
+        '/tmp': { listing: DIRS.map(dir => ({ name: dir.slice('/tmp/'.length), path: dir, isDir: true })), truncated: false, ts: 1 },
+        '/tmp/d3': { listing: [{ name: 'd3-cached.ts', path: '/tmp/d3/d3-cached.ts', isDir: false }], truncated: false, ts: 1 },
+      },
+    }))
     fsTrees.mockImplementation(async (_scope: unknown, paths: readonly string[]) => {
-      await new Promise<void>((resolve) => { release = resolve })
-      return {
-        levels: paths.map(path => path === '/tmp/d3'
-          ? { path, entries: [{ name: 'd3-fresh.ts', path: `${path}/d3-fresh.ts`, isDir: false }], truncated: false }
-          : levelOf(path)),
-      }
+      // Hold the wire answer open: the cache paint must be visible BEFORE it.
+      await new Promise<void>(() => {})
+      return { levels: paths.map(path => levelOf(path)) }
     })
-    act(() => { socket.frame({ dir: '/tmp/d3' }) })
+    harness = mountTree(['/tmp/d3'])
     await flush()
-    // While the answer is in flight the level keeps the rows it had: dropping
-    // the cached level first replaced the whole folder with a loading row and
-    // rebuilt it — the "the tree blinks on every disk change" report.
-    expect(harness.container.textContent, 'the stale rows stay up during the re-list').toContain('d3-file.ts')
-    expect(harness.container.textContent, 'no placeholder replaces the level').not.toContain('Loading…')
-    release?.()
-    await flush()
-    // …and the fresh listing still lands.
-    expect(harness.container.textContent).toContain('d3-fresh.ts')
-    expect(harness.container.textContent).not.toContain('d3-file.ts')
+    // The cached rows are on screen at once (marked fromCache), and the wire
+    // request for the visible set still runs (the cache is a head start,
+    // never a reason to skip the refresh).
+    expect(harness.container.textContent).toContain('d3-cached.ts')
+    expect(fsTrees).toHaveBeenCalledTimes(1)
+    expect(batchPaths(0)).toEqual(['/tmp', '/tmp/d3'])
   })
 
   it('keeps one level error on that level only', async () => {

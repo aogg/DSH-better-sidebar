@@ -104,7 +104,7 @@ describe('useSessionPhase', () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(0) })
       expect(harness.state()).toBe('undefined')
       expect(reads()).toBe(0)
-      expect(harness.socket().url).toContain('/sidebar/ws/session')
+      expect(harness.socket().url).toContain('/sidebar/ws/feed')
     } finally {
       harness.unmount()
     }
@@ -117,13 +117,13 @@ describe('useSessionPhase', () => {
       socket.open()
       // Another session's flip, a cwd notice, a malformed frame: not ours.
       act(() => {
-        socket.frame({ kind: 'phase', sessionId: 't9', blank: true })
-        socket.frame({ kind: 'cwd', sessionId: 't1', cwd: '/wt' })
+        socket.frame({ channel: 'session', sessionId: 't9', data: { kind: 'phase', sessionId: 't9', blank: true } })
+        socket.frame({ channel: 'session', sessionId: 't1', data: { kind: 'cwd', sessionId: 't1', cwd: '/wt' } })
         socket.frame({ nope: 1 })
       })
       expect(harness.state()).toBe('undefined')
 
-      act(() => { socket.frame({ kind: 'phase', sessionId: 't1', blank: true }) })
+      act(() => { socket.frame({ channel: 'session', sessionId: 't1', data: { kind: 'phase', sessionId: 't1', blank: true } }) })
       expect(harness.state()).toBe('blank')
 
       // The old fallback poll ticked every 1s; now NOTHING fires over any
@@ -142,10 +142,10 @@ describe('useSessionPhase', () => {
     try {
       const socket = harness.socket()
       socket.open()
-      act(() => { socket.frame({ kind: 'phase', sessionId: 't1', blank: true }) })
+      act(() => { socket.frame({ channel: 'session', sessionId: 't1', data: { kind: 'phase', sessionId: 't1', blank: true } }) })
       expect(harness.state()).toBe('blank')
 
-      act(() => { socket.frame({ kind: 'phase', sessionId: 't1', blank: false }) })
+      act(() => { socket.frame({ channel: 'session', sessionId: 't1', data: { kind: 'phase', sessionId: 't1', blank: false } }) })
       expect(harness.state()).toBe('ready')
       // Done: no more reads (there never were any), the push socket is closed.
       expect(socket.closed).toBe(true)
@@ -161,7 +161,7 @@ describe('useSessionPhase', () => {
     try {
       const socket = harness.socket()
       socket.open()
-      act(() => { socket.frame({ kind: 'phase', sessionId: 't1' }) })
+      act(() => { socket.frame({ channel: 'session', sessionId: 't1', data: { kind: 'phase', sessionId: 't1' } }) })
       expect(harness.state()).toBe('ready')
       expect(socket.closed).toBe(true)
       expect(reads()).toBe(0)
@@ -178,13 +178,16 @@ describe('useSessionPhase', () => {
       // 4s → 8s …) — never an HTTP read. The phase stays undefined; the
       // caller treats that as non-blank.
       harness.socket().drop()
-      await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+      // Each step doubles (1s → 2s → 4s → 8s) with ±30% jitter on top: the
+      // advances cross the WIDEST possible step, so the count is exact
+      // without pinning the jittered delay.
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_300) })
       FakeSocket.instances[1]?.drop()
-      await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_600) })
       FakeSocket.instances[2]?.drop()
-      await act(async () => { await vi.advanceTimersByTimeAsync(4_000) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_200) })
       FakeSocket.instances[3]?.drop()
-      await act(async () => { await vi.advanceTimersByTimeAsync(8_000) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_400) })
       expect(FakeSocket.instances).toHaveLength(5)
       expect(reads()).toBe(0)
       expect(harness.state()).toBe('undefined')

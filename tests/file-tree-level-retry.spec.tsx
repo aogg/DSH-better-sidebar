@@ -20,6 +20,7 @@ import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
 import { FileTree } from '../src/client/FileTree.tsx'
+import { fsLevelsResetForTests } from '../src/client/fs-levels-store.ts'
 
 import { setupReactAct } from './test-utils.ts'
 setupReactAct()
@@ -130,6 +131,11 @@ let harness: Harness
 beforeEach(() => {
   FakeSocket.instances = []
   vi.stubGlobal('WebSocket', FakeSocket)
+  // The fs-levels cache (memory mirror + Storage) persists within the
+  // file's jsdom: isolate both per test so a previous listing never
+  // instant-paints into the next one.
+  localStorage.clear()
+  fsLevelsResetForTests()
   fsTree.mockReset()
   fsTrees.mockReset()
   fsTrees.mockImplementation(async (_scope: unknown, paths: readonly string[]) => ({

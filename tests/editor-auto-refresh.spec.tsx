@@ -260,15 +260,16 @@ const sockets: FakeWebSocket[] = []
  * frame drives exactly one one-shot `changes.ops` delta pull per session.
  */
 async function notifyOps(sessionId: string, times = 1): Promise<void> {
+  // The session channel rides the ONE multiplexed feed socket now.
   for (const socket of sockets) {
-    if (socket.closed || !socket.url.includes('/sidebar/ws/session')) continue
+    if (socket.closed || !socket.url.includes('/sidebar/ws/feed')) continue
     if (socket.readyState !== FakeWebSocket.OPEN) socket.open()
   }
   for (let index = 0; index < times; index += 1) {
     await act(async () => {
       for (const socket of sockets) {
-        if (socket.closed || !socket.url.includes('/sidebar/ws/session')) continue
-        socket.frame({ kind: 'ops', sessionId, seq: 1 })
+        if (socket.closed || !socket.url.includes('/sidebar/ws/feed')) continue
+        socket.frame({ channel: 'session', sessionId, data: { kind: 'ops', sessionId, seq: 1 } })
       }
     })
   }

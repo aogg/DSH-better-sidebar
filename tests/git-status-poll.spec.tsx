@@ -38,6 +38,7 @@ vi.mock('../src/client/api.ts', async (importOriginal) => {
 
 import { renderRoot, setupReactAct } from './test-utils.ts'
 import { useGitStatus, type GitStatusView } from '../src/client/ui/git-status.ts'
+import { feedHubResetForTests } from '../src/client/feed-hub.ts'
 
 setupReactAct()
 
@@ -99,16 +100,30 @@ class GitSocket {
 /** Every socket double of the current test. */
 const gitSockets: GitSocket[] = []
 
-/** The GIT push sockets (the `/sidebar/ws/git` ones) — the store now also
- *  opens the session's turn socket (`/sidebar/ws/session`), which shares
- *  the double but must never be confused with the watch socket. */
+/** The feed sockets (the `/sidebar/ws/feed` multiplexer) — the git watch
+ *  AND the session turn subscription now ride the SAME socket, so both
+ *  helpers answer the same list; the frames distinguish the channels. */
 function gitSocketsOf(): GitSocket[] {
-  return gitSockets.filter(socket => socket.url.includes('ws/git'))
+  return gitSockets.filter(socket => socket.url.includes('ws/feed'))
 }
 
-/** The session TURN sockets (`/sidebar/ws/session`). */
+/** The feed sockets (the turn subscription shares the git watch's socket). */
 function turnSocketsOf(): GitSocket[] {
-  return gitSockets.filter(socket => socket.url.includes('ws/session'))
+  return gitSockets.filter(socket => socket.url.includes('ws/feed'))
+}
+
+/** The sessionIds a socket subscribed on one channel, from its sent subs. */
+function subscribedSessions(socket: GitSocket, channel: string): string[] {
+  const ids: string[] = []
+  for (const frame of socket.sent) {
+    try {
+      const parsed = JSON.parse(frame) as { op?: string; channel?: string; sessionId?: string }
+      if (parsed.op === 'sub' && parsed.channel === channel && typeof parsed.sessionId === 'string') ids.push(parsed.sessionId)
+    } catch {
+      // Not a control frame.
+    }
+  }
+  return ids
 }
 
 /** Complete every pending upgrade (the connector answers with its watch set). */
@@ -120,13 +135,17 @@ function openGitSockets(): void {
   }
 }
 
-/** Deliver one host `git` frame naming `worktree` to every live git socket. */
+/** Deliver one host `git` frame naming `worktree` to every feed socket,
+ *  once per session the socket subscribed on the git channel (the envelope's
+ *  sessionId is the hub's routing key). */
 async function gitFrame(worktree: string, paths?: string[]): Promise<void> {
   openGitSockets()
   await act(async () => {
     for (const socket of gitSocketsOf()) {
       if (socket.closed) continue
-      socket.onmessage?.({ data: JSON.stringify({ kind: 'git', worktree, ...(paths !== undefined ? { paths } : {}) }) })
+      for (const sessionId of subscribedSessions(socket, 'git')) {
+        socket.onmessage?.({ data: JSON.stringify({ channel: 'git', sessionId, data: { kind: 'git', worktree, ...(paths !== undefined ? { paths } : {}) } }) })
+      }
     }
   })
 }
@@ -137,7 +156,7 @@ async function turnFrame(sessionId: string): Promise<void> {
   await act(async () => {
     for (const socket of turnSocketsOf()) {
       if (socket.closed) continue
-      socket.onmessage?.({ data: JSON.stringify({ kind: 'turn', sessionId }) })
+      socket.onmessage?.({ data: JSON.stringify({ channel: 'session', sessionId, data: { kind: 'turn', sessionId } }) })
     }
   })
 }
@@ -162,6 +181,10 @@ afterEach(() => {
   gitStatusPaths.mockReset()
   vi.unstubAllGlobals()
   gitSockets.length = 0
+  // The feed hub is a module singleton: a test whose subjects do not retire
+  // every subscription must not leak its entries (and their dead socket)
+  // into the next one.
+  feedHubResetForTests()
   localStorage.clear()
   vi.useRealTimers()
 })
@@ -194,10 +217,15 @@ describe('the shared git status store cadence', () => {
     // slot watches): ONE git socket for the session, fenced by its sessionId
     // (the store's turn socket for the same session is a separate URL).
     expect(gitSocketsOf()).toHaveLength(1)
-    expect(gitSocketsOf()[0]!.url).toContain('/sidebar/ws/git')
-    expect(gitSocketsOf()[0]!.url).toContain('sessionId=poll-on')
+    expect(gitSocketsOf()[0]!.url).toContain('/sidebar/ws/feed')
     openGitSockets()
-    expect(gitSocketsOf()[0]!.sent).toEqual([JSON.stringify({ op: 'watch', worktrees: ['/tmp'] })])
+    // The watch rides the channel's sub frame now (session + args on it);
+    // the visible slot's turn subscription shares the socket (session
+    // channel, no args).
+    expect(gitSocketsOf()[0]!.sent).toEqual([
+      JSON.stringify({ op: 'sub', channel: 'session', sessionId: 'poll-on' }),
+      JSON.stringify({ op: 'sub', channel: 'git', sessionId: 'poll-on', args: { worktrees: ['/tmp'] } }),
+    ])
 
     // The cadence is gone with the poller: no timer re-fetches anything…
     await tick(120_000)
@@ -290,11 +318,15 @@ describe('the shared git status store cadence', () => {
 
     // The connection drops; the connector backs off and retries forever.
     dropGitSockets()
-    await tick(1_000)
+    // The first retry waits 1s ±30% jitter: cross the widest step.
+    await tick(1_300)
     expect(gitSocketsOf()).toHaveLength(2)
-    // The re-open re-announces the watch set…
+    // The re-open replays every subscription (the hub's re-seed)…
     openGitSockets()
-    expect(gitSocketsOf()[1]!.sent).toEqual([JSON.stringify({ op: 'watch', worktrees: ['/tmp'] })])
+    expect(gitSocketsOf()[1]!.sent).toEqual([
+      JSON.stringify({ op: 'sub', channel: 'session', sessionId: 'reconnect' }),
+      JSON.stringify({ op: 'sub', channel: 'git', sessionId: 'reconnect', args: { worktrees: ['/tmp'] } }),
+    ])
     // …and fires the catch-up pull: the outage swallowed notices.
     await flush()
     expect(gitStatus).toHaveBeenCalledTimes(2)
@@ -469,9 +501,17 @@ describe('the store\'s cache, per-path patching and turn calibration', () => {
     expect(latest?.snapshot?.entries).toEqual([{ path: 'a.ts', xy: ' M' }])
     expect(latest?.loading).toBe(false)
     // And the hydrated root lets the watch attach BEFORE the pull returns.
+    // The array also still holds the PREVIOUS visit's feed socket — the
+    // release at unmount retired its last subscription, so the hub closed it
+    // (zero consumers, zero connections); count the LIVE sockets of this
+    // mount, which carry exactly the session + git watch subs.
     openGitSockets()
-    expect(gitSocketsOf()).toHaveLength(1)
-    expect(gitSocketsOf()[0]!.sent).toEqual([JSON.stringify({ op: 'watch', worktrees: ['/tmp'] })])
+    const liveFeedSockets = gitSocketsOf().filter(socket => !socket.closed)
+    expect(liveFeedSockets).toHaveLength(1)
+    expect(liveFeedSockets[0]!.sent).toEqual([
+      JSON.stringify({ op: 'sub', channel: 'session', sessionId: 'hydrate' }),
+      JSON.stringify({ op: 'sub', channel: 'git', sessionId: 'hydrate', args: { worktrees: ['/tmp'] } }),
+    ])
     await act(async () => { release?.(REPO) })
     await flush()
     // The calibration pull still ran — the cache only decides the first
@@ -577,11 +617,13 @@ describe('the store\'s cache, per-path patching and turn calibration', () => {
     await tick(0)
     await flush()
     expect(gitStatus).toHaveBeenCalledTimes(1)
-    // The turn socket is the session's own URL, one per session, and it
-    // exists the moment the slot is visibly held.
+    // The turn subscription rides the session channel of the SAME feed
+    // socket, and it exists the moment the slot is visibly held (its sub
+    // frame rides the open).
     expect(turnSocketsOf()).toHaveLength(1)
-    expect(turnSocketsOf()[0]!.url).toContain('/sidebar/ws/session')
-    expect(turnSocketsOf()[0]!.url).toContain('sessionId=turn-cal')
+    expect(turnSocketsOf()[0]!.url).toContain('/sidebar/ws/feed')
+    openGitSockets()
+    expect(subscribedSessions(turnSocketsOf()[0]!, 'session')).toEqual(['turn-cal'])
 
     // One settled reply of THIS session = one full calibration re-pull.
     await turnFrame('turn-cal')

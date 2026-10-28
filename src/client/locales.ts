@@ -922,6 +922,13 @@ export const zh = {
   sshLoadFailed: '读取失败',
   sshRetry: '重试',
   sshRefresh: '刷新',
+  // 工作区切走后释放推送订阅（feed-release.ts / feed-release-settings.ts）。
+  // zh 是文案源头；en 必须同步，其余语言按 locales.spec.ts 的 key 检查回退 en。
+  feedReleaseDelayTitle: '工作区切走后释放推送订阅延时（秒）',
+  feedReleaseDelayDesc: '切换会话后，旧会话的推送订阅（会话/Git/文件任务/打开请求）保留这么多秒再释放，省下连接与内存；延时内切回不受影响，超时后切回会自动重订阅并恢复数据。0 = 不释放。默认 30。',
+  feedReleaseDelayUnit: '秒',
+  feedReleaseDelayProjectTitle: '切走释放延时（本项目）',
+  feedReleaseDelayProjectDesc: '只对本工作区生效，覆盖全局值；0 = 本项目不释放。',
 }
 
 /** The en dictionary (key-set-equal to zh, enforced by the type annotation). */
@@ -1822,6 +1829,12 @@ export const en: Record<keyof typeof zh, string> = {
   sshLoadFailed: 'Load failed',
   sshRetry: 'Retry',
   sshRefresh: 'Refresh',
+  // Feed subscription release after leaving a workspace (feed-release.ts).
+  feedReleaseDelayTitle: 'Release push subscriptions after leaving a workspace (seconds)',
+  feedReleaseDelayDesc: 'After a session switch, the old session\'s push subscriptions (session / git / file jobs / open requests) stay alive this many seconds and then release, saving connections and memory; switching back inside the window keeps them, after it they re-subscribe and re-seed. 0 = never release. Default 30.',
+  feedReleaseDelayUnit: 's',
+  feedReleaseDelayProjectTitle: 'Release delay (this project)',
+  feedReleaseDelayProjectDesc: 'Applies to this workspace only and overrides the global value; 0 = never release here.',
 }
 
 /**

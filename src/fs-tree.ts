@@ -102,9 +102,8 @@ function cacheKey(path: string, maxEntries: number, exclude?: ExcludeMatcher): s
 /**
  * Drop the cached level(s) for one directory (and, when called with no
  * argument, everything). Writers call this after any mutation: `fs.write`,
- * `fs.rename`, `fs.remove`, `fs.mkdir`, the upload route and the fs-watch
- * notifier all funnel here, so a stale level is never served past the write
- * that changed it.
+ * `fs.rename`, `fs.remove`, `fs.mkdir` and the upload route all funnel
+ * here, so a stale level is never served past the write that changed it.
  * @param path - absolute (or session-relative) directory to invalidate; absent
  *  clears the whole cache.
  */
@@ -215,7 +214,7 @@ async function readDirectory(path: string, maxEntries: number, exclude?: Exclude
  * levels. The per-level bounds below are exactly that — per level — while a
  * batch request lists up to `FS_TREES_MAX_PATHS` levels concurrently
  * (`fs.trees`), so without a shared budget a cold mount of a wide tree could
- * hold levels × per-level probes open at once (64 × 32). Equal to the
+ * hold levels × per-level probes open at once. Equal to the
  * per-level constant on purpose: a single-level listing behaves as before.
  */
 export const PROBE_BUDGET = 32

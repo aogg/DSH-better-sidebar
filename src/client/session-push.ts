@@ -1,5 +1,6 @@
 /**
- * Client end of the session push channel `/sidebar/ws/session`.
+ * Client end of the session push channel, riding the multiplexed feed socket
+ * (`/sidebar/ws/feed`, channel `'session'` — see feed-hub.ts).
  *
  * The host turns session events into frames: a first user/assistant message
  * flips the blank phase (`kind: 'phase'`, `blank: false` — the frame IS the
@@ -31,17 +32,19 @@
  * host simply never sends it and the newer client keeps working (it just
  * never hears the invalidation).
  *
- * This socket is the session hooks' ONLY data channel — there is no HTTP
- * polling beside it. A dropped socket is answered with reconnects that back
- * off 1s → 15s (reset on the first success), never with HTTP asks.
+ * The feed socket is the session hooks' ONLY data channel — there is no HTTP
+ * polling beside it. A dropped socket is answered with reconnects (the hub's
+ * 1s → 15s jittered backoff, reset on the first success) that REPLAY every
+ * watch — never with HTTP asks.
  *
- * One small connector shared by the session hooks (`session-phase.ts`,
- * `use-session-root.ts`), shaped after use-sidechat-push minus the
- * reconcile-on-change logic: each hook watches a single session that is fixed
- * for the connection's lifetime, so the full `watch` frame is simply
- * (re-)sent on every open — including after a reconnect.
+ * ONE SHARED SOCKET, not one per caller: every `openSessionPush` call
+ * subscribes its session ids on the multiplexed feed (one reference-counted
+ * `'session'` subscription per id), so the native sidebar's keep-mounted tab
+ * bodies and every hook share ONE connection no matter how many tabs are
+ * open. Each call still hears only what its watch set names — the hub routes
+ * by sessionId and the frame filter below keeps the protocol's own guards.
  */
-import { hostWebSocketUrl } from './host-route-url.ts'
+import { feedSubscribe, type FeedSubscription } from './feed-hub.ts'
 
 /** One host frame: which watched session changed, which fact — and maybe the answer. */
 export interface SessionPushFrame {
@@ -97,33 +100,46 @@ export interface SessionPushFrame {
   seq?: unknown
 }
 
-/** How long to wait before re-opening a dropped socket; failures back off to the cap. */
-const RETRY_BASE_MS = 1000
-const RETRY_MAX_MS = 15_000
+/**
+ * Validate one unwrapped feed payload into a {@linkcode SessionPushFrame}.
+ * A malformed or foreign frame is a late/dirty notice, not an invalidation.
+ */
+function parseFrame(data: unknown): SessionPushFrame | undefined {
+  if (data === null || typeof data !== 'object') return undefined
+  const frame = data as SessionPushFrame
+  if (frame.kind !== 'phase' && frame.kind !== 'cwd' && frame.kind !== 'history' && frame.kind !== 'history-seed' && frame.kind !== 'turn' && frame.kind !== 'ops') return undefined
+  // history-seed is project-scoped: no sessionId on the wire — its claim
+  // token is the project root, so a cwd-less seed frame is malformed.
+  if (frame.kind === 'history-seed') {
+    if (typeof frame.cwd !== 'string' || frame.cwd === '') return undefined
+  } else if (typeof frame.sessionId !== 'string') return undefined
+  return frame
+}
 
-/** A live session push connection: close it, or re-announce its watch set. */
+/** A live session push subscription: re-sync its watch set, or dispose it. */
 export interface SessionPushConnection {
   /**
-   * Re-send the whole watch frame (a full replacement). For a getter-based
-   * connection whose ids change mid-flight — the shared ops hub's union of
-   * subscriber trees — this is how a membership change reaches the host
-   * without a reconnect.
+   * Re-read the watch set and apply the delta to the shared feed (a session
+   * a getter-based connection gained joins, one it lost leaves). For the
+   * fixed-array callers this is a no-op — the set never changes mid-flight.
    */
   reconcile(): void
-  /** Close the connection and stop its retries (idempotent). */
+  /** Close the connection (unsubscribe every id it still holds; idempotent). */
   close(): void
 }
 
 /**
- * Open the session push socket for a fixed OR mutable watch set.
+ * Subscribe to the session channel of the shared feed for a fixed OR mutable
+ * watch set.
  * @param sessionIds - sessions to watch; an array is frozen for the
- *   connection's lifetime (the hooks' contract), a getter is re-read on every
- *   open AND every {@linkcode SessionPushConnection.reconcile} — the shared
- *   ops hub (ops-push.ts) feeds it the union of its subscribers' sessions.
+ *   subscription's lifetime (the hooks' contract), a getter is re-read on
+ *   every {@linkcode SessionPushConnection.reconcile} — the shared ops hub
+ *   (ops-push.ts) feeds it the union of its subscribers' sessions.
  * @param onFrame - one validated host frame.
- * @param onState - optional open/close signal (observability; the session
- *   hooks stay connected either way — a drop just means frames pause until
- *   the next successful reconnect).
+ * @param onState - optional open/close signal of the shared feed socket
+ *   (observability; the session hooks stay connected either way — a drop
+ *   just means frames pause until the next successful reconnect, whose
+ *   replay re-seeds the watch answers).
  * @returns the live connection (close it to tear down; both calls idempotent).
  */
 export function openSessionPush(
@@ -132,70 +148,47 @@ export function openSessionPush(
   onState?: (open: boolean) => void,
 ): SessionPushConnection {
   const currentIds = (): readonly string[] => (typeof sessionIds === 'function' ? sessionIds() : sessionIds)
-  let socket: WebSocket | null = null
-  let retry: number | undefined
-  let closed = false
-  let failures = 0
-
-  /** Push the whole watch set (a full replacement, also after a reconnect). */
-  const sendWatch = (): void => {
-    if (socket !== null && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ op: 'watch', sessionIds: [...currentIds()] }))
+  /** One reference-counted feed subscription per watched id. */
+  const subs = new Map<string, FeedSubscription>()
+  /** Land one validated feed payload on the caller. */
+  const onData = (data: unknown): void => {
+    const frame = parseFrame(data)
+    if (frame === undefined) return
+    onFrame(frame)
+  }
+  /** Bring the live subscriptions in line with the current watch set: ids
+   * the set lost are unsubscribed, ids it gained subscribe (delta, so a
+   * membership change never re-seeds the ids it kept). */
+  const sync = (): void => {
+    const wanted = new Set(currentIds())
+    for (const [id, sub] of [...subs]) {
+      if (wanted.has(id)) continue
+      sub.close()
+      subs.delete(id)
+    }
+    for (const id of wanted) {
+      if (subs.has(id)) continue
+      subs.set(id, feedSubscribe({ channel: 'session', sessionId: id, onData, onState }))
     }
   }
-
-  const connect = (): void => {
-    if (closed) return
-    socket = new WebSocket(hostWebSocketUrl('sidebar/ws/session').toString())
-    socket.onopen = () => {
-      failures = 0
-      onState?.(true)
-      sendWatch()
-    }
-    socket.onmessage = (event) => {
-      if (typeof event.data !== 'string') return
-      let frame: SessionPushFrame
-      try {
-        frame = JSON.parse(event.data) as SessionPushFrame
-      } catch {
-        return
-      }
-      if (frame === null || typeof frame !== 'object') return
-      // A malformed or foreign frame is a late/dirty notice, not an invalidation.
-      if (frame.kind !== 'phase' && frame.kind !== 'cwd' && frame.kind !== 'history' && frame.kind !== 'history-seed' && frame.kind !== 'turn' && frame.kind !== 'ops') return
-      // history-seed is project-scoped: no sessionId on the wire — its claim
-      // token is the project root, so a cwd-less seed frame is malformed.
-      if (frame.kind === 'history-seed') {
-        if (typeof frame.cwd !== 'string' || frame.cwd === '') return
-      } else if (typeof frame.sessionId !== 'string') return
-      onFrame(frame)
-    }
-    socket.onclose = () => {
-      if (closed) return
-      onState?.(false)
-      failures += 1
-      retry = window.setTimeout(connect, Math.min(RETRY_BASE_MS * 2 ** (failures - 1), RETRY_MAX_MS))
-    }
-  }
-  connect()
+  sync()
 
   return {
-    reconcile: sendWatch,
+    reconcile: sync,
     close: () => {
-      closed = true
-      if (retry !== undefined) window.clearTimeout(retry)
-      socket?.close()
+      for (const sub of subs.values()) sub.close()
+      subs.clear()
     },
   }
 }
 
 /**
- * Open the session push socket for one fixed watch set.
- * @param sessionIds - sessions to watch; announced on every (re)open.
+ * Subscribe to the session channel of the shared feed for one fixed watch
+ * set.
+ * @param sessionIds - sessions to watch; announced as feed subscriptions on
+ *   join and re-announced by the hub's reconnect replay.
  * @param onFrame - one validated host frame.
- * @param onState - optional open/close signal (observability; the session
- *   hooks stay connected either way — a drop just means frames pause until
- *   the next successful reconnect).
+ * @param onState - optional open/close signal of the shared feed socket.
  * @returns the disposer (idempotent per connection).
  */
 export function connectSessionPush(

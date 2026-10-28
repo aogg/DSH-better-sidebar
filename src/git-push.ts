@@ -6,8 +6,8 @@
  * inventory / branches / history (`changes/GitLens.tsx`), and the round
  * lenses' log / range diff (`changes/RoundCommitsLens.tsx`,
  * `changes/RoundDiffLens.tsx`) — used to advance on client-side
- * `usePolling` timers. This hub replaces them with the fs-watch model
- * (`fs-watch.ts`): the HOST watches where the data changes and pushes a
+ * `usePolling` timers. This hub replaces them with the host-side watch
+ * model: the HOST watches where the data changes and pushes a
  * debounced, data-free INVALIDATION; the client re-pulls the affected
  * api once. No frame carries git output, and no server timer ever runs a
  * git command — the only timers here fold bursts (debounce, not polling).
@@ -40,9 +40,8 @@
  * status store's "slow down until the timer stops" ladder, without ever
  * letting a pathological repository keep a `git status` chain running
  * back to back. Firing also drops the repository's git-read cache
- * (`invalidateGitCache`, the same reason `fs-watch` drops the listing
- * cache): the client's re-pull must not be answered from a cache level
- * computed before the change.
+ * (`invalidateGitCache`): the client's re-pull must not be answered from
+ * a cache level computed before the change.
  *
  * WHAT MOVED rides the frame too, since the status store learned to
  * refresh one path at a time: the FILES watcher group forwards each
@@ -111,11 +110,41 @@ interface WatchFrame {
 /** Warning sink: the hub never crashes a socket over an unwatchable path. */
 export type GitWatchWarn = (message: string, error?: unknown) => void
 
+/** One subscription (a legacy endpoint socket, or one feed sub) of the hub. */
+export interface GitWatchSubscription {
+  /**
+   * Bring the watched set in line with one full-replacement list (the
+   * serialized, async-resolution application; never rejects — failures
+   * degrade to the warning sink).
+   */
+  apply(worktrees: readonly string[]): Promise<void>
+  /** Release the subscription's watch set; no further frames. */
+  close(): void
+}
+
+/** What one subscription contributes: its cwd source and frame sink. */
+export interface GitWatchSubscribeOptions {
+  /**
+   * Resolves the subscription's session cwd (watch paths resolve against
+   * it exactly like every git route's targets do).
+   */
+  cwdOf: () => Promise<string>
+  /** Receives this subscription's frames (never called after `close`). */
+  onFrame: (frame: GitPushFrame) => void
+}
+
 /** The host-side push hub: a shared watcher registry, any number of sockets. */
 export interface GitWatchHub {
   /**
+   * Open one subscription: its watch set is held until it closes, its
+   * frames ride its own sink. The feed multiplexer opens one per (channel,
+   * key); the legacy endpoint opens one per socket.
+   */
+  subscribe(options: GitWatchSubscribeOptions): GitWatchSubscription
+  /**
    * Serve one accepted socket: read its watch frames, share the watchers
-   * of every worktree it names, push notices until it closes.
+   * of every worktree it names, push notices until it closes. A thin shell
+   * over {@link subscribe} — the ws wiring around one subscription.
    * @param ws - the accepted WebSocket.
    * @param cwdOf - resolves the socket's session cwd (watch paths resolve
    *   against it exactly like every git route's targets do).
@@ -186,7 +215,7 @@ async function resolveGitDirs(worktree: string): Promise<GitDirs | undefined> {
 export function createGitWatchHub(warn: GitWatchWarn): GitWatchHub {
   /** Shared watchers, keyed by the resolved worktree path. */
   const entries = new Map<string, WorktreeEntry>()
-  const sockets = new Set<GitSocket>()
+  const subscriptions = new Set<GitSubscription>()
 
   /** One handle onto one path, or remove it again when the watch failed.
    *  `collect` marks the checkout's FILES watcher group — the only one
@@ -320,93 +349,107 @@ export function createGitWatchHub(warn: GitWatchWarn): GitWatchHub {
       if (entries.get(key) !== entry) return
       entry.firedAt = Date.now()
       // The re-pull this notice triggers must not be answered from a
-      // cache level computed before the change — the same reason
-      // fs-watch drops the host's listing cache for the changed directory.
+      // cache level computed before the change — the same cache rule
+      // every mutation and push surface of the plugin follows.
       invalidateGitCache(entry.repoRoot)
       // Consume the burst's collected paths: an overflowed (`undefined`)
       // or empty set fires paths-less, the "something moved" shape. The
       // window resets either way — the next burst collects afresh.
       const paths = entry.paths !== undefined && entry.paths.size > 0 ? [...entry.paths] : undefined
       entry.paths = new Set()
-      for (const socket of sockets) {
-        const spelling = socket.spellingOf(key)
-        if (spelling !== undefined) socket.send(paths === undefined ? { kind: 'git', worktree: spelling } : { kind: 'git', worktree: spelling, paths })
+      for (const subscription of subscriptions) {
+        const spelling = subscription.spellingOf(key)
+        if (spelling !== undefined) subscription.send(paths === undefined ? { kind: 'git', worktree: spelling } : { kind: 'git', worktree: spelling, paths })
       }
     }, wait)
     // A pending notice must never hold the host process open.
     entry.timer.unref()
   }
 
+  const openSubscription = (options: GitWatchSubscribeOptions): GitSubscription => {
+    const subscription = new GitSubscription(
+      options,
+      { acquire, release, warn, detach: () => { subscriptions.delete(subscription) } },
+    )
+    subscriptions.add(subscription)
+    return subscription
+  }
+
   return {
+    subscribe: (options) => openSubscription(options),
     attach: (ws, cwdOf) => {
-      const socket = new GitSocket(
-        ws,
+      // The endpoint shell: one subscription, its frames on the socket, its
+      // lifetime the socket's — the feed opens the same shape per sub key.
+      const subscription = openSubscription({
         cwdOf,
-        { acquire, release, warn, detach: () => { sockets.delete(socket) } },
-      )
-      sockets.add(socket)
+        onFrame: (frame) => {
+          try {
+            ws.send(JSON.stringify(frame))
+          } catch {
+            // A send on a dying socket is expected; the close handler cleans up.
+          }
+        },
+      })
+      ws.on('message', (data: unknown) => { subscription.onMessage(data) })
+      ws.on('close', () => { subscription.close() })
+      ws.on('error', () => { subscription.close() })
     },
     dispose: () => {
-      for (const socket of [...sockets]) socket.close()
+      for (const subscription of [...subscriptions]) subscription.close()
     },
   }
 }
 
-/** The per-socket seam the hub hands each {@link GitSocket}. */
+/** The per-subscription seam the hub hands each {@link GitSubscription}. */
 interface GitSocketHub {
   acquire(key: string): Promise<WorktreeEntry | undefined>
   release(key: string): void
   warn: GitWatchWarn
-  /** Remove the socket from the hub's push set (its close path). */
+  /** Remove the subscription from the hub's push set (its close path). */
   detach(): void
 }
 
 /**
- * Serve one socket's watch set until it closes.
+ * Serve one subscription's watch set until it closes.
  *
- * Watch frames are `{ op: 'watch', worktrees: [...] }` — a FULL
- * replacement, the session-push model, so a reconnect (the client
- * re-sends the whole set) and a membership change (the client's union
- * hub reconciling) share one code path. Frames are applied serialized:
- * path resolution is async (the `.git` probe), and a later frame must
- * always observe the previous one's registrations.
+ * Watch sets are FULL replacements — `{ worktrees: [...] }`, the
+ * session-push model — so a reconnect (the client re-sends the whole set)
+ * and a membership change (the client's union hub reconciling) share one
+ * code path. Sets are applied serialized: path resolution is async (the
+ * `.git` probe), and a later set must always observe the previous one's
+ * registrations. The transport lives outside (the legacy endpoint wires a
+ * WebSocket, the feed multiplexer an envelope sink); this class owns the
+ * resolved-path → client-spelling map and the hub's refcounted entries.
  */
-class GitSocket {
-  private readonly ws: WebSocket
+class GitSubscription {
+  private readonly onFrame: (frame: GitPushFrame) => void
   private readonly hub: GitSocketHub
   private readonly cwdOf: () => Promise<string>
   /** Resolved path → the client's own spelling (frames echo it back). */
   private readonly watched = new Map<string, string>()
-  /** Serialized frame application (resolution is async). */
+  /** Serialized set application (resolution is async). */
   private chain: Promise<void> = Promise.resolve()
   private closed = false
 
-  constructor(ws: WebSocket, cwdOf: () => Promise<string>, hub: GitSocketHub) {
-    this.ws = ws
-    this.cwdOf = cwdOf
+  constructor(options: GitWatchSubscribeOptions, hub: GitSocketHub) {
+    this.onFrame = options.onFrame
+    this.cwdOf = options.cwdOf
     this.hub = hub
-    ws.on('message', (data: unknown) => { this.onMessage(data) })
-    ws.on('close', () => { this.close() })
-    ws.on('error', () => { this.close() })
   }
 
-  /** The client's spelling of one watched path, if this socket watches it. */
+  /** The client's spelling of one watched path, if this subscription watches it. */
   spellingOf(key: string): string | undefined {
     return this.watched.get(key)
   }
 
-  /** Push one notice (silently dropped once the socket is gone). */
+  /** Push one notice (silently dropped once the subscription is gone). */
   send(frame: GitPushFrame): void {
     if (this.closed) return
-    try {
-      this.ws.send(JSON.stringify(frame))
-    } catch {
-      // A send on a dying socket is expected; the close handler cleans up.
-    }
+    this.onFrame(frame)
   }
 
-  /** Apply one watch frame (an unparseable frame is ignored, never fatal). */
-  private onMessage(data: unknown): void {
+  /** Apply one inbound frame (an unparseable frame is ignored, never fatal). */
+  onMessage(data: unknown): void {
     if (this.closed) return
     let frame: WatchFrame
     try {
@@ -418,13 +461,19 @@ class GitSocket {
     const list = Array.isArray(frame.worktrees)
       ? frame.worktrees.filter((path): path is string => typeof path === 'string' && path !== '')
       : []
-    this.chain = this.chain
-      .then(() => this.apply(list.slice(0, MAX_WATCHED)))
-      .catch((error: unknown) => { this.hub.warn('git watch frame failed', error) })
+    void this.apply(list)
   }
 
   /** Bring the watched set in line with one frame's list, serialized. */
-  private async apply(list: readonly string[]): Promise<void> {
+  apply(list: readonly string[]): Promise<void> {
+    this.chain = this.chain
+      .then(() => this.applySet(list.slice(0, MAX_WATCHED)))
+      .catch((error: unknown) => { this.hub.warn('git watch frame failed', error) })
+    return this.chain
+  }
+
+  /** Bring the watched set in line with one list (the chain's body). */
+  private async applySet(list: readonly string[]): Promise<void> {
     if (this.closed) return
     let cwd: string
     try {
@@ -466,7 +515,7 @@ class GitSocket {
     if (this.closed) return
     this.closed = true
     this.hub.detach()
-    // Registrations a still-running frame application adds must release
+    // Registrations a still-running set application adds must release
     // too — hence releasing AFTER the chain drains.
     void this.chain.then(() => {
       for (const key of this.watched.keys()) this.hub.release(key)

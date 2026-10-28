@@ -1,17 +1,22 @@
 /**
- * The client half of the Side Chat staleness push: one socket per mounted
- * tab, opened under `/sidebar/ws/sidechat`, whose `watch` frames carry the
- * WHOLE subscription set (a replacement, never an incremental add), whose
- * notices are routed to `onInvalidate` for WATCHED ids only, and which does
- * not exist at all while the id list is empty — unless the GLOBAL threads
- * channel is subscribed (`threads: true`), which keeps the socket alive for
- * tabs with no bound thread and routes `{scope:'threads'}` frames (plus the
- * open-time alignment) to `onThreadsStale`.
+ * The client half of the Side Chat staleness push, riding the ONE multiplexed
+ * feed socket (channel `'sidechat'`, feed-hub.ts): one `sub` per watched
+ * thread (a delta sub/unsub per id-list change on the SAME socket — never a
+ * reconnect), the GLOBAL threads channel AGGREGATED at module level (every
+ * subscribing tab shares one `{threads:true}` wire subscription), notices
+ * routed to `onInvalidate` for WATCHED ids only, no subscription at all while
+ * the id list is empty — unless the threads channel is joined, which keeps a
+ * tab with no bound thread on the global feed. Subscribe-and-pull alignment:
+ * a view's `onThreadsStale` fires when it JOINS (the shared subscription may
+ * have been open long before) and on every threads frame / recovered open.
  *
- * The identity guard mirrors the fs-watch hook's: the wanted set derives from
- * the CONTENT of the id list (a NUL-joined key), so a caller re-rendering
- * with a fresh array of the same ids neither reopens the socket nor re-sends
- * the watch frame.
+ * The identity guard: the wanted set derives from the CONTENT of the id list
+ * (a NUL-joined key), so a caller re-rendering with a fresh array of the same
+ * ids sends nothing.
+ *
+ * The threads channel handle lives at MODULE level, so every test unmounts
+ * its probe — a leftover subscriber would keep the shared subscription (and
+ * the socket) alive into the next test.
  */
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -23,7 +28,7 @@ import { useSidechatPush } from '../src/client/use-sidechat-push.ts'
 import { setupReactAct } from './test-utils.ts'
 setupReactAct()
 
-/** The smallest WebSocket the hook talks to: `send` records the frames. */
+/** The smallest WebSocket the hub talks to: `send` records the frames. */
 class FakeSocket {
   static instances: FakeSocket[] = []
   static readonly OPEN = 1
@@ -49,9 +54,9 @@ class FakeSocket {
   frame(payload: unknown): void { this.onmessage?.({ data: JSON.stringify(payload) }) }
   /** A drop WITHOUT a clean close (drives the retry/backoff path). */
   drop(): void { this.onclose?.() }
-  /** The frames the hook sent, as parsed objects. */
-  frames(): { op: string; threadIds: string[]; threads?: boolean }[] {
-    return this.sent.map(frame => JSON.parse(frame) as { op: string; threadIds: string[]; threads?: boolean })
+  /** The frames the hub sent, as parsed objects. */
+  frames(): Array<Record<string, unknown>> {
+    return this.sent.map(frame => JSON.parse(frame) as Record<string, unknown>)
   }
 }
 
@@ -79,7 +84,7 @@ function Probe(props: ProbeOptions): ReactNode {
 
 interface Harness {
   rerender: (threadIds: string[]) => void
-  /** The single open socket; throws when the list was empty. */
+  /** The single open socket; throws when none was opened. */
   socket: () => FakeSocket
   unmount: () => void
 }
@@ -113,26 +118,30 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('useSidechatPush', () => {
-  it('opens the sidechat socket and announces the watched ids once it opens', () => {
+describe('useSidechatPush (per-thread subscriptions)', () => {
+  it('opens the shared feed socket and subscribes each watched thread on it', () => {
     const harness = mountProbe(() => {})
     const socket = harness.socket()
-    expect(socket.url).toContain('/sidebar/ws/sidechat')
-    // Nothing is sent before the connection opens.
+    expect(socket.url).toContain('/sidebar/ws/feed')
+    // The sub control frame rides the OPEN (nothing before it).
     expect(socket.sent).toEqual([])
     act(() => { socket.open() })
-    expect(socket.frames()).toEqual([{ op: 'watch', threadIds: ['t1'] }])
+    expect(socket.frames()).toEqual([{ op: 'sub', channel: 'sidechat', args: { threadId: 't1' } }])
     harness.unmount()
+    expect(socket.closed).toBe(true)
   })
 
-  it('re-announces the full set on the SAME socket when the ids change', () => {
+  it('applies an id change as a DELTA on the same socket', () => {
     const harness = mountProbe(() => {})
     const socket = harness.socket()
     act(() => { socket.open() })
     harness.rerender(['t1', 't2'])
     expect(FakeSocket.instances).toHaveLength(1)
-    expect(socket.frames().at(-1)).toEqual({ op: 'watch', threadIds: ['t1', 't2'] })
+    expect(socket.frames().at(-1)).toEqual({ op: 'sub', channel: 'sidechat', args: { threadId: 't2' } })
+    harness.rerender(['t2'])
+    expect(socket.frames().at(-1)).toEqual({ op: 'unsub', channel: 'sidechat', args: { threadId: 't1' } })
     harness.unmount()
+    expect(socket.closed).toBe(true)
   })
 
   it('sends nothing when a re-render repeats the same ids in a fresh array', () => {
@@ -151,89 +160,108 @@ describe('useSidechatPush', () => {
     const harness = mountProbe(onInvalidate)
     const socket = harness.socket()
     act(() => { socket.open() })
-    // A thread this socket does not watch (a late notice after a switch).
-    act(() => { socket.frame({ threadId: 't9' }) })
+    // A thread this view does not watch (a late notice after a switch): the
+    // hub routes by subscription, and the view filters again.
+    act(() => { socket.frame({ channel: 'sidechat', data: { threadId: 't9' } }) })
     expect(onInvalidate).not.toHaveBeenCalled()
     // A malformed frame is ignored outright.
-    act(() => { socket.frame({ nope: 1 }) })
-    expect(onInvalidate).not.toHaveBeenCalled()
+    act(() => { socket.frame({ channel: 'sidechat', data: { nope: 1 } }) })
+    act(() => { socket.frame({ nope: true }) })
     // The notice is an invalidation: `running` rides along but changes nothing.
-    act(() => { socket.frame({ threadId: 't1', running: true }) })
+    act(() => { socket.frame({ channel: 'sidechat', data: { threadId: 't1', running: true } }) })
     expect(onInvalidate).toHaveBeenCalledWith('t1')
     expect(onInvalidate).toHaveBeenCalledTimes(1)
     harness.unmount()
   })
 
-  it('opens no socket while the list is empty, and closes it when the list empties', () => {
+  it('opens no socket while the list is empty, and re-subscribes when it fills', () => {
     const harness = mountProbe(() => {}, [])
     expect(FakeSocket.instances).toHaveLength(0)
 
     harness.rerender(['t1'])
     const socket = harness.socket()
     act(() => { socket.open() })
-    expect(socket.frames()).toEqual([{ op: 'watch', threadIds: ['t1'] }])
+    expect(socket.frames()).toEqual([{ op: 'sub', channel: 'sidechat', args: { threadId: 't1' } }])
 
     harness.rerender([])
-    expect(socket.closed).toBe(true)
+    // The LAST subscription of the run retires its key by CLOSING the shared
+    // socket (no `unsub` is needed when nothing stays on the wire).
     expect(FakeSocket.instances).toHaveLength(1)
-    harness.unmount()
-  })
-
-  it('closes the socket on unmount', () => {
-    const harness = mountProbe(() => {})
-    const socket = harness.socket()
-    act(() => { socket.open() })
-    harness.unmount()
     expect(socket.closed).toBe(true)
+    harness.unmount()
   })
 
-  // ---- The GLOBAL threads channel --------------------------------------
+  it('fires onReconnect on a recovered open so the outage catch-up runs', async () => {
+    vi.useFakeTimers()
+    try {
+      const onReconnect = vi.fn()
+      const harness = mountProbe(() => {}, ['t1'], { onReconnect })
+      const socket = harness.socket()
+      act(() => { socket.open() })
+      expect(onReconnect).not.toHaveBeenCalled()
+      socket.drop()
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+      const second = FakeSocket.instances[1]!
+      expect(second).toBeDefined()
+      act(() => { second.open() })
+      // The replay re-announces the thread on the new socket…
+      expect(second.frames()).toEqual([{ op: 'sub', channel: 'sidechat', args: { threadId: 't1' } }])
+      // …and the recovery fires once.
+      expect(onReconnect).toHaveBeenCalledTimes(1)
+      harness.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
 
+describe('useSidechatPush (the shared global threads channel)', () => {
   it('keeps the socket alive with threads:true even when the id list is empty', () => {
-    // The pre-threads contract (no socket for an empty list) has its own case
-    // above; with the threads channel a tab with NO bound thread still needs
-    // the global feed, so the socket stays.
-    const harness = mountProbe(() => {}, [], { threads: true })
+    const harness = mountProbe(() => {}, [], { threads: true, onThreadsStale: () => {} })
     expect(FakeSocket.instances).toHaveLength(1)
     const socket = harness.socket()
     act(() => { socket.open() })
-    // An empty watch set + the threads flag: the host filters {threadId}
-    // frames against the empty set and pushes only {scope:'threads'} frames.
-    expect(socket.frames()).toEqual([{ op: 'watch', threadIds: [], threads: true }])
+    // No per-thread subs; the ONE aggregated threads subscription.
+    expect(socket.frames()).toEqual([{ op: 'sub', channel: 'sidechat', args: { threads: true } }])
     harness.unmount()
+    expect(socket.closed).toBe(true)
   })
 
-  it('fires onThreadsStale on the first open (alignment) and on every threads frame', () => {
+  it('fires onThreadsStale at join (alignment) and on every threads frame', () => {
     const onThreadsStale = vi.fn()
     const onInvalidate = vi.fn()
     const harness = mountProbe(onInvalidate, ['t1'], { threads: true, onThreadsStale })
     const socket = harness.socket()
-    // Subscribe-and-pull alignment: the watch frame only announces what to
-    // watch from NOW on, so the CURRENT thread set must be pulled at once.
+    // Subscribe-and-pull alignment: the watch frames only announce what to
+    // watch from NOW on, so the CURRENT thread set must be pulled at once —
+    // the shared subscription may have been open long before this view
+    // mounted, so the join itself is the alignment event.
+    expect(onThreadsStale).toHaveBeenCalledTimes(1)
     act(() => { socket.open() })
+    // The open itself does not fire again (the join already aligned).
     expect(onThreadsStale).toHaveBeenCalledTimes(1)
     // A threads frame is a pure invalidation: no thread id, no data.
-    act(() => { socket.frame({ scope: 'threads' }) })
+    act(() => { socket.frame({ channel: 'sidechat', data: { scope: 'threads' } }) })
     expect(onThreadsStale).toHaveBeenCalledTimes(2)
     // A per-thread notice goes to onInvalidate and leaves the threads
     // callback alone — the two channels stay independent.
-    act(() => { socket.frame({ threadId: 't1' }) })
+    act(() => { socket.frame({ channel: 'sidechat', data: { threadId: 't1' } }) })
     expect(onInvalidate).toHaveBeenCalledWith('t1')
     expect(onThreadsStale).toHaveBeenCalledTimes(2)
     harness.unmount()
   })
 
-  it('stays silent about threads without the threads subscription (old contract)', () => {
+  it('stays silent about threads without the threads subscription', () => {
     const onThreadsStale = vi.fn()
     const harness = mountProbe(() => {}, ['t1'], { onThreadsStale })
     const socket = harness.socket()
     act(() => { socket.open() })
-    // No threads option → no alignment fire and no flag on the wire; the
-    // host will never push threads frames to this socket, and one that
-    // arrives anyway (an old host's bug) is ignored here.
+    // No threads option → no alignment fire and no threads subscription on
+    // the wire; the host will never push threads frames to this key, and one
+    // that arrives anyway is ignored here.
     expect(onThreadsStale).not.toHaveBeenCalled()
-    expect(socket.frames()).toEqual([{ op: 'watch', threadIds: ['t1'] }])
-    act(() => { socket.frame({ scope: 'threads' }) })
+    expect(socket.frames()).toEqual([{ op: 'sub', channel: 'sidechat', args: { threadId: 't1' } }])
+    act(() => { socket.frame({ channel: 'sidechat', data: { scope: 'threads' } }) })
     expect(onThreadsStale).not.toHaveBeenCalled()
     harness.unmount()
   })
@@ -245,25 +273,50 @@ describe('useSidechatPush', () => {
       const onReconnect = vi.fn()
       const harness = mountProbe(() => {}, ['t1'], { threads: true, onThreadsStale, onReconnect })
       const socket = harness.socket()
-      act(() => { socket.open() })
       expect(onThreadsStale).toHaveBeenCalledTimes(1)
 
-      // The wire drops: the hook retries forever, 1s first.
+      // The wire drops: the hub retries forever, 1s first.
       act(() => { socket.drop() })
-      await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
       const second = FakeSocket.instances[1]!
       expect(second).toBeDefined()
-      // Frames the outage swallowed are gone for good: the re-open fires
-      // BOTH the reconnect report and the threads alignment.
-      expect(onReconnect).not.toHaveBeenCalled()
       act(() => { second.open() })
+      // Frames the outage swallowed are gone for good: the re-open replays
+      // the subs and fires BOTH the reconnect report and the threads
+      // alignment (through the shared channel's recovered open).
       expect(onReconnect).toHaveBeenCalledTimes(1)
       expect(onThreadsStale).toHaveBeenCalledTimes(2)
-      // The re-announced watch set carries the threads flag again.
-      expect(second.frames()).toEqual([{ op: 'watch', threadIds: ['t1'], threads: true }])
+      expect(second.frames()).toEqual([
+        { op: 'sub', channel: 'sidechat', args: { threadId: 't1' } },
+        { op: 'sub', channel: 'sidechat', args: { threads: true } },
+      ])
       harness.unmount()
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('aggregates the threads channel across TWO mounted views into one wire subscription', () => {
+    const firstStale = vi.fn()
+    const secondStale = vi.fn()
+    const first = mountProbe(() => {}, [], { threads: true, onThreadsStale: firstStale })
+    expect(firstStale).toHaveBeenCalledTimes(1)
+    const second = mountProbe(() => {}, [], { threads: true, onThreadsStale: secondStale })
+    expect(secondStale).toHaveBeenCalledTimes(1)
+    // One socket, one {threads:true} sub total (the second view joined the
+    // shared handle instead of re-announcing).
+    expect(FakeSocket.instances).toHaveLength(1)
+    const socket = first.socket()
+    act(() => { socket.open() })
+    expect(socket.frames()).toEqual([{ op: 'sub', channel: 'sidechat', args: { threads: true } }])
+    // One frame fans out to BOTH views' listeners.
+    act(() => { socket.frame({ channel: 'sidechat', data: { scope: 'threads' } }) })
+    expect(firstStale).toHaveBeenCalledTimes(2)
+    expect(secondStale).toHaveBeenCalledTimes(2)
+    // The shared subscription survives the FIRST view leaving.
+    first.unmount()
+    expect(socket.closed).toBe(false)
+    second.unmount()
+    expect(socket.closed).toBe(true)
   })
 })

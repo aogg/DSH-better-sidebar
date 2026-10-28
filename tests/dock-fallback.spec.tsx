@@ -56,14 +56,14 @@ class FakeSocket {
   frame(payload: unknown): void { this.onmessage?.({ data: JSON.stringify(payload) }) }
 }
 
-/** 打开挂载后连上的第一条 socket，并推一帧相位（undefined = 旧宿主缺省字段）。 */
+/** 打开挂载后连上的第一条 socket（多路复用 feed），并推一帧相位（undefined = 旧宿主缺省字段）。 */
 function pushPhase(blank: boolean | undefined): void {
   const socket = FakeSocket.instances[0]
   if (socket === undefined) throw new Error('no socket opened')
   socket.open()
-  const frame: Record<string, unknown> = { kind: 'phase', sessionId: 's1' }
-  if (blank !== undefined) frame.blank = blank
-  act(() => { socket.frame(frame) })
+  const phase: Record<string, unknown> = { kind: 'phase', sessionId: 's1' }
+  if (blank !== undefined) phase.blank = blank
+  act(() => { socket.frame({ channel: 'session', sessionId: 's1', data: phase }) })
 }
 
 function renderDockFallback(): { unmount: () => void; store: ReturnType<typeof createSidebarStore> } {

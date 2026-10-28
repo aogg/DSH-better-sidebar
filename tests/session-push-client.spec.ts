@@ -1,23 +1,22 @@
 /**
  * The client end of the session push channel (`connectSessionPush`,
- * src/client/session-push.ts): one socket under `/sidebar/ws/session` whose
- * full `watch` frame is (re-)sent on EVERY open — the first one and the one
- * after a reconnect alike — whose malformed / unknown-kind / foreign-session
- * frames never reach `onFrame`, whose answer-carrying cwd frames reach
- * `onFrame` with their answer fields intact, whose phase frames pass through
- * with their blank answer intact (`blank:true` = watch-time "still waiting",
- * `blank:false` = the flip), whose `history` frames (freshly indexed
- * user-prompt records, the prompt-history tab's live feed) pass through with
- * their records payload intact, whose project-scoped `history-seed` frames
- * (a seed scan's start/finish, no sessionId on the wire) pass through with
- * their cwd/seeding payload intact, whose open/close transitions reach the
- * optional `onState` signal (observability only — the session hooks stay
- * connected either way), and whose reconnects back off 1s → 15s until
- * disposed (then nothing re-opens).
+ * src/client/session-push.ts), riding the ONE multiplexed feed socket
+ * (`/sidebar/ws/feed`, channel `'session'` — feed-hub.ts): every watched
+ * session is one reference-counted `sub` on the shared socket, announced on
+ * EVERY open (the first and the one after a reconnect alike — the replay is
+ * what re-seeds the host's watch answers); a wrapped `{channel, sessionId,
+ * data}` frame reaches `onFrame` with its payload intact when the session
+ * matches, while malformed / unknown-kind payloads never do; the
+ * project-scoped `history-seed` frames (no sessionId on the wire) fan out to
+ * the channel's subscribers; the open/close transitions reach the optional
+ * `onState` signal (observability only — the session hooks stay connected
+ * either way); reconnects back off 1s → 15s until disposed (then nothing
+ * re-opens); and TWO callers watching the SAME session share ONE
+ * subscription (the multiplexer's whole point).
  */
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { connectSessionPush, type SessionPushFrame } from '../src/client/session-push.ts'
+import { connectSessionPush, openSessionPush } from '../src/client/session-push.ts'
 
 /** The smallest WebSocket the connector talks to: `send` records the frames. */
 class FakeSocket {
@@ -43,13 +42,13 @@ class FakeSocket {
   open(): void { this.readyState = FakeSocket.OPEN; this.onopen?.() }
   /** The socket drops (a failed connect looks the same to the connector). */
   drop(): void { this.readyState = 3; this.onclose?.() }
-  /** One host frame (a validated notice, or something malformed). */
+  /** One host envelope (a data frame, or something malformed). */
   frame(payload: unknown): void { this.onmessage?.({ data: JSON.stringify(payload) }) }
   /** One non-JSON or non-string message. */
   raw(data: unknown): void { this.onmessage?.({ data }) }
   /** The frames the connector sent, as parsed objects. */
-  frames(): { op: string; sessionIds: string[] }[] {
-    return this.sent.map(frame => JSON.parse(frame) as { op: string; sessionIds: string[] })
+  frames(): Array<Record<string, unknown>> {
+    return this.sent.map(frame => JSON.parse(frame) as Record<string, unknown>)
   }
 }
 
@@ -60,6 +59,9 @@ function socketAt(index: number): FakeSocket {
   return socket
 }
 
+/** Every subscription a test opened, undone after the test whatever happens. */
+const disposers: Array<() => void> = []
+
 beforeEach(() => {
   FakeSocket.instances = []
   vi.stubGlobal('WebSocket', FakeSocket)
@@ -67,213 +69,172 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  for (const dispose of disposers.splice(0)) dispose()
   vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
-describe('connectSessionPush', () => {
-  it('opens the session socket and announces the watch set once it opens', () => {
+describe('connectSessionPush (the multiplexed feed)', () => {
+  it('opens the FEED socket and subscribes the watched session once it opens', () => {
     const onFrame = vi.fn()
-    const dispose = connectSessionPush(['t1'], onFrame)
-    try {
-      const socket = socketAt(0)
-      expect(socket.url).toContain('/sidebar/ws/session')
-      // Nothing is sent before the connection opens.
-      expect(socket.sent).toEqual([])
-      socket.open()
-      expect(socket.frames()).toEqual([{ op: 'watch', sessionIds: ['t1'] }])
-    } finally {
-      dispose()
-    }
+    disposers.push(connectSessionPush(['t1'], onFrame))
+    const socket = socketAt(0)
+    expect(socket.url).toContain('/sidebar/ws/feed')
+    expect(socket.url).not.toContain('sessionId=')
+    // Nothing is sent before the connection opens.
+    expect(socket.sent).toEqual([])
+    socket.open()
+    expect(socket.frames()).toEqual([{ op: 'sub', channel: 'session', sessionId: 't1' }])
   })
 
-  it('re-announces the watch on the socket a reconnect opened', async () => {
+  it('re-announces the subscription on the socket a reconnect opened', async () => {
     const onFrame = vi.fn()
-    const dispose = connectSessionPush(['t1'], onFrame)
-    try {
-      socketAt(0).open()
-      socketAt(0).drop()
-      // The first retry waits 1s.
-      await vi.advanceTimersByTimeAsync(999)
-      expect(FakeSocket.instances).toHaveLength(1)
-      await vi.advanceTimersByTimeAsync(1)
-      expect(FakeSocket.instances).toHaveLength(2)
-      expect(socketAt(1).sent).toEqual([])
-      socketAt(1).open()
-      // The whole watch set rides every open, including after a reconnect.
-      expect(socketAt(1).frames()).toEqual([{ op: 'watch', sessionIds: ['t1'] }])
-    } finally {
-      dispose()
-    }
+    disposers.push(connectSessionPush(['t1'], onFrame))
+    socketAt(0).open()
+    socketAt(0).drop()
+    // The first retry waits 1s (±30% jitter: below 700ms nothing, past
+    // 1300ms the reconnect must have fired).
+    await vi.advanceTimersByTimeAsync(699)
+    expect(FakeSocket.instances).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(601)
+    expect(FakeSocket.instances).toHaveLength(2)
+    expect(socketAt(1).sent).toEqual([])
+    socketAt(1).open()
+    // The whole watch set rides every open, including after a reconnect —
+    // the replay is what re-seeds the host's phase/cwd answers.
+    expect(socketAt(1).frames()).toEqual([{ op: 'sub', channel: 'session', sessionId: 't1' }])
   })
 
-  it('backs retries off 1s → 2s → 4s → 8s and caps at 15s', async () => {
+  it('lands a matching wrapped frame with its payload intact and drops the rest', () => {
     const onFrame = vi.fn()
-    const dispose = connectSessionPush(['t1'], onFrame)
-    try {
-      // Five consecutive failures without a successful open in between: the
-      // delays double (1s, 2s, 4s, 8s) until the 15s cap swallows the 16s.
-      socketAt(0).drop()
-      await vi.advanceTimersByTimeAsync(999)
-      expect(FakeSocket.instances).toHaveLength(1)
-      await vi.advanceTimersByTimeAsync(1)
-      expect(FakeSocket.instances).toHaveLength(2)
-
-      socketAt(1).drop()
-      await vi.advanceTimersByTimeAsync(1999)
-      expect(FakeSocket.instances).toHaveLength(2)
-      await vi.advanceTimersByTimeAsync(1)
-      expect(FakeSocket.instances).toHaveLength(3)
-
-      socketAt(2).drop()
-      await vi.advanceTimersByTimeAsync(3999)
-      expect(FakeSocket.instances).toHaveLength(3)
-      await vi.advanceTimersByTimeAsync(1)
-      expect(FakeSocket.instances).toHaveLength(4)
-
-      socketAt(3).drop()
-      await vi.advanceTimersByTimeAsync(7999)
-      expect(FakeSocket.instances).toHaveLength(4)
-      await vi.advanceTimersByTimeAsync(1)
-      expect(FakeSocket.instances).toHaveLength(5)
-
-      socketAt(4).drop()
-      await vi.advanceTimersByTimeAsync(14_999)
-      expect(FakeSocket.instances).toHaveLength(5)
-      await vi.advanceTimersByTimeAsync(1)
-      expect(FakeSocket.instances).toHaveLength(6)
-    } finally {
-      dispose()
-    }
+    disposers.push(connectSessionPush(['t1'], onFrame))
+    const socket = socketAt(0)
+    socket.open()
+    // The answer-carrying cwd frame, wrapped in the feed envelope.
+    socket.frame({ channel: 'session', sessionId: 't1', data: { kind: 'cwd', sessionId: 't1', cwd: '/w' } })
+    expect(onFrame).toHaveBeenCalledTimes(1)
+    expect(onFrame).toHaveBeenCalledWith({ kind: 'cwd', sessionId: 't1', cwd: '/w' })
+    // The phase flip passes through with its blank answer intact.
+    socket.frame({ channel: 'session', sessionId: 't1', data: { kind: 'phase', sessionId: 't1', blank: false } })
+    expect(onFrame).toHaveBeenLastCalledWith({ kind: 'phase', sessionId: 't1', blank: false })
+    // The history frame passes through with its records payload intact.
+    const records = [{ key: 'k' }]
+    socket.frame({ channel: 'session', sessionId: 't1', data: { kind: 'history', sessionId: 't1', records } })
+    expect(onFrame).toHaveBeenLastCalledWith({ kind: 'history', sessionId: 't1', records })
+    // A foreign session's frame never reaches this subscriber (the hub
+    // routes by sessionId).
+    socket.frame({ channel: 'session', sessionId: 't2', data: { kind: 'turn', sessionId: 't2' } })
+    // An unknown-kind payload is dropped (the union filter).
+    socket.frame({ channel: 'session', sessionId: 't1', data: { kind: 'wat', sessionId: 't1' } })
+    // A payload missing its session id is dropped.
+    socket.frame({ channel: 'session', sessionId: 't1', data: { kind: 'turn' } })
+    // A malformed envelope and a non-JSON message are ignored outright.
+    socket.frame({ nope: 1 })
+    expect(() => socket.raw('not json')).not.toThrow()
+    expect(onFrame).toHaveBeenCalledTimes(3)
   })
 
-  it('routes only valid frames to onFrame; session ownership is the hook\'s filter', () => {
+  it('delivers the project-scoped history-seed frame (no sessionId on the wire)', () => {
     const onFrame = vi.fn()
-    const dispose = connectSessionPush(['t1'], onFrame)
-    try {
-      const socket = socketAt(0)
-      socket.open()
-      // An unknown kind, a frame with no kind, a foreign session id type,
-      // malformed JSON, a non-string message: late/dirty notices, not
-      // invalidations.
-      socket.frame({ kind: 'nope', sessionId: 't1' })
-      socket.frame({ nope: 1 })
-      socket.frame({ kind: 'phase', sessionId: 42 })
-      socket.raw('not json')
-      socket.raw(42)
-      expect(onFrame).not.toHaveBeenCalled()
-
-      // The connector validates SHAPE only (known kind + string sessionId):
-      // which session is "mine" is decided by the hook that mounted it
-      // (session-phase.ts / use-session-root.ts compare frame.sessionId).
-      const phase: SessionPushFrame = { kind: 'phase', sessionId: 't1', blank: false }
-      socket.frame(phase)
-      socket.frame({ kind: 'cwd', sessionId: 't1' })
-      socket.frame({ kind: 'cwd', sessionId: 't9' })
-      expect(onFrame).toHaveBeenCalledTimes(3)
-      expect(onFrame).toHaveBeenNthCalledWith(1, phase)
-      expect(onFrame).toHaveBeenNthCalledWith(2, { kind: 'cwd', sessionId: 't1' })
-      expect(onFrame).toHaveBeenNthCalledWith(3, { kind: 'cwd', sessionId: 't9' })
-    } finally {
-      dispose()
-    }
+    disposers.push(connectSessionPush(['t1'], onFrame))
+    const socket = socketAt(0)
+    socket.open()
+    socket.frame({ channel: 'session', data: { kind: 'history-seed', cwd: '/work/alpha', seeding: true } })
+    socket.frame({ channel: 'session', data: { kind: 'history-seed', cwd: '/work/alpha', seeding: false } })
+    // A seed frame without a cwd is malformed: dropped.
+    socket.frame({ channel: 'session', data: { kind: 'history-seed', seeding: true } })
+    expect(onFrame).toHaveBeenCalledTimes(2)
+    expect(onFrame).toHaveBeenNthCalledWith(1, { kind: 'history-seed', cwd: '/work/alpha', seeding: true })
+    expect(onFrame).toHaveBeenNthCalledWith(2, { kind: 'history-seed', cwd: '/work/alpha', seeding: false })
   })
 
-  it('passes an answer-carrying cwd frame through with its answer fields intact', () => {
-    const onFrame = vi.fn()
-    const dispose = connectSessionPush(['t1'], onFrame)
-    try {
-      const socket = socketAt(0)
-      socket.open()
-      // The answer rides the frame verbatim: which session is "mine" and how
-      // to land the answer stay the hook's business.
-      const answered: SessionPushFrame = { kind: 'cwd', sessionId: 't1', cwd: '/wt', root: 'wt', parent: null }
-      socket.frame(answered)
-      expect(onFrame).toHaveBeenCalledTimes(1)
-      expect(onFrame).toHaveBeenCalledWith(answered)
-    } finally {
-      dispose()
-    }
-  })
-
-  it('passes phase frames through with their blank answer intact (true and false)', () => {
-    const onFrame = vi.fn()
-    const dispose = connectSessionPush(['t1'], onFrame)
-    try {
-      const socket = socketAt(0)
-      socket.open()
-      // A watch-time "still waiting" answer and the one-shot flip both ride
-      // the same validation: shape only, semantics stay the hook's business.
-      socket.frame({ kind: 'phase', sessionId: 't1', blank: true })
-      socket.frame({ kind: 'phase', sessionId: 't1', blank: false })
-      expect(onFrame).toHaveBeenCalledTimes(2)
-      expect(onFrame).toHaveBeenNthCalledWith(1, { kind: 'phase', sessionId: 't1', blank: true })
-      expect(onFrame).toHaveBeenNthCalledWith(2, { kind: 'phase', sessionId: 't1', blank: false })
-    } finally {
-      dispose()
-    }
-  })
-
-  it('passes history frames through with their records payload intact', () => {
-    const onFrame = vi.fn()
-    const dispose = connectSessionPush(['t1'], onFrame)
-    try {
-      const socket = socketAt(0)
-      socket.open()
-      // The records array rides the frame verbatim (same shape `history.list`
-      // answers): which session is "mine" and how to merge the records stay
-      // the prompt-history tab's business.
-      const records = [{ key: 't1:9', sessionId: 't1', seq: 9, time: 1_700_000_000_000, text: 'hello', textTruncated: false }]
-      socket.frame({ kind: 'history', sessionId: 't1', records })
-      socket.frame({ kind: 'history', sessionId: 't9', records: [] })
-      expect(onFrame).toHaveBeenCalledTimes(2)
-      expect(onFrame).toHaveBeenNthCalledWith(1, { kind: 'history', sessionId: 't1', records })
-      expect(onFrame).toHaveBeenNthCalledWith(2, { kind: 'history', sessionId: 't9', records: [] })
-    } finally {
-      dispose()
-    }
-  })
-
-  it('passes history-seed frames through — project-scoped, no sessionId on the wire', () => {
-    const onFrame = vi.fn()
-    const dispose = connectSessionPush(['t1'], onFrame)
-    try {
-      const socket = socketAt(0)
-      socket.open()
-      // The seed frame carries ONLY the project root + the scan state; the
-      // connector still validates it (unknown kinds are dropped) and hands it
-      // over untouched — claiming it by cwd stays the tab's business.
-      socket.frame({ kind: 'history-seed', cwd: '/work/alpha', seeding: true })
-      socket.frame({ kind: 'history-seed', cwd: '/work/alpha', seeding: false })
-      // A seed frame without a cwd is malformed: dropped.
-      socket.frame({ kind: 'history-seed', seeding: true })
-      expect(onFrame).toHaveBeenCalledTimes(2)
-      expect(onFrame).toHaveBeenNthCalledWith(1, { kind: 'history-seed', cwd: '/work/alpha', seeding: true })
-      expect(onFrame).toHaveBeenNthCalledWith(2, { kind: 'history-seed', cwd: '/work/alpha', seeding: false })
-    } finally {
-      dispose()
-    }
-  })
-
-  it('flips the state signal on open/close and goes quiet after dispose', async () => {
+  it('signals open/close through onState', () => {
     const onFrame = vi.fn()
     const onState = vi.fn()
-    const dispose = connectSessionPush(['t1'], onFrame, onState)
+    disposers.push(connectSessionPush(['t1'], onFrame, onState))
     expect(onState).not.toHaveBeenCalled()
     socketAt(0).open()
-    expect(onState).toHaveBeenCalledTimes(1)
-    expect(onState).toHaveBeenLastCalledWith(true)
-
+    expect(onState).toHaveBeenNthCalledWith(1, true)
     socketAt(0).drop()
-    expect(onState).toHaveBeenCalledTimes(2)
-    expect(onState).toHaveBeenLastCalledWith(false)
+    expect(onState).toHaveBeenNthCalledWith(2, false)
+  })
 
+  it('shares ONE subscription when two callers watch the same session', () => {
+    const first = vi.fn()
+    const second = vi.fn()
+    disposers.push(connectSessionPush(['t1'], first))
+    socketAt(0).open()
+    disposers.push(connectSessionPush(['t1'], second))
+    // Same key: no extra wire frame, still one socket.
+    expect(FakeSocket.instances).toHaveLength(1)
+    expect(socketAt(0).frames()).toEqual([{ op: 'sub', channel: 'session', sessionId: 't1' }])
+    // One frame fans out to both.
+    socketAt(0).frame({ channel: 'session', sessionId: 't1', data: { kind: 'ops', sessionId: 't1', seq: 3 } })
+    expect(first).toHaveBeenCalledTimes(1)
+    expect(second).toHaveBeenCalledTimes(1)
+  })
+
+  it('distinct sessions share the same socket but not the frames', () => {
+    const t1 = vi.fn()
+    const t2 = vi.fn()
+    disposers.push(connectSessionPush(['t1'], t1))
+    socketAt(0).open()
+    disposers.push(connectSessionPush(['t2'], t2))
+    expect(FakeSocket.instances).toHaveLength(1)
+    expect(socketAt(0).frames().at(-1)).toEqual({ op: 'sub', channel: 'session', sessionId: 't2' })
+    socketAt(0).frame({ channel: 'session', sessionId: 't2', data: { kind: 'turn', sessionId: 't2' } })
+    expect(t1).not.toHaveBeenCalled()
+    expect(t2).toHaveBeenCalledWith({ kind: 'turn', sessionId: 't2' })
+  })
+
+  it('unsubscribes on dispose and closes the socket with the last caller', () => {
+    const onFrame = vi.fn()
+    const dispose = connectSessionPush(['t1'], onFrame)
+    disposers.push(dispose)
+    socketAt(0).open()
+    // A second caller keeps the socket alive through the first's dispose.
+    const keep = connectSessionPush(['t2'], vi.fn())
+    disposers.push(keep)
+    dispose()
+    expect(socketAt(0).frames().at(-1)).toEqual({ op: 'unsub', channel: 'session', sessionId: 't1' })
+    expect(socketAt(0).closed).toBe(false)
+    keep()
+    expect(socketAt(0).closed).toBe(true)
+    // Disposing twice is harmless.
+    expect(() => dispose()).not.toThrow()
+    disposers.length = 0
+  })
+
+  it('a getter-based watch set re-syncs on reconcile (the ops hub’s union)', () => {
+    const onFrame = vi.fn()
+    const ids = ['t1']
+    const connection = openSessionPush(() => [...ids], onFrame)
+    disposers.push(connection.close)
+    socketAt(0).open()
+    ids.push('t2')
+    connection.reconcile()
+    expect(socketAt(0).frames().at(-1)).toEqual({ op: 'sub', channel: 'session', sessionId: 't2' })
+    ids.shift()
+    connection.reconcile()
+    expect(socketAt(0).frames().at(-1)).toEqual({ op: 'unsub', channel: 'session', sessionId: 't1' })
+  })
+
+  it('backs retries off and stops entirely once disposed', async () => {
+    const onFrame = vi.fn()
+    const dispose = connectSessionPush(['t1'], onFrame)
+    // Five consecutive failures without a successful open in between: the
+    // delays double (1s, 2s, 4s, 8s) until the 15s cap swallows the 16s
+    // (each jittered step is crossed by a generous 20s advance).
+    for (const expected of [2, 3, 4, 5]) {
+      socketAt(FakeSocket.instances.length - 1).drop()
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(FakeSocket.instances).toHaveLength(expected)
+    }
     // Dispose stops the retry loop: the pending reconnect timer is gone, and
     // a late close of the disposed socket re-opens nothing.
     dispose()
-    expect(socketAt(0).closed).toBe(true)
+    socketAt(4).drop()
     await vi.advanceTimersByTimeAsync(60_000)
-    expect(FakeSocket.instances).toHaveLength(1)
-    expect(onState).toHaveBeenCalledTimes(2)
+    expect(FakeSocket.instances).toHaveLength(5)
   })
 })

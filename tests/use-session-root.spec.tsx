@@ -134,9 +134,9 @@ describe('useSessionRoot', () => {
       expect(harness.root()).toBe('/summary-a')
       expect(sessionCwdMock).not.toHaveBeenCalled()
       // And the watch set is announced on the session socket.
-      expect(harness.socket().url).toContain('/sidebar/ws/session')
+      expect(harness.socket().url).toContain('/sidebar/ws/feed')
       harness.socket().open()
-      expect(harness.socket().frames()).toEqual([{ op: 'watch', sessionIds: ['s1'] }])
+      expect(harness.socket().frames()).toEqual([{ op: 'sub', channel: 'session', sessionId: 's1' }])
     } finally {
       harness.unmount()
     }
@@ -147,7 +147,7 @@ describe('useSessionRoot', () => {
     try {
       harness.socket().open()
       act(() => {
-        harness.socket().frame({ kind: 'cwd', sessionId: 's1', cwd: '/wt-pushed', root: 'pushed', parent: null })
+        harness.socket().frame({ channel: 'session', sessionId: 's1', data: { kind: 'cwd', sessionId: 's1', cwd: '/wt-pushed', root: 'pushed', parent: null } })
       })
       // The answer is in the frame: it lands directly, no HTTP round trip.
       expect(harness.root()).toBe('/wt-pushed')
@@ -156,13 +156,13 @@ describe('useSessionRoot', () => {
       // A repeated identical answer folds: no re-render.
       const commitsBefore = harness.commits()
       act(() => {
-        harness.socket().frame({ kind: 'cwd', sessionId: 's1', cwd: '/wt-pushed', root: 'pushed', parent: null })
+        harness.socket().frame({ channel: 'session', sessionId: 's1', data: { kind: 'cwd', sessionId: 's1', cwd: '/wt-pushed', root: 'pushed', parent: null } })
       })
       expect(harness.commits()).toBe(commitsBefore)
 
       // A real move lands with one commit.
       act(() => {
-        harness.socket().frame({ kind: 'cwd', sessionId: 's1', cwd: '/wt-moved', root: 'moved', parent: 'pushed' })
+        harness.socket().frame({ channel: 'session', sessionId: 's1', data: { kind: 'cwd', sessionId: 's1', cwd: '/wt-moved', root: 'moved', parent: 'pushed' } })
       })
       expect(harness.root()).toBe('/wt-moved')
       expect(harness.commits()).toBe(commitsBefore + 1)
@@ -179,11 +179,11 @@ describe('useSessionRoot', () => {
         // The bare invalidation (older host / failed host resolution), the
         // empty-string answer, another session's answer and move, a phase
         // notice, and a malformed frame: none may touch the rendered root.
-        harness.socket().frame({ kind: 'cwd', sessionId: 's1' })
-        harness.socket().frame({ kind: 'cwd', sessionId: 's1', cwd: '' })
-        harness.socket().frame({ kind: 'cwd', sessionId: 's2', cwd: '/elsewhere' })
-        harness.socket().frame({ kind: 'cwd', sessionId: 's2' })
-        harness.socket().frame({ kind: 'phase', sessionId: 's1', blank: false })
+        harness.socket().frame({ channel: 'session', sessionId: 's1', data: { kind: 'cwd', sessionId: 's1' } })
+        harness.socket().frame({ channel: 'session', sessionId: 's1', data: { kind: 'cwd', sessionId: 's1', cwd: '' } })
+        harness.socket().frame({ channel: 'session', sessionId: 's2', data: { kind: 'cwd', sessionId: 's2', cwd: '/elsewhere' } })
+        harness.socket().frame({ channel: 'session', sessionId: 's2', data: { kind: 'cwd', sessionId: 's2' } })
+        harness.socket().frame({ channel: 'session', sessionId: 's1', data: { kind: 'phase', sessionId: 's1', blank: false } })
         harness.socket().frame({ nope: 1 })
       })
       expect(harness.root()).toBe('/summary-a')
@@ -192,7 +192,7 @@ describe('useSessionRoot', () => {
 
       // And a later answer frame for our session still lands after the noise.
       act(() => {
-        harness.socket().frame({ kind: 'cwd', sessionId: 's1', cwd: '/wt-late' })
+        harness.socket().frame({ channel: 'session', sessionId: 's1', data: { kind: 'cwd', sessionId: 's1', cwd: '/wt-late' } })
       })
       expect(harness.root()).toBe('/wt-late')
     } finally {
@@ -208,20 +208,23 @@ describe('useSessionRoot', () => {
       // Persistent connect failures: every retried socket dies too, and the
       // connector answers each drop with another backoff timer (1s → 2s →
       // 4s → 8s …) — not one HTTP ask goes out.
-      await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+      // Each step doubles (1s → 2s → 4s → 8s) with ±30% jitter on top: the
+      // advances cross the WIDEST possible step, so the count is exact
+      // without pinning the jittered delay.
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_300) })
       FakeSocket.instances[1]?.drop()
-      await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_600) })
       FakeSocket.instances[2]?.drop()
-      await act(async () => { await vi.advanceTimersByTimeAsync(4_000) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_200) })
       FakeSocket.instances[3]?.drop()
-      await act(async () => { await vi.advanceTimersByTimeAsync(8_000) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_400) })
       expect(FakeSocket.instances).toHaveLength(5)
       expect(sessionCwdMock).not.toHaveBeenCalled()
       // A socket that finally opens re-announces the watch set.
       const latest = FakeSocket.instances[4]
       if (latest === undefined) throw new Error('no fifth socket')
       latest.open()
-      expect(latest.frames()).toEqual([{ op: 'watch', sessionIds: ['s1'] }])
+      expect(latest.frames()).toEqual([{ op: 'sub', channel: 'session', sessionId: 's1' }])
     } finally {
       harness.unmount()
     }

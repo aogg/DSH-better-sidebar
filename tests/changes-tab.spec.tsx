@@ -105,13 +105,14 @@ class PushSocket {
 /** Every socket double of the current test. */
 const pushSockets: PushSocket[] = []
 
-/** Deliver one `ops` invalidation frame of `sessionId` on the session socket. */
+/** Deliver one `ops` invalidation frame of `sessionId` on the session
+ *  channel of the multiplexed feed socket. */
 async function deliverOps(sessionId: string): Promise<void> {
   await act(async () => {
     for (const socket of pushSockets) {
-      if (socket.closed || !socket.url.includes('/sidebar/ws/session')) continue
+      if (socket.closed || !socket.url.includes('/sidebar/ws/feed')) continue
       if (socket.readyState !== PushSocket.OPEN) { socket.readyState = 1; socket.onopen?.() }
-      socket.onmessage?.({ data: JSON.stringify({ kind: 'ops', sessionId, seq: 1 }) })
+      socket.onmessage?.({ data: JSON.stringify({ channel: 'session', sessionId, data: { kind: 'ops', sessionId, seq: 1 } }) })
     }
     await Promise.resolve()
   })
