@@ -64,7 +64,7 @@ import { AgentOpenRegistry, registerOpenTool, type AgentOpenRequest } from './ag
 import { buildSubagentLiveApi, type SidebarSubagentLiveRoutes } from './subagent-live-route.ts'
 import { buildTeamsApi, type SidebarTeamsRoutes } from './team-routes.ts'
 import { buildWorkflowsApi, type SidebarWorkflowRoutes } from './workflow-routes.ts'
-import { buildSidechatApi } from './sidechat-routes.ts'
+import { buildSidechatApi, sidechatThreadsCensus } from './sidechat-routes.ts'
 import { buildPromptHistoryApi, type HistoryRoutes } from './prompt-history-routes.ts'
 import { PromptHistoryStore } from './prompt-history-persist.ts'
 import { createPromptHistoryLive } from './prompt-history-live.ts'
@@ -1971,8 +1971,13 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
   // route is still registered further below): the sidechat.* routes hold it
   // and poke `notifyThreads()` whenever the thread SET changes (create /
   // first-rename / dispose) — a change no session append may announce, so
-  // the routes must be able to reach the hub directly.
-  const sidechatPush: SidechatPushHub = createSidechatPushHub(ctx)
+  // the routes must be able to reach the hub directly. The census injection
+  // arms the threads channel's DATA mode: with rootIds reported, the hub
+  // computes the same enumeration the `sidechat.threads` route answers and
+  // pushes the diffed rows over the wire instead of a pull-me empty frame.
+  const sidechatPush: SidechatPushHub = createSidechatPushHub(ctx, {
+    threadsCensus: (rootIds) => sidechatThreadsCensus(ctx, rootIds),
+  })
   ctx.effect(() => () => { sidechatPush.dispose() }, 'dsh-better-sidebar: side-chat push hub')
   const api = buildApi(ctx, resolved, () => settingsFace, assistantLive, archiveTasks, historyApi, sidechatPush)
   ctx.effect(() => ctx.webServer.register({

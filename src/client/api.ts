@@ -846,14 +846,16 @@ export const api = {
       ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     }),
   /**
-   * The GLOBAL side-thread census (the ws threads channel's data pull): the
+   * The GLOBAL side-thread census — the HTTP FALLBACK: the hot path is the
+   * ws threads channel's data push (the host computes and diffs the census
+   * server-side from the reported roots), so the mounted view never calls
+   * this; the route stays for degraded/diagnostic use and the specs. The
    * host reads every side-labeled child of these ROOT sessions straight from
-   * the subagent tree — the freshest running/label/activity view, which the
-   * session-list store reflects late for subagent children. `rootIds` are
-   * the client list's top-level sessions (`origin !== 'subagent'`, capped at
-   * 64 both ends). `degraded: true` (no `subagents` service, or every root
-   * failed) means "keep your store-derived groups"; the census failing never
-   * blanks the history popover.
+   * the subagent tree. `rootIds` are the client list's top-level
+   * sessions (`origin !== 'subagent'`, capped at 64 both ends).
+   * `degraded: true` (no `subagents` service, or every root failed) means
+   * "keep your store-derived groups"; the census failing never blanks the
+   * history popover.
    */
   sidechatThreads: (rootIds: readonly string[], signal?: AbortSignal) =>
     call<SidechatThreadsResult>('sidechat.threads', { rootIds: [...rootIds] }, signal),

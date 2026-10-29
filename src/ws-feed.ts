@@ -13,7 +13,15 @@
  *
  * - Control frames (client→server):
  *   `{"op":"sub"|"unsub","channel":…,"sessionId"?:string,"args"?:object}`
- *   with `channel` one of `agent-opens` `git` `fs-jobs` `session` `sidechat`.
+ *   with `channel` one of `agent-opens` `git` `fs-jobs` `session` `sidechat`,
+ *   plus the `watch` update frame
+ *   `{"op":"watch","channel":…,"sessionId"?:string,"args"?:object,"input"?:…}`
+ *   that re-arms an ALREADY-live subscription's computation input (its exact
+ *   `channel + sessionId + args` key must exist; `input` is the channel's
+ *   own watch payload). The point: a channel whose watch input changes per
+ *   keystroke — sidechat's census roots — must update WITHOUT tearing the
+ *   refcounted subscription, so the volatile part rides `watch`/`input` and
+ *   the KEY stays stable.
  * - The subscription key is
  *   `channel + '\u0000' + (sessionId ?? '') + '\u0000' + JSON.stringify(args ?? null)`;
  *   an `unsub` removes exactly the key an equal `sub` opened — different args
@@ -25,9 +33,11 @@
  *   omitted when the subscription has none (e.g. the session channel's
  *   project-level seed subscription, the sidechat threads group).
  * - Error frames: `{"error":…,"channel"?:…,"sessionId"?:…}` — a refused
- *   frame (unknown channel/op, malformed frame, a channel's session fence)
- *   is answered and the CONNECTION STAYS UP. Only the HTTP upgrade's trust
- *   fence (the same one every endpoint applies) still destroys the socket.
+ *   frame (unknown channel/op, malformed frame, a `watch` naming no live
+ *   subscription, a channel that takes no watch input, a channel's session
+ *   fence) is answered and the CONNECTION STAYS UP. Only the HTTP upgrade's
+ *   trust fence (the same one every endpoint applies) still destroys the
+ *   socket.
  *
  * Resources are per (channel, key): each subscription holds its channel's
  * server-side resource (a watcher set, a registry seat, a watch list) and
@@ -72,6 +82,22 @@ export interface FeedControlFrame {
   channel?: unknown
   sessionId?: unknown
   args?: unknown
+  /** The `watch` op's channel-specific payload (opaque to the multiplexer). */
+  input?: unknown
+}
+
+/**
+ * One `watch` request, as its channel handler sees it: the SAME coordinates
+ * the subscription was opened under (so the handler can tell which one is
+ * being re-armed) plus the channel-specific input.
+ */
+export interface FeedWatchRequest {
+  /** The session dimension (`undefined` = project/global scope). */
+  readonly sessionId: string | undefined
+  /** The sub frame's args (an object, or `null` when absent). */
+  readonly args: unknown
+  /** The watch payload the channel interprets. */
+  readonly input: unknown
 }
 
 /**
@@ -94,9 +120,13 @@ export interface FeedChannelRequest {
   readonly send: (data: unknown) => void
 }
 
-/** One live subscription's teardown (idempotent). */
+/** One live subscription's teardown (idempotent), plus its optional watch
+ *  seam (the `watch` control op's target — a channel without volatile input
+ *  omits it and such frames are refused). */
 export interface FeedSubscription {
   dispose(): void
+  /** Re-arm the subscription's computation input (the `watch` control op). */
+  watch?(request: FeedWatchRequest): void
 }
 
 /** A channel's refusal of one sub: the feed answers an error frame, nothing opens. */
@@ -135,7 +165,10 @@ export class FeedConnection {
   private readonly handlers: Readonly<Record<string, FeedChannelHandler>>
   private readonly send: (frame: FeedOutboundFrame) => void
   private readonly maxSubscriptions: number
-  private readonly entries = new Map<string, { dispose: () => void }>()
+  private readonly entries = new Map<string, {
+    dispose: () => void
+    watch?: (request: FeedWatchRequest) => void
+  }>()
   private closed = false
 
   constructor(options: FeedConnectionOptions) {
@@ -160,7 +193,7 @@ export class FeedConnection {
     }
     const channel = typeof frame.channel === 'string' ? frame.channel : undefined
     const sessionId = typeof frame.sessionId === 'string' ? frame.sessionId : undefined
-    if (frame.op !== 'sub' && frame.op !== 'unsub') {
+    if (frame.op !== 'sub' && frame.op !== 'unsub' && frame.op !== 'watch') {
       this.refuse(frame.op === undefined ? 'missing op' : `unknown op ${String(frame.op)}`, channel, sessionId)
       return
     }
@@ -189,6 +222,22 @@ export class FeedConnection {
         this.entries.delete(key)
         entry.dispose()
       }
+      return
+    }
+    if (frame.op === 'watch') {
+      // Re-arm a LIVE subscription's computation input. No key, no watch —
+      // a frame racing the subscription's teardown is refused (the client's
+      // next sub + watch replay re-arms it on the fresh subscription).
+      const entry = this.entries.get(key)
+      if (entry === undefined) {
+        this.refuse('watch names no live subscription', channel, sessionId)
+        return
+      }
+      if (entry.watch === undefined) {
+        this.refuse(`channel ${channel} takes no watch input`, channel, sessionId)
+        return
+      }
+      entry.watch({ sessionId, args: frame.args ?? null, input: frame.input })
       return
     }
     // A repeated identical sub keeps the live subscription: opening a second
@@ -233,6 +282,8 @@ export class FeedConnection {
         live = false
         outcome.dispose()
       },
+      // The channel's own watch seam (absent = watch frames refused).
+      ...(outcome.watch !== undefined ? { watch: (request: FeedWatchRequest) => { outcome.watch?.(request) } } : {}),
     })
   }
 

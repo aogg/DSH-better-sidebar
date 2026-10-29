@@ -193,6 +193,64 @@ function lastActivityAtOf(ctx: Context, id: string): number | undefined {
   }
 }
 
+/** The GLOBAL side-thread census core, shared by the `sidechat.threads`
+ *  route (the HTTP fallback the push-degraded client may still take) and by
+ *  the ws threads channel's data mode (sidechat-push.ts) — one enumeration,
+ *  one row shape, so the two transports cannot drift. Dedupes and caps the
+ *  roots, walks each root's subagent tree and answers ONLY the side-labeled
+ *  children. Degradation is a RESULT (`subagents` missing, or EVERY root
+ *  failed), never a throw: the census failing must never blank the popover
+ *  nor kill a push subscription. */
+export async function sidechatThreadsCensus(
+  ctx: Context,
+  rawRootIds: readonly unknown[],
+): Promise<{ rows: SidechatGlobalThreadRow[]; degraded: boolean }> {
+  // Dedupe (two listed roots cannot share a tree, but the fence is cheaper
+  // than doubting it) and cap — same guard scale as the ws watch set.
+  const rootIds = [...new Set(
+    rawRootIds.filter((id): id is string => typeof id === 'string' && id !== ''),
+  )].slice(0, THREADS_ROOTS_CAP)
+  const subagents = ctx.get('subagents') as SidebarSubagentsService | undefined
+  if (subagents === undefined || typeof subagents.listDescendants !== 'function') {
+    // No tree to enumerate: degraded, not 503 — the client's store
+    // derived groups remain the base and must keep the popover alive.
+    return { rows: [], degraded: true }
+  }
+  const rows = new Map<string, SidechatGlobalThreadRow>()
+  let failures = 0
+  for (const rootId of rootIds) {
+    let descendants: SidebarSubagentDescendantEntry[]
+    try {
+      descendants = await subagents.listDescendants(rootId)
+    } catch {
+      // One root's tree unreadable: skip it, keep the census alive for
+      // the rest (the degraded flag below only trips when EVERY root
+      // failed — a partial answer beats an empty one).
+      failures += 1
+      continue
+    }
+    for (const entry of descendants) {
+      if (entry.kind !== 'child') continue
+      // Side threads are exactly the side-labeled children; every other
+      // descendant (worksubagents, diagnostics) is not a conversation.
+      if (entry.label === undefined || !entry.label.startsWith(SIDE_LABEL_PREFIX)) continue
+      if (rows.has(entry.id)) continue
+      const activity = lastActivityAtOf(ctx, entry.id)
+      rows.set(entry.id, {
+        id: entry.id,
+        title: entry.label,
+        running: entry.activity === 'running',
+        parentId: entry.parentId,
+        ...(activity === undefined ? {} : { lastActivityAt: activity }),
+      })
+    }
+  }
+  if (rootIds.length > 0 && failures === rootIds.length) {
+    return { rows: [], degraded: true }
+  }
+  return { rows: [...rows.values()], degraded: false }
+}
+
 /** Per-activation disposers of created thread agents (the dispose route
  *  releases them; the session and its history always stay persisted). */
 const threadDisposers = new Map<string, () => Promise<void>>()
@@ -870,51 +928,10 @@ export function buildSidechatApi(
       if (!Array.isArray(rawRoots)) {
         throw new SidebarError('bad-request', 'rootIds must be an array of session ids')
       }
-      // Dedupe (two listed roots cannot share a tree, but the fence is
-      // cheaper than doubting it) and cap — same guard scale as the ws
-      // watch set.
-      const rootIds = [...new Set(
-        rawRoots.filter((id): id is string => typeof id === 'string' && id !== ''),
-      )].slice(0, THREADS_ROOTS_CAP)
-      const subagents = ctx.get('subagents') as SidebarSubagentsService | undefined
-      if (subagents === undefined || typeof subagents.listDescendants !== 'function') {
-        // No tree to enumerate: degraded, not 503 — the client's store
-        // derived groups remain the base and must keep the popover alive.
-        return { rows: [], degraded: true }
-      }
-      const rows = new Map<string, SidechatGlobalThreadRow>()
-      let failures = 0
-      for (const rootId of rootIds) {
-        let descendants: SidebarSubagentDescendantEntry[]
-        try {
-          descendants = await subagents.listDescendants(rootId)
-        } catch {
-          // One root's tree unreadable: skip it, keep the census alive for
-          // the rest (the degraded flag below only trips when EVERY root
-          // failed — a partial answer beats an empty one).
-          failures += 1
-          continue
-        }
-        for (const entry of descendants) {
-          if (entry.kind !== 'child') continue
-          // Side threads are exactly the side-labeled children; every other
-          // descendant (worksubagents, diagnostics) is not a conversation.
-          if (entry.label === undefined || !entry.label.startsWith(SIDE_LABEL_PREFIX)) continue
-          if (rows.has(entry.id)) continue
-          const activity = lastActivityAtOf(ctx, entry.id)
-          rows.set(entry.id, {
-            id: entry.id,
-            title: entry.label,
-            running: entry.activity === 'running',
-            parentId: entry.parentId,
-            ...(activity === undefined ? {} : { lastActivityAt: activity }),
-          })
-        }
-      }
-      if (rootIds.length > 0 && failures === rootIds.length) {
-        return { rows: [], degraded: true }
-      }
-      return { rows: [...rows.values()], degraded: false }
+      // The enumeration itself is the census core below — the SAME function
+      // the ws threads channel's data mode drives, so the HTTP fallback and
+      // the push cannot drift about what a thread row is.
+      return sidechatThreadsCensus(ctx, rawRoots)
     },
 
     'sidechat.model': async (payload: unknown) => {

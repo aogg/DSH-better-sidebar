@@ -218,7 +218,7 @@ describe('feed connection: control frames', () => {
     socket.feed({ git: channel.handler })
 
     socket.receive('not json at all')
-    socket.receive({ op: 'watch', channel: 'git', sessionId: 's1' })
+    socket.receive({ op: 'poke', channel: 'git', sessionId: 's1' })
     socket.receive({ op: 'sub', channel: 'nope' })
     socket.receive({ op: 'sub' })
     socket.receive([1, 2, 3])
@@ -226,7 +226,7 @@ describe('feed connection: control frames', () => {
     socket.receive({ op: 'sub', channel: 'git', sessionId: 's1', args: 'jobs' })
     expect(socket.errors().map(frame => frame.error)).toEqual([
       'invalid frame',
-      'unknown op watch',
+      'unknown op poke',
       'unknown channel nope',
       'missing channel',
       'invalid frame',
@@ -240,6 +240,44 @@ describe('feed connection: control frames', () => {
     // The connection answers, so a valid sub still opens after all that.
     socket.receive({ op: 'sub', channel: 'git', sessionId: 's1' })
     expect(channel.opens()).toBe(1)
+  })
+
+  it('watch re-arms a LIVE subscription\'s input without opening or tearing anything', () => {
+    const watched: unknown[] = []
+    const channel: FeedChannelHandler = {
+      open: ({ send }) => ({
+        dispose: () => {},
+        watch: ({ input }) => { watched.push(input); send(`re-armed:${String((input as { n?: number }).n)}`) },
+      }),
+    }
+    const socket = new FakeSocket()
+    socket.feed({ git: channel })
+    socket.receive({ op: 'sub', channel: 'git', sessionId: 's1' })
+
+    socket.receive({ op: 'watch', channel: 'git', sessionId: 's1', input: { n: 1 } })
+    expect(watched).toEqual([{ n: 1 }])
+    // The watch rides the SAME key's envelope (same channel + sessionId).
+    expect(socket.data()).toEqual([{ channel: 'git', sessionId: 's1', data: 're-armed:1' }])
+
+    // A different key (different sessionId/args) has no subscription: refused.
+    socket.receive({ op: 'watch', channel: 'git', sessionId: 'other', input: { n: 2 } })
+    socket.receive({ op: 'watch', channel: 'git', sessionId: 's1', args: { x: 1 }, input: { n: 3 } })
+    expect(watched).toHaveLength(1)
+    expect(socket.errors().map(frame => frame.error)).toEqual([
+      'watch names no live subscription',
+      'watch names no live subscription',
+    ])
+  })
+
+  it('watch is refused for a channel whose subscriptions take no input', () => {
+    const channel = countingChannel()
+    const socket = new FakeSocket()
+    socket.feed({ git: channel.handler })
+    socket.receive({ op: 'sub', channel: 'git', sessionId: 's1' })
+    socket.receive({ op: 'watch', channel: 'git', sessionId: 's1', input: { n: 1 } })
+    expect(socket.errors().map(frame => frame.error)).toEqual(['channel git takes no watch input'])
+    // The refusal consumed nothing: the subscription stays live.
+    expect(channel.disposals()).toBe(0)
   })
 
   it('answers a channel refusal with an error frame and opens nothing', () => {
@@ -491,6 +529,47 @@ describe('feed over the real sidechat hub', () => {
     expect(socket.errors()).toEqual([
       { error: 'sidechat subscription watches nothing; pass sessionId or args.threads=true', channel: 'sidechat' },
     ])
+    hub.dispose()
+  })
+
+  it('a threads sub\'s watch input flips it into data mode: census frames replace the pull-me empty frame', async () => {
+    const { ctx, emit } = fakeCtx()
+    const census = vi.fn(async (_roots: readonly string[]) => ({
+      rows: [{ id: 's1', title: 'Side: 一', running: false, parentId: 'r1' }] as never[],
+      degraded: false,
+    }))
+    const hub = createSidechatPushHub(ctx, { threadsCensus: census as never })
+    const socket = new FakeSocket()
+    socket.feed(feedOf(hub))
+    socket.receive({ op: 'sub', channel: 'sidechat', args: { threads: true } })
+    // The sub opened LEGACY (no roots yet); the watch frame on the SAME key
+    // arms the census roots — never a resubscription.
+    socket.receive({ op: 'watch', channel: 'sidechat', args: { threads: true }, input: { roots: ['r1'] } })
+    await vi.advanceTimersByTimeAsync(0)
+    // The alignment snapshot, without any feed trigger.
+    expect(socket.data()).toEqual([{
+      channel: 'sidechat',
+      data: { scope: 'threads', rows: [{ id: 's1', title: 'Side: 一', running: false, parentId: 'r1' }], degraded: false },
+    }])
+
+    // A trigger whose re-computation answers identically ships NOTHING.
+    emit('session/event', { id: 'x' }, { type: 'turn/end' })
+    await vi.advanceTimersByTimeAsync(300)
+    expect(socket.data()).toHaveLength(1)
+
+    // A changed census (a row went running) ships the new frame — the
+    // legacy empty invalidation is gone from this subscription for good.
+    census.mockImplementation(async () => ({
+      rows: [{ id: 's1', title: 'Side: 一', running: true, parentId: 'r1' }] as never[],
+      degraded: false,
+    }))
+    emit('agent/assistant-stream', { agent: { session: { id: 'x' } }, frame: { type: 'chunk' } })
+    await vi.advanceTimersByTimeAsync(300)
+    expect(socket.data()).toHaveLength(2)
+    expect(socket.data()[1]).toEqual({
+      channel: 'sidechat',
+      data: { scope: 'threads', rows: [{ id: 's1', title: 'Side: 一', running: true, parentId: 'r1' }], degraded: false },
+    })
     hub.dispose()
   })
 })

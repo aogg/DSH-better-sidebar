@@ -27,7 +27,9 @@
  *   session). Present = that thread's stale-transcript notices. Absent =
  *   only the GLOBAL thread-set group, and only with `args.threads === true`;
  *   a sub with neither a sessionId nor the threads flag watches nothing and
- *   is refused (an accepted dead sub would strand the client).
+ *   is refused (an accepted dead sub would strand the client). A threads
+ *   sub re-arms its census roots through the `watch` op (`input.roots`) —
+ *   the data mode that replaces the legacy data-free invalidation frames.
  *
  * Envelope rule (ws-feed.ts): every frame rides
  * `{"channel","sessionId"?,"data"}` with `sessionId` echoing the sub's own
@@ -78,6 +80,20 @@ function stringListOf(args: unknown, field: string): string[] {
 /** The sidechat sub's `args.threads` flag. */
 function threadsFlagOf(args: unknown): boolean {
   return args !== null && typeof args === 'object' && (args as Record<string, unknown>).threads === true
+}
+
+/**
+ * The sidechat `watch` frame's census roots (`input.roots`, the string list;
+ * absent/malformed = none — the subscription then stays in legacy mode).
+ * The roots deliberately do NOT ride `args`: they change with the client's
+ * session list, and the subscription key must not tear every time they do.
+ */
+function threadsRootsOf(input: unknown): string[] {
+  if (input === null || typeof input !== 'object') return []
+  const raw = (input as Record<string, unknown>).roots
+  return Array.isArray(raw)
+    ? raw.filter((value): value is string => typeof value === 'string' && value !== '')
+    : []
 }
 
 /**
@@ -140,8 +156,19 @@ export function createFeedChannelHandlers(deps: FeedChannelDeps): Record<string,
           return { error: 'sidechat subscription watches nothing; pass sessionId or args.threads=true' }
         }
         const subscription = deps.sidechatPush.subscribe({ onFrame: send })
-        subscription.setWatch(sessionId === undefined ? [] : [sessionId], threads)
-        return { dispose: () => { subscription.close() } }
+        const watchSet = sessionId === undefined ? [] : [sessionId]
+        // The sub opens in LEGACY threads mode (no roots yet): the data-free
+        // invalidation frames until the client's `watch` frame reports the
+        // census roots — which flips the SAME subscription into data mode.
+        subscription.setWatch(watchSet, threads)
+        return {
+          dispose: () => { subscription.close() },
+          // The census roots ride the `watch` op on this exact key (never
+          // `args` — the key must not tear when the session list changes).
+          // Every watch re-runs the alignment snapshot server-side, so the
+          // client never needs a join/reconnect pull.
+          watch: ({ input }) => { subscription.setWatch(watchSet, threads, threadsRootsOf(input)) },
+        }
       },
     },
   }

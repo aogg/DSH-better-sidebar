@@ -23,6 +23,7 @@ import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { renderRoot, setupReactAct } from './test-utils.ts'
 import { SideChatView, consumeSidechatSeed } from '../src/client/SideChatView.tsx'
+import { threadsChannelResetForTests } from '../src/client/use-sidechat-push.ts'
 import { markSidechatThreadRead, sidechatReadAt } from '../src/client/sidechat-unread.ts'
 import { sidechatWindows } from '../src/client/sidechat-windows.ts'
 import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
@@ -118,9 +119,10 @@ class FakeSocket {
   frame(payload: unknown): void { this.onmessage?.({ data: JSON.stringify(payload) }) }
   /** A drop WITHOUT a clean close (the hook's retry path). */
   drop(): void { this.onclose?.() }
-  /** The frames the hook sent, as parsed objects. */
-  frames(): { op: string; threadIds: string[]; threads?: boolean }[] {
-    return this.sent.map(raw => JSON.parse(raw) as { op: string; threadIds: string[]; threads?: boolean })
+  /** The frames the hook sent, as parsed objects (control frames, loosely
+   *  typed — the specific shapes are asserted where they matter). */
+  frames(): Array<Record<string, unknown>> {
+    return this.sent.map(raw => JSON.parse(raw) as Record<string, unknown>)
   }
 }
 
@@ -259,6 +261,9 @@ beforeEach(() => {
   attachLocale(new FakeLocale())
   FakeSocket.instances = []
   vi.stubGlobal('WebSocket', FakeSocket)
+  // The global threads channel is module state (shared subscription +
+  // alignment cache): never let one test's census leak into the next.
+  threadsChannelResetForTests()
   // A parked reopen seed is module state: never let it leak between tests.
   consumeSidechatSeed()
   eventsPulls = 0
@@ -1410,15 +1415,17 @@ describe('SideChatView global unread group', () => {
 })
 
 /**
- * The GLOBAL threads overlay (2026-10-22): the history popover's 全局运行中 /
- * 全局未读 groups no longer trust the session-list store alone — the ws
- * threads channel says WHEN to re-pull `sidechat.threads`, and the census
- * answer overlays the store-derived rows (store stays the base: fences +
- * parent join). These cases drive the real hook through a FakeSocket, so the
- * subscribe-and-pull alignment, the debounced pull, the degraded contract
- * and the reconnect catch-up are all exercised end to end.
+ * The GLOBAL threads overlay: the history popover's 全局运行中 / 全局未读
+ * groups no longer trust the session-list store alone — and since the ws
+ * threads channel became a DATA push, the host COMPUTES the census
+ * server-side (from the roots the view reports on the same subscription)
+ * and ships `{scope:'threads', rows, degraded}` frames that REPLACE the
+ * overlay wholesale (store stays the base: fences + parent join). These
+ * cases drive the real hook through a FakeSocket: the watch-frame roots
+ * report, the zero-HTTP hot path, the degraded contract and the
+ * reconnect-as-snapshot catch-up.
  */
-describe('SideChatView global threads overlay (ws-pulled census)', () => {
+describe('SideChatView global threads overlay (ws-pushed census)', () => {
   /** rr: a FOREIGN-workspace thread the STORE says is idle and undated —
    *  exactly the row the store is known to lag on. The ws census is the only
    *  source that can light it up. */
@@ -1447,38 +1454,51 @@ describe('SideChatView global threads overlay (ws-pulled census)', () => {
     return dialog.querySelector<HTMLElement>(`.${requiredClass(css.sidechatHistoryCard)}`) ?? dialog
   }
 
-  /** The push debounce window plus a margin (real timers — the wait is one
-   *  debounced pull, not a poll: nothing re-fires after it). */
-  async function flushDebounce(): Promise<void> {
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 150)) })
+  /** The host's census data frame, in the feed envelope. */
+  function censusFrame(rows: unknown, degraded: boolean): { channel: string; data: Record<string, unknown> } {
+    return { channel: 'sidechat', data: { scope: 'threads', rows, degraded } }
   }
 
-  it('mounts the socket with the threads flag and pulls the census on open (subscribe-and-pull)', async () => {
-    const { unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(overlayStore()))))
+  it('reports the census roots on the shared subscription and applies the pushed rows with zero HTTP', async () => {
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(overlayStore()))))
     const socket = FakeSocket.instances[0]!
     expect(socket.frames()).toEqual([])  // nothing before the host acks
     act(() => { socket.open() })
-    // The watch frame carries the bound thread AND the threads subscription.
-    expect(socket.frames()).toEqual([{ op: 'watch', threadIds: ['t1'], threads: true }])
-    await flushDebounce()
-    // One census pull, rooted at the TOP-LEVEL sessions only (t1/rr are
-    // origin:'subagent' — the threads hang off roots, never off threads).
-    expect(threadsPulls).toBe(1)
-    expect(threadsPayloads[0]).toEqual({ rootIds: ['root', 'ws2'] })
+    // The bound thread rides its own sub; the GLOBAL channel is ONE shared
+    // sub whose `watch` frame carries this view's roots (top-level sessions
+    // only — t1/rr are origin:'subagent', the threads hang off roots).
+    expect(socket.frames()).toEqual([
+      { op: 'sub', channel: 'sidechat', args: { threadId: 't1' } },
+      { op: 'sub', channel: 'sidechat', args: { threads: true } },
+      { op: 'watch', channel: 'sidechat', args: { threads: true }, input: { roots: ['root', 'ws2'] } },
+    ])
+    // The push replaced the pull: no `sidechat.threads` call, ever.
+    expect(threadsPulls).toBe(0)
+    // The host's snapshot replaces the overlay wholesale: an unread
+    // census-only row lights the badge without any HTTP round trip ('zz'
+    // exists nowhere else — earlier describes read-mark 'rr' in localStorage).
+    await act(async () => {
+      socket.frame(censusFrame([
+        { id: 'zz', title: 'Side: 全新', running: false, parentId: 'root', lastActivityAt: Date.now() - 1_000 },
+      ], false))
+    })
+    expect(threadsPulls).toBe(0)
+    expect(container.querySelector(`.${css.sidechatHistoryBadge}`)?.textContent).toBe('1')
     unmount()
   })
 
-  it('lights a store-idle thread into 全局运行中 from the ws census (store stays the join base)', async () => {
+  it('lights a store-idle thread into 全局运行中 from the pushed census (store stays the join base)', async () => {
     // Read-marked: the row may ONLY surface through the running group, never
     // as unread — proves the census moved `running`, not the unread filter.
     markSidechatThreadRead('rr', Date.now() + 60_000)
-    threadsValue = {
-      rows: [{ id: 'rr', title: 'Side: 外区跑着', running: true, parentId: 'ws2', lastActivityAt: Date.now() - 30_000 }],
-      degraded: false,
-    }
     const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(overlayStore()))))
-    act(() => { FakeSocket.instances[0]!.open() })
-    await flushDebounce()
+    const socket = FakeSocket.instances[0]!
+    act(() => { socket.open() })
+    await act(async () => {
+      socket.frame(censusFrame([
+        { id: 'rr', title: 'Side: 外区跑着', running: true, parentId: 'ws2', lastActivityAt: Date.now() - 30_000 },
+      ], false))
+    })
 
     const card = historyCard(await openHistory(container))
     const labels = [...card.children].map(child => child.textContent ?? '')
@@ -1497,14 +1517,16 @@ describe('SideChatView global threads overlay (ws-pulled census)', () => {
   it('turns a census-only thread into a row through the store parent join', async () => {
     markSidechatThreadRead('rr', Date.now() + 60_000)
     // 'nn' exists nowhere in the client store — a thread created seconds ago
-    // in THIS workspace, announced by the ws channel before the store lists it.
-    threadsValue = {
-      rows: [{ id: 'nn', title: 'Side: 新线程', running: false, parentId: 'root', lastActivityAt: Date.now() - 5_000 }],
-      degraded: false,
-    }
+    // in THIS workspace, announced by the pushed census before the store
+    // lists it.
     const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(overlayStore()))))
-    act(() => { FakeSocket.instances[0]!.open() })
-    await flushDebounce()
+    const socket = FakeSocket.instances[0]!
+    act(() => { socket.open() })
+    await act(async () => {
+      socket.frame(censusFrame([
+        { id: 'nn', title: 'Side: 新线程', running: false, parentId: 'root', lastActivityAt: Date.now() - 5_000 },
+      ], false))
+    })
 
     expect(container.querySelector(`.${css.sidechatHistoryBadge}`)?.textContent).toBe('1')
     const card = historyCard(await openHistory(container))
@@ -1517,7 +1539,7 @@ describe('SideChatView global threads overlay (ws-pulled census)', () => {
     unmount()
   })
 
-  it('keeps the store-derived groups when the census answers degraded', async () => {
+  it('keeps the store-derived groups when the pushed census answers degraded', async () => {
     // A store-side unread row (dated, idle) — the census is degraded, so the
     // groups must fall back to exactly what the store says.
     const store = makeStore({
@@ -1527,11 +1549,11 @@ describe('SideChatView global threads overlay (ws-pulled census)', () => {
         ru: { id: 'ru', displayTitle: 'Side: 本区未读', origin: 'subagent', parentId: 'root', updatedAt: Date.now() - 60_000, running: false },
       },
     })
-    threadsValue = { rows: [], degraded: true }
     const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(store))))
-    act(() => { FakeSocket.instances[0]!.open() })
-    await flushDebounce()
-    expect(threadsPulls).toBe(1)
+    const socket = FakeSocket.instances[0]!
+    act(() => { socket.open() })
+    await act(async () => { socket.frame(censusFrame([], true)) })
+    expect(threadsPulls).toBe(0)
 
     expect(container.querySelector(`.${css.sidechatHistoryBadge}`)?.textContent).toBe('1')
     const card = historyCard(await openHistory(container))
@@ -1539,29 +1561,42 @@ describe('SideChatView global threads overlay (ws-pulled census)', () => {
     unmount()
   })
 
-  it('re-pulls the census once after a socket drop and re-open (no polling in between)', async () => {
+  it('re-arms the fresh subscription after a drop and re-open; the snapshot push is the catch-up (no polling in between)', async () => {
     markSidechatThreadRead('rr', Date.now() + 60_000)
     vi.useFakeTimers()
     try {
-      const { unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(overlayStore()))))
+      const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(overlayStore()))))
       const first = FakeSocket.instances[0]!
       act(() => { first.open() })
       await act(async () => { await vi.advanceTimersByTimeAsync(150) })
-      expect(threadsPulls).toBe(1)
+      expect(threadsPulls).toBe(0)
 
-      // The wire drops; the hook retries forever (1s first backoff). No pull
-      // may fire while the socket is down — retries are not polls.
+      // The wire drops; the hook retries forever (1s first backoff). No HTTP
+      // fires while the socket is down — retries are not polls.
       act(() => { first.drop() })
       await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
-      expect(threadsPulls).toBe(1)
+      expect(threadsPulls).toBe(0)
 
-      // The re-open catches up: onReconnect + the open-time alignment fold
-      // into ONE debounced census pull.
+      // The re-open replays the sub AND the stored watch input (the consumer
+      // never re-reports), and the host's replay-armed snapshot arrives as
+      // an ordinary data frame — still zero HTTP.
       const second = FakeSocket.instances[1]!
       expect(second).toBeDefined()
       act(() => { second.open() })
-      await act(async () => { await vi.advanceTimersByTimeAsync(150) })
-      expect(threadsPulls).toBe(2)
+      expect(second.frames()).toEqual([
+        { op: 'sub', channel: 'sidechat', args: { threadId: 't1' } },
+        { op: 'sub', channel: 'sidechat', args: { threads: true } },
+        { op: 'watch', channel: 'sidechat', args: { threads: true }, input: { roots: ['root', 'ws2'] } },
+      ])
+      await act(async () => {
+        second.frame(censusFrame([
+          { id: 'rr', title: 'Side: 外区跑着', running: true, parentId: 'ws2', lastActivityAt: Date.now() - 30_000 },
+        ], false))
+      })
+      expect(threadsPulls).toBe(0)
+      const card = historyCard(await openHistory(container))
+      const labels = [...card.children].map(child => child.textContent ?? '')
+      expect(labels).toContain('全局运行中1')
       unmount()
     } finally {
       vi.useRealTimers()

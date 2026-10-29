@@ -12,8 +12,12 @@
  * Wire contract (client → host), one JSON object per frame:
  *   {"op":"sub","channel":…,"sessionId"?:…,"args"?:…}
  *   {"op":"unsub","channel":…,"sessionId"?:…,"args"?:…}
+ *   {"op":"watch","channel":…,"sessionId"?:…,"args"?:…,"input":…}
  * with `channel` one of 'git' | 'fs-jobs' | 'session' | 'sidechat' |
- * 'agent-opens'. Host → client, two shapes:
+ * 'agent-opens'. The first two manage the refcounted subscription keys; the
+ * third re-arms a LIVE key's computation input (the sidechat threads
+ * channel's census roots) WITHOUT tearing the subscription — a changed
+ * input must never be a changed key. Host → client, two shapes:
  *   {"channel":…,"sessionId"?:…,"data":…}   — dispatched by channel+sessionId
  *   {"error":…,"channel"?,…}                — routed to the failing subscription
  *
@@ -93,8 +97,17 @@ export interface FeedSubscribeOptions {
   onReconnect?: () => void
 }
 
-/** One live subscription: re-point its args, or unsubscribe (both idempotent). */
+/** One live subscription: re-point its args, re-arm its volatile watch
+ *  input, or unsubscribe (all idempotent). */
 export interface FeedSubscription {
+  /**
+   * Re-arm the subscription's volatile computation input (the `watch`
+   * control frame on this exact key). The input NEVER changes the key: a
+   * re-armed subscription keeps its server-side resource and its
+   * refcount; the stored input is replayed on every socket re-open and
+   * release-restore announce.
+   */
+  watch(input: object): void
   /**
    * Replace the subscription's args payload (a delta `unsub` of the old key +
    * `sub` of the new one on the wire; other subscribers of the exact old key
@@ -128,7 +141,10 @@ interface FeedSubscriber {
  * subscription plus whoever shares it. `suspended` marks a session-dimension
  * release: the entry (and its subscribers) stay registered, but the wire
  * subscription is withdrawn and frames stop — until
- * {@linkcode feedRestoreSession} re-announces it.
+ * {@linkcode feedRestoreSession} re-announces it. `watchInput` is the last
+ * `watch` payload the entry sent (the volatile computation input, NOT part
+ * of the key); every announce replays it after the `sub` so a re-opened or
+ * restored subscription is re-armed without the consumer knowing.
  */
 interface FeedEntry {
   channel: FeedChannel
@@ -138,6 +154,8 @@ interface FeedEntry {
   handles: Set<FeedSubscriber>
   /** True while the session dimension is released (wire-unsubscribed). */
   suspended: boolean
+  /** The last `watch` payload (undefined = never armed). */
+  watchInput: object | undefined
 }
 
 /** The subscription registry, keyed by {@link subscriptionKey}. */
@@ -232,10 +250,26 @@ function unsubFrame(entry: FeedEntry): Record<string, unknown> {
   }
 }
 
-/** Announce one entry's `sub` (a released entry announces nothing). */
+/** The wire `watch` frame of one entry's stored input (undefined = none). */
+function watchFrame(entry: FeedEntry): Record<string, unknown> | undefined {
+  if (entry.watchInput === undefined) return undefined
+  return {
+    op: 'watch',
+    channel: entry.channel,
+    ...(entry.sessionId !== undefined ? { sessionId: entry.sessionId } : {}),
+    ...(entry.args !== undefined ? { args: entry.args } : {}),
+    input: entry.watchInput,
+  }
+}
+
+/** Announce one entry's `sub` — plus its stored `watch` input, so a fresh
+ *  (re-opened / restored) subscription is re-armed in the same breath. A
+ *  released entry announces nothing. */
 function announce(entry: FeedEntry): void {
   if (entry.suspended) return
   sendControl(subFrame(entry))
+  const watch = watchFrame(entry)
+  if (watch !== undefined) sendControl(watch)
 }
 
 /** Open (or keep) the shared socket; replay every live `sub` on open. */
@@ -391,7 +425,7 @@ export function feedSubscribe(options: FeedSubscribeOptions): FeedSubscription {
   let entry = entries.get(subscriptionKey(options.channel, options.sessionId, options.args))
   let announceIt = false
   if (entry === undefined) {
-    entry = { channel: options.channel, sessionId: options.sessionId, args: options.args, handles: new Set(), suspended: false }
+    entry = { channel: options.channel, sessionId: options.sessionId, args: options.args, handles: new Set(), suspended: false, watchInput: undefined }
     entries.set(subscriptionKey(entry.channel, entry.sessionId, entry.args), entry)
     announceIt = true
   } else if (entry.suspended) {
@@ -413,6 +447,26 @@ export function feedSubscribe(options: FeedSubscribeOptions): FeedSubscription {
   if (announceIt) announce(entry)
   if (isOpen()) options.onState?.(true)
   const self = {
+    /**
+     * Re-arm this subscription's volatile computation input (the `watch`
+     * control frame). The input is stored on the ENTRY (not the key), so a
+     * socket re-open's sub-replay re-arms the fresh server subscription
+     * with the same input — the consumer never re-reports after an outage.
+     * A suspended entry stores only; its restore announce carries it.
+     */
+    watch(input: object): void {
+      const current = entries.get(subscriptionKey(entry!.channel, entry!.sessionId, entry!.args))
+      if (current === undefined || !current.handles.has(subscriber)) return
+      current.watchInput = input
+      if (current.suspended) return
+      sendControl({
+        op: 'watch',
+        channel: current.channel,
+        ...(current.sessionId !== undefined ? { sessionId: current.sessionId } : {}),
+        ...(current.args !== undefined ? { args: current.args } : {}),
+        input,
+      })
+    },
     setArgs(next: object | undefined): void {
       const current = entries.get(subscriptionKey(entry!.channel, entry!.sessionId, entry!.args))
       if (current === undefined || !current.handles.has(subscriber)) return
@@ -437,7 +491,7 @@ export function feedSubscribe(options: FeedSubscribeOptions): FeedSubscription {
         }
         return
       }
-      entry = { channel: current.channel, sessionId: current.sessionId, args: next, handles: new Set([subscriber]), suspended: false }
+      entry = { channel: current.channel, sessionId: current.sessionId, args: next, handles: new Set([subscriber]), suspended: false, watchInput: undefined }
       entries.set(nextKey, entry)
       announce(entry)
     },
@@ -547,6 +601,7 @@ export function feedRestoreSession(sessionId: string): void {
 export function feedEntryCountForTests(): number {
   return entries.size
 }
+
 
 /** Test seam: tear the singleton down (socket + registry) so a spec whose
  *  subjects do not always retire every subscription starts each test clean. */

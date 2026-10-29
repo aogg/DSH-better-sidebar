@@ -1,29 +1,32 @@
 /**
- * The client half of the Side Chat staleness push, riding the ONE multiplexed
+ * The client half of the Side Chat push, riding the ONE multiplexed
  * feed socket (channel `'sidechat'`, feed-hub.ts): one `sub` per watched
  * thread (a delta sub/unsub per id-list change on the SAME socket — never a
  * reconnect), the GLOBAL threads channel AGGREGATED at module level (every
  * subscribing tab shares one `{threads:true}` wire subscription), notices
- * routed to `onInvalidate` for WATCHED ids only, no subscription at all while
- * the id list is empty — unless the threads channel is joined, which keeps a
- * tab with no bound thread on the global feed. Subscribe-and-pull alignment:
- * a view's `onThreadsStale` fires when it JOINS (the shared subscription may
- * have been open long before) and on every threads frame / recovered open.
+ * routed to `onInvalidate` for WATCHED ids only, no subscription at all
+ * while the id list is empty — unless the threads channel is joined, which
+ * keeps a tab with no bound thread on the global feed. The threads channel
+ * is DATA push now: the view's census roots ride a `watch` frame on the
+ * SAME key (a content change re-arms the computation, never a new key), and
+ * the host's `{scope:'threads', rows, degraded}` frames arrive on
+ * `onThreadsRows` — join alignment from the module cache, reconnect
+ * alignment from the host's replay-triggered snapshot.
  *
  * The identity guard: the wanted set derives from the CONTENT of the id list
  * (a NUL-joined key), so a caller re-rendering with a fresh array of the same
  * ids sends nothing.
  *
  * The threads channel handle lives at MODULE level, so every test unmounts
- * its probe — a leftover subscriber would keep the shared subscription (and
- * the socket) alive into the next test.
+ * its probe AND resets the channel (a leftover subscriber would keep the
+ * shared subscription — and its alignment cache — alive into the next test).
  */
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createElement, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
-import { useSidechatPush } from '../src/client/use-sidechat-push.ts'
+import { threadsChannelResetForTests, useSidechatPush } from '../src/client/use-sidechat-push.ts'
 
 import { setupReactAct } from './test-utils.ts'
 setupReactAct()
@@ -66,8 +69,9 @@ class FakeSocket {
 interface ProbeOptions {
   threadIds?: string[]
   threads?: boolean
+  threadRoots?: string[]
   onInvalidate?: (id: string) => void
-  onThreadsStale?: () => void
+  onThreadsRows?: (rows: readonly { id: string }[], degraded: boolean) => void
   onReconnect?: () => void
 }
 
@@ -76,29 +80,34 @@ function Probe(props: ProbeOptions): ReactNode {
     threadIds: props.threadIds ?? [],
     onInvalidate: props.onInvalidate ?? (() => {}),
     ...(props.threads !== undefined ? { threads: props.threads } : {}),
-    ...(props.onThreadsStale !== undefined ? { onThreadsStale: props.onThreadsStale } : {}),
+    ...(props.threadRoots !== undefined ? { threadRoots: props.threadRoots } : {}),
+    ...(props.onThreadsRows !== undefined ? { onThreadsRows: props.onThreadsRows } : {}),
     ...(props.onReconnect !== undefined ? { onReconnect: props.onReconnect } : {}),
   })
   return null
 }
 
 interface Harness {
-  rerender: (threadIds: string[]) => void
+  rerender: (threadIds: string[], options?: Partial<Omit<ProbeOptions, 'threadIds' | 'onInvalidate'>>) => void
   /** The single open socket; throws when none was opened. */
   socket: () => FakeSocket
   unmount: () => void
 }
 
-function mountProbe(onInvalidate: (id: string) => void, initial: string[] = ['t1'], options: Omit<ProbeOptions, 'threadIds' | 'onInvalidate'> = {}): Harness {
+function mountProbe(
+  onInvalidate: (id: string) => void,
+  initial: string[] = ['t1'],
+  options: Omit<ProbeOptions, 'threadIds' | 'onInvalidate'> = {},
+): Harness {
   const container = document.createElement('div')
   document.body.append(container)
   const root: Root = createRoot(container)
-  const render = (threadIds: string[]): void => {
-    root.render(createElement(Probe, { threadIds, onInvalidate, ...options }))
+  const render = (threadIds: string[], extra: Partial<ProbeOptions>): void => {
+    root.render(createElement(Probe, { threadIds, onInvalidate, ...options, ...extra }))
   }
-  act(() => { render(initial) })
+  act(() => { render(initial, {}) })
   return {
-    rerender: (threadIds: string[]) => { act(() => { render(threadIds) }) },
+    rerender: (threadIds, extra = {}) => { act(() => { render(threadIds, extra) }) },
     socket: () => {
       const socket = FakeSocket.instances[0]
       if (socket === undefined) throw new Error('no socket opened')
@@ -111,6 +120,7 @@ function mountProbe(onInvalidate: (id: string) => void, initial: string[] = ['t1
 beforeEach(() => {
   FakeSocket.instances = []
   vi.stubGlobal('WebSocket', FakeSocket)
+  threadsChannelResetForTests()
 })
 
 afterEach(() => {
@@ -216,64 +226,112 @@ describe('useSidechatPush (per-thread subscriptions)', () => {
 })
 
 describe('useSidechatPush (the shared global threads channel)', () => {
-  it('keeps the socket alive with threads:true even when the id list is empty', () => {
-    const harness = mountProbe(() => {}, [], { threads: true, onThreadsStale: () => {} })
+  it('keeps the socket alive with threads:true even when the id list is empty, and reports the census roots on the SAME key', () => {
+    const harness = mountProbe(() => {}, [], { threads: true, threadRoots: ['root-a', 'root-b'], onThreadsRows: () => {} })
     expect(FakeSocket.instances).toHaveLength(1)
     const socket = harness.socket()
     act(() => { socket.open() })
-    // No per-thread subs; the ONE aggregated threads subscription.
-    expect(socket.frames()).toEqual([{ op: 'sub', channel: 'sidechat', args: { threads: true } }])
+    // The ONE aggregated threads subscription, then its `watch` frame — the
+    // roots are the computation input, NOT part of the key (a second sub
+    // frame would tear the shared wire subscription on every list change).
+    expect(socket.frames()).toEqual([
+      { op: 'sub', channel: 'sidechat', args: { threads: true } },
+      { op: 'watch', channel: 'sidechat', args: { threads: true }, input: { roots: ['root-a', 'root-b'] } },
+    ])
     harness.unmount()
     expect(socket.closed).toBe(true)
   })
 
-  it('fires onThreadsStale at join (alignment) and on every threads frame', () => {
-    const onThreadsStale = vi.fn()
+  it('applies a census data frame through onThreadsRows and ignores the legacy empty frame', () => {
+    const onThreadsRows = vi.fn()
     const onInvalidate = vi.fn()
-    const harness = mountProbe(onInvalidate, ['t1'], { threads: true, onThreadsStale })
+    const harness = mountProbe(onInvalidate, ['t1'], { threads: true, threadRoots: ['root-a'], onThreadsRows })
     const socket = harness.socket()
-    // Subscribe-and-pull alignment: the watch frames only announce what to
-    // watch from NOW on, so the CURRENT thread set must be pulled at once —
-    // the shared subscription may have been open long before this view
-    // mounted, so the join itself is the alignment event.
-    expect(onThreadsStale).toHaveBeenCalledTimes(1)
+    // No cache yet: the join fires nothing (the host's watch-triggered
+    // snapshot is the alignment, not an HTTP pull).
+    expect(onThreadsRows).not.toHaveBeenCalled()
     act(() => { socket.open() })
-    // The open itself does not fire again (the join already aligned).
-    expect(onThreadsStale).toHaveBeenCalledTimes(1)
-    // A threads frame is a pure invalidation: no thread id, no data.
+    // A legacy frame (no rows array — an old host, or pre-watch): ignored.
     act(() => { socket.frame({ channel: 'sidechat', data: { scope: 'threads' } }) })
-    expect(onThreadsStale).toHaveBeenCalledTimes(2)
+    expect(onThreadsRows).not.toHaveBeenCalled()
+    // The data frame REPLACES the overlay wholesale.
+    const rows = [{ id: 'rr', title: 'Side: 外区', running: true, parentId: 'root-a' }]
+    act(() => { socket.frame({ channel: 'sidechat', data: { scope: 'threads', rows, degraded: false } }) })
+    expect(onThreadsRows).toHaveBeenCalledTimes(1)
+    expect(onThreadsRows).toHaveBeenCalledWith(rows, false)
+    // Degraded rides the flag verbatim; the caller decides the fallback.
+    act(() => { socket.frame({ channel: 'sidechat', data: { scope: 'threads', rows: [], degraded: true } }) })
+    expect(onThreadsRows).toHaveBeenCalledWith([], true)
     // A per-thread notice goes to onInvalidate and leaves the threads
     // callback alone — the two channels stay independent.
     act(() => { socket.frame({ channel: 'sidechat', data: { threadId: 't1' } }) })
     expect(onInvalidate).toHaveBeenCalledWith('t1')
-    expect(onThreadsStale).toHaveBeenCalledTimes(2)
+    expect(onThreadsRows).toHaveBeenCalledTimes(2)
     harness.unmount()
+  })
+
+  it('hands a joining view the module cache at once (its alignment), and re-arms changed roots on the same key', () => {
+    const firstRows = vi.fn()
+    const first = mountProbe(() => {}, [], { threads: true, threadRoots: ['root-a'], onThreadsRows: firstRows })
+    const socket = first.socket()
+    act(() => { socket.open() })
+    const rows = [{ id: 'nn', title: 'Side: 新', running: false, parentId: 'root-a' }]
+    act(() => { socket.frame({ channel: 'sidechat', data: { scope: 'threads', rows, degraded: false } }) })
+    expect(firstRows).toHaveBeenCalledTimes(1)
+
+    // A SECOND view joins the shared subscription: it receives the last
+    // known census synchronously — no pull, no waiting for the next frame.
+    const secondRows = vi.fn()
+    const second = mountProbe(() => {}, [], { threads: true, threadRoots: ['root-a'], onThreadsRows: secondRows })
+    expect(FakeSocket.instances).toHaveLength(1)
+    expect(secondRows).toHaveBeenCalledTimes(1)
+    expect(secondRows).toHaveBeenCalledWith(rows, false)
+
+    // Its roots are content-identical → no extra watch frame.
+    const before = socket.sent.length
+    second.rerender([], { threadRoots: ['root-a'] })
+    expect(socket.sent.length).toBe(before)
+
+    // A CHANGED root list re-arms the same key (still one sub on the wire).
+    second.rerender([], { threadRoots: ['root-a', 'root-c'] })
+    const frames = socket.frames()
+    expect(frames.filter(frame => frame.op === 'sub')).toHaveLength(1)
+    expect(frames.at(-1)).toEqual({ op: 'watch', channel: 'sidechat', args: { threads: true }, input: { roots: ['root-a', 'root-c'] } })
+    // One data frame still fans out to BOTH views' listeners.
+    const next = [{ id: 'nn', title: 'Side: 新', running: true, parentId: 'root-a' }]
+    act(() => { socket.frame({ channel: 'sidechat', data: { scope: 'threads', rows: next, degraded: false } }) })
+    expect(firstRows).toHaveBeenCalledTimes(2)
+    expect(secondRows).toHaveBeenCalledTimes(2)
+    // The shared subscription survives the FIRST view leaving.
+    first.unmount()
+    expect(socket.closed).toBe(false)
+    second.unmount()
+    expect(socket.closed).toBe(true)
   })
 
   it('stays silent about threads without the threads subscription', () => {
-    const onThreadsStale = vi.fn()
-    const harness = mountProbe(() => {}, ['t1'], { onThreadsStale })
+    const onThreadsRows = vi.fn()
+    const harness = mountProbe(() => {}, ['t1'], { onThreadsRows })
     const socket = harness.socket()
     act(() => { socket.open() })
-    // No threads option → no alignment fire and no threads subscription on
-    // the wire; the host will never push threads frames to this key, and one
-    // that arrives anyway is ignored here.
-    expect(onThreadsStale).not.toHaveBeenCalled()
+    // No threads option → no threads subscription and no roots report on
+    // the wire; the host will never push threads frames to this key, and
+    // one that arrives anyway is ignored here.
+    expect(onThreadsRows).not.toHaveBeenCalled()
     expect(socket.frames()).toEqual([{ op: 'sub', channel: 'sidechat', args: { threadId: 't1' } }])
-    act(() => { socket.frame({ channel: 'sidechat', data: { scope: 'threads' } }) })
-    expect(onThreadsStale).not.toHaveBeenCalled()
+    act(() => { socket.frame({ channel: 'sidechat', data: { scope: 'threads', rows: [], degraded: false } }) })
+    expect(onThreadsRows).not.toHaveBeenCalled()
     harness.unmount()
   })
 
-  it('re-aligns the threads channel on a re-open after a drop', async () => {
+  it('re-arms the fresh subscription after a re-open (sub + watch replay), then converges on the snapshot push', async () => {
     vi.useFakeTimers()
     try {
-      const onThreadsStale = vi.fn()
+      const onThreadsRows = vi.fn()
       const onReconnect = vi.fn()
-      const harness = mountProbe(() => {}, ['t1'], { threads: true, onThreadsStale, onReconnect })
+      const harness = mountProbe(() => {}, ['t1'], { threads: true, threadRoots: ['root-a'], onThreadsRows, onReconnect })
       const socket = harness.socket()
-      expect(onThreadsStale).toHaveBeenCalledTimes(1)
+      expect(onThreadsRows).not.toHaveBeenCalled()
 
       // The wire drops: the hub retries forever, 1s first.
       act(() => { socket.drop() })
@@ -281,42 +339,25 @@ describe('useSidechatPush (the shared global threads channel)', () => {
       const second = FakeSocket.instances[1]!
       expect(second).toBeDefined()
       act(() => { second.open() })
-      // Frames the outage swallowed are gone for good: the re-open replays
-      // the subs and fires BOTH the reconnect report and the threads
-      // alignment (through the shared channel's recovered open).
-      expect(onReconnect).toHaveBeenCalledTimes(1)
-      expect(onThreadsStale).toHaveBeenCalledTimes(2)
+      // The replay re-announces the sub AND the stored watch input — the
+      // consumer never re-reports after an outage…
       expect(second.frames()).toEqual([
         { op: 'sub', channel: 'sidechat', args: { threadId: 't1' } },
         { op: 'sub', channel: 'sidechat', args: { threads: true } },
+        { op: 'watch', channel: 'sidechat', args: { threads: true }, input: { roots: ['root-a'] } },
       ])
+      // …the per-thread reconnect report still fires, the threads callback
+      // does NOT (the snapshot that follows is its catch-up, not a pull).
+      expect(onReconnect).toHaveBeenCalledTimes(1)
+      expect(onThreadsRows).not.toHaveBeenCalled()
+      // The host's replay-armed snapshot arrives as an ordinary data frame.
+      const rows = [{ id: 'rr', title: 'Side: 外区', running: true, parentId: 'root-a' }]
+      act(() => { second.frame({ channel: 'sidechat', data: { scope: 'threads', rows, degraded: false } }) })
+      expect(onThreadsRows).toHaveBeenCalledTimes(1)
+      expect(onThreadsRows).toHaveBeenCalledWith(rows, false)
       harness.unmount()
     } finally {
       vi.useRealTimers()
     }
-  })
-
-  it('aggregates the threads channel across TWO mounted views into one wire subscription', () => {
-    const firstStale = vi.fn()
-    const secondStale = vi.fn()
-    const first = mountProbe(() => {}, [], { threads: true, onThreadsStale: firstStale })
-    expect(firstStale).toHaveBeenCalledTimes(1)
-    const second = mountProbe(() => {}, [], { threads: true, onThreadsStale: secondStale })
-    expect(secondStale).toHaveBeenCalledTimes(1)
-    // One socket, one {threads:true} sub total (the second view joined the
-    // shared handle instead of re-announcing).
-    expect(FakeSocket.instances).toHaveLength(1)
-    const socket = first.socket()
-    act(() => { socket.open() })
-    expect(socket.frames()).toEqual([{ op: 'sub', channel: 'sidechat', args: { threads: true } }])
-    // One frame fans out to BOTH views' listeners.
-    act(() => { socket.frame({ channel: 'sidechat', data: { scope: 'threads' } }) })
-    expect(firstStale).toHaveBeenCalledTimes(2)
-    expect(secondStale).toHaveBeenCalledTimes(2)
-    // The shared subscription survives the FIRST view leaving.
-    first.unmount()
-    expect(socket.closed).toBe(false)
-    second.unmount()
-    expect(socket.closed).toBe(true)
   })
 })

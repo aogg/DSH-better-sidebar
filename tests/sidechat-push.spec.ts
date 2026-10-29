@@ -64,8 +64,8 @@ class FakeSocket {
     return this as unknown as WebSocket
   }
 
-  frames(): { threadId?: string; scope?: string }[] {
-    return this.sent.map(raw => JSON.parse(raw) as { threadId?: string; scope?: string })
+  frames(): { threadId?: string; scope?: string; rows?: unknown[]; degraded?: boolean }[] {
+    return this.sent.map(raw => JSON.parse(raw) as { threadId?: string; scope?: string; rows?: unknown[]; degraded?: boolean })
   }
 }
 
@@ -195,8 +195,9 @@ describe('sidechat push hub', () => {
  * The GLOBAL threads channel: a socket that watched `threads: true` also
  * hears ONE coalesced `{scope:'threads'}` frame per burst — triggered by
  * EITHER feed (any session's durable append, any stream delta) or by the
- * routes' direct `notifyThreads()` poke. The frame carries no data, and a
- * socket that never subscribed must not receive it (old clients stay
+ * routes' direct `notifyThreads()` poke. Without rootIds the frame carries
+ * no data (LEGACY mode: an old client answers it with one HTTP pull), and
+ * a socket that never subscribed must not receive it (old clients stay
  * untouched).
  */
 describe('sidechat push hub threads channel', () => {
@@ -270,6 +271,181 @@ describe('sidechat push hub threads channel', () => {
     // The watched thread's notice rides the 60ms window, the global one the
     // threads window: two frames, each its own coalescing timer.
     expect(socket.frames()).toEqual([{ threadId: 't1' }, { scope: 'threads' }])
+    hub.dispose()
+  })
+})
+
+/**
+ * The threads channel's DATA mode: a subscription whose census roots were
+ * reported (`setWatch(..., roots)`, via the feed's `watch` control frame)
+ * no longer receives pull-me empty frames — the hub COMPUTES the census
+ * (the injected `threadsCensus`, the `sidechat.threads` route's core),
+ * diffs it against what it last pushed, and ships only real changes as
+ * `{scope:'threads', rows, degraded}`. Alignment is a push: the first
+ * data-mode watch (join, re-open, a rootIds update) always produces the
+ * current snapshot; before any roots the channel stays legacy.
+ */
+describe('sidechat push hub threads DATA mode', () => {
+  /** A row factory (the wire shape of one census row). */
+  function row(id: string, running = false, title = `Side: ${id}`): { id: string; title: string; running: boolean; parentId: string } {
+    return { id, title, running, parentId: 'root' }
+  }
+
+  /** A census stub answering `answer` for every call (call-counted, roots
+   *  recorded). */
+  function censusOf(answer: { rows: unknown[]; degraded: boolean } | Error): { census: ReturnType<typeof vi.fn>; calls: () => number } {
+    const census = vi.fn(async (_roots: readonly string[]) => {
+      if (answer instanceof Error) throw answer
+      return answer
+    })
+    return { census, calls: () => census.mock.calls.length }
+  }
+
+  it('pushes the current census as the alignment snapshot on the first data-mode watch — no feed trigger needed', async () => {
+    const { ctx } = fakeCtx()
+    const { census, calls } = censusOf({ rows: [row('s1', true)], degraded: false })
+    const hub = createSidechatPushHub(ctx, { threadsCensus: census as never })
+    const socket = new FakeSocket()
+    hub.attach(socket.asWebSocket())
+    const subscription = hub.subscribe({ onFrame: (frame) => { socket.sent.push(JSON.stringify(frame)) } })
+
+    subscription.setWatch([], true, ['root-1'])
+    await vi.advanceTimersByTimeAsync(0)
+    // The snapshot arrives WITHOUT any window: the client just said what it
+    // wants to know.
+    expect(socket.frames()).toEqual([{ scope: 'threads', rows: [row('s1', true)], degraded: false }])
+    expect(calls()).toBe(1)
+    subscription.close()
+    hub.dispose()
+  })
+
+  it('recomputes on the coalescing window and SKIPS the frame when nothing changed (diff-skip)', async () => {
+    const { ctx, emit } = fakeCtx()
+    const { census, calls } = censusOf({ rows: [row('s1')], degraded: false })
+    const hub = createSidechatPushHub(ctx, { threadsCensus: census as never })
+    const socket = new FakeSocket()
+    hub.attach(socket.asWebSocket())
+    const subscription = hub.subscribe({ onFrame: (frame) => { socket.sent.push(JSON.stringify(frame)) } })
+    subscription.setWatch([], true, ['root-1'])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(socket.frames()).toHaveLength(1)
+
+    // A burst of triggers — feeds and a route poke — folds into ONE
+    // recomputation at the window, and the identical answer ships NOTHING.
+    emit('session/event', { id: 'x' }, { type: 'turn/end' })
+    emit('agent/assistant-stream', { agent: { session: { id: 'y' } }, frame: { type: 'chunk' } })
+    hub.notifyThreads()
+    await vi.advanceTimersByTimeAsync(THREADS_WINDOW_MS + 10)
+    expect(calls()).toBe(2)
+    expect(socket.frames()).toHaveLength(1)
+    subscription.close()
+    hub.dispose()
+  })
+
+  it('ships the data frame exactly when a row changes, then goes quiet again', async () => {
+    const { ctx, emit } = fakeCtx()
+    const { census } = censusOf({ rows: [row('s1')], degraded: false })
+    const hub = createSidechatPushHub(ctx, { threadsCensus: census as never })
+    const socket = new FakeSocket()
+    hub.attach(socket.asWebSocket())
+    const subscription = hub.subscribe({ onFrame: (frame) => { socket.sent.push(JSON.stringify(frame)) } })
+    subscription.setWatch([], true, ['root-1'])
+    await vi.advanceTimersByTimeAsync(0)
+
+    census.mockImplementation(async () => ({ rows: [row('s1', true)], degraded: false }))
+    emit('session/event', { id: 'x' }, { type: 'turn/end' })
+    await vi.advanceTimersByTimeAsync(THREADS_WINDOW_MS + 10)
+    expect(socket.frames()).toEqual([
+      { scope: 'threads', rows: [row('s1')], degraded: false },
+      { scope: 'threads', rows: [row('s1', true)], degraded: false },
+    ])
+
+    // The change is consumed: further identical computations ship nothing.
+    emit('agent/assistant-stream', { agent: { session: { id: 'x' } }, frame: { type: 'chunk' } })
+    await vi.advanceTimersByTimeAsync(THREADS_WINDOW_MS + 10)
+    expect(socket.frames()).toHaveLength(2)
+    subscription.close()
+    hub.dispose()
+  })
+
+  it('treats a census throw as a degraded answer and still serializes (reentrancy: one follow-up per dirty burst)', async () => {
+    const { ctx, emit } = fakeCtx()
+    const error = new Error('catalog exploded')
+    const { census, calls } = censusOf(error)
+    const hub = createSidechatPushHub(ctx, { threadsCensus: census as never })
+    const socket = new FakeSocket()
+    hub.attach(socket.asWebSocket())
+    const subscription = hub.subscribe({ onFrame: (frame) => { socket.sent.push(JSON.stringify(frame)) } })
+
+    // A slow census: the FIRST call hangs until we resolve it.
+    let release!: (value: { rows: unknown[]; degraded: boolean }) => void
+    const gate = new Promise<{ rows: unknown[]; degraded: boolean }>(resolve => { release = resolve })
+    census.mockImplementationOnce(() => gate)
+    subscription.setWatch([], true, ['root-1'])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls()).toBe(1)
+
+    // Two triggers land MID-COMPUTATION: both only mark dirty — the pump
+    // runs exactly ONE follow-up after the first settles.
+    emit('session/event', { id: 'x' }, { type: 'turn/end' })
+    hub.notifyThreads()
+    release({ rows: [], degraded: true })
+    await vi.advanceTimersByTimeAsync(THREADS_WINDOW_MS + 10)
+    expect(calls()).toBe(2)
+    // The error was degraded (logged), the follow-up's result shipped once.
+    expect(socket.frames()).toEqual([{ scope: 'threads', rows: [], degraded: true }])
+    vi.mocked(census).mockRestore()
+    subscription.close()
+    hub.dispose()
+  })
+
+  it('pushes a fresh snapshot when the rootIds update (same key, new computation input)', async () => {
+    const { ctx } = fakeCtx()
+    const { census, calls } = censusOf({ rows: [row('s1')], degraded: false })
+    const hub = createSidechatPushHub(ctx, { threadsCensus: census as never })
+    const socket = new FakeSocket()
+    hub.attach(socket.asWebSocket())
+    const subscription = hub.subscribe({ onFrame: (frame) => { socket.sent.push(JSON.stringify(frame)) } })
+    subscription.setWatch([], true, ['root-1'])
+    await vi.advanceTimersByTimeAsync(0)
+
+    // A second root appeared in the client's session list: the census
+    // answers with BOTH rows and the update ships them without any window.
+    census.mockImplementation(async () => ({ rows: [row('s1'), row('s2')], degraded: false }))
+    subscription.setWatch([], true, ['root-1', 'root-2'])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls()).toBe(2)
+    expect(census.mock.calls[1]?.[0]).toEqual(['root-1', 'root-2'])
+    expect(socket.frames()).toEqual([
+      { scope: 'threads', rows: [row('s1')], degraded: false },
+      { scope: 'threads', rows: [row('s1'), row('s2')], degraded: false },
+    ])
+    subscription.close()
+    hub.dispose()
+  })
+
+  it('falls back to legacy empty frames before the roots are reported, and after a re-watch without them', async () => {
+    const { ctx, emit } = fakeCtx()
+    const { census, calls } = censusOf({ rows: [row('s1')], degraded: false })
+    const hub = createSidechatPushHub(ctx, { threadsCensus: census as never })
+    const socket = new FakeSocket()
+    hub.attach(socket.asWebSocket())
+    const subscription = hub.subscribe({ onFrame: (frame) => { socket.sent.push(JSON.stringify(frame)) } })
+
+    // Threads channel WITHOUT roots: the legacy contract (empty invalidation),
+    // and the census is never consulted.
+    subscription.setWatch([], true)
+    emit('session/event', { id: 'x' }, { type: 'turn/end' })
+    await vi.advanceTimersByTimeAsync(THREADS_WINDOW_MS + 10)
+    expect(socket.frames()).toEqual([{ scope: 'threads' }])
+    expect(calls()).toBe(0)
+
+    // Re-watch WITHOUT the flag: the pending mode dies with the subscription.
+    subscription.setWatch([], false)
+    emit('session/event', { id: 'x' }, { type: 'turn/end' })
+    await vi.advanceTimersByTimeAsync(THREADS_WINDOW_MS + 10)
+    expect(socket.frames()).toEqual([{ scope: 'threads' }])
+    subscription.close()
     hub.dispose()
   })
 })

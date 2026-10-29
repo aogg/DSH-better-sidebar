@@ -22,25 +22,49 @@
  * only burn bandwidth.
  *
  * A third channel rides the same two feeds: the GLOBAL thread-set
- * invalidation (`{ scope: 'threads' }`). The history popover's cross-workspace
- * 「全局运行中 / 全局未读」 groups used to trust the client session-list store
- * alone, whose subagent rows lag arbitrarily on running/updatedAt flips; a
- * socket that subscribed with `threads: true` now also hears ONE coalesced
- * "the thread set may be stale" frame whenever ANY session appends durably
- * (turn/start and turn/end are appends — exactly the running flips), whenever
- * stream deltas flow (a running thread is producing), or when the sidechat
- * routes create / rename / dispose a thread (`notifyThreads()` — a brand-new
- * thread may announce nothing through the feeds for a while). The frame stays
- * data-free: the client answers it with one `sidechat.threads` pull, so the
- * route stays the single source of the tree's truth and a dropped socket
- * self-heals through the same pull. Its window (200ms) sits between the other
- * two: one turn flip usually fires BOTH feeds plus maybe a route poke, and
- * those must fold into a single re-pull, yet the flip has to read as
- * immediate.
+ * channel. It has TWO modes per subscription:
+ *
+ * - LEGACY (default, `threads: true` without rootIds): the coalescing
+ *   window (THREADS_DEBOUNCE_MS=200ms) expires into a DATA-FREE
+ *   invalidation `{ scope: 'threads' }` — the old client answers it with
+ *   one `sidechat.threads` HTTP pull, so an old bundle keeps working
+ *   unchanged.
+ * - DATA (`threads: true` plus rootIds, reported via a `watch` control
+ *   frame on the feed endpoint — the census input rides the SAME
+ *   subscription key, so a changing session list never tears the wire
+ *   subscription): the window expiry no longer pokes the client but
+ *   COMPUTES the census here — the `sidechat.threads` route's enumeration
+ *   core, injected as `threadsCensus` — shallow-diffs it against the rows
+ *   this subscription last pushed (id/running/title/parentId/
+ *   lastActivityAt, order included) and stays SILENT when nothing changed.
+ *   A change ships the data frame `{ scope: 'threads', rows, degraded }`.
+ *   Alignment is push-native: the first data-mode watch (first join, a feed
+ *   socket re-open's fresh subscription, a rootIds update) computes once
+ *   against a never-pushed baseline, so the client receives the current
+ *   full snapshot without any join-time HTTP pull; before the roots are
+ *   reported the subscription stays in legacy mode (empty frames), and the
+ *   snapshot the watch triggers replaces that state milliseconds later.
+ *
+ *   Guard rails: at most ONE census per subscription is in flight — a
+ *   trigger landing mid-computation only sets a dirty flag, and the pump
+ *   recomputes once after it settles (no pile-up). Streaming is the worst
+ *   case at one enumeration per ~200ms window per subscription: this
+ *   collapses what used to be one HTTP POST per browser surface per window
+ *   into one in-process computation on ONE wire subscription. An unexpected
+ *   census throw is logged and answered as fully degraded — the degraded
+ *   contract the route itself follows (its own per-root failures degrade
+ *   inside the core).
+ *
+ * Triggers stay identical in both modes: session/event durable append,
+ * agent/assistant-stream delta, and the routes' direct poke
+ * (`notifyThreads()` — a brand-new thread may announce nothing through the
+ * feeds for a while). In data mode the triggers only decide WHEN to
+ * recompute; the diff decides WHETHER anything is sent.
  * @module dsh-better-sidebar/sidechat-push
  */
 import type { WebSocket } from 'ws'
 import type { Context } from './context-types.ts'
+import type { SidechatGlobalThreadRow } from './sidechat-core.ts'
 
 /** Coalescing window for durable session appends. */
 const DURABLE_DEBOUNCE_MS = 60
@@ -61,13 +85,29 @@ const MAX_WATCHED = 64
 
 /**
  * One frame the host pushes. Either a watched thread whose transcript is
- * stale (`threadId`) or the GLOBAL thread-set invalidation (`scope`), never
- * both — and never any data body.
+ * stale (`threadId`), or the GLOBAL thread-set channel (`scope`) — never
+ * both. A `scope` frame is data-free in legacy mode; in data mode it
+ * carries the census rows plus the degraded flag.
  */
 export interface SidechatPushFrame {
   threadId?: string
   scope?: 'threads'
+  /** Data mode only: the full census rows (a wholesale replacement). */
+  rows?: SidechatGlobalThreadRow[]
+  /** Data mode only: true when the census could not be computed at all. */
+  degraded?: boolean
 }
+
+/**
+ * The census the data mode drives: the `sidechat.threads` route's
+ * enumeration core (sidechat-routes.ts `sidechatThreadsCensus`), injected
+ * so this module stays free of the route table (which itself imports this
+ * one). Never expected to throw — the core degrades internally — but the
+ * hub treats a throw as fully degraded regardless.
+ */
+export type SidechatThreadsCensus = (
+  rootIds: readonly string[],
+) => Promise<{ rows: SidechatGlobalThreadRow[]; degraded: boolean }>
 
 /** The frame the client sends to replace its watch set. Frames from before
  *  the threads channel carry no `threads` key and stay fully legal. */
@@ -106,29 +146,46 @@ export interface SidechatSubscribeOptions {
 /** One subscription (a legacy endpoint socket, or one feed sub) of the hub. */
 export interface SidechatSubscription {
   /**
-   * Full replacement of the watch set: the watched thread ids plus whether
-   * the GLOBAL thread-set channel is subscribed (absent = not).
+   * Full replacement of the watch set: the watched thread ids, whether the
+   * GLOBAL thread-set channel is subscribed (absent = not), and — data
+   * mode only — the census ROOTS (absent/undefined = legacy mode: the
+   * client has not reported them yet). The roots are computation input,
+   * NOT part of any subscription identity: updating them re-arms the same
+   * subscription instead of tearing it.
    */
-  setWatch(threadIds: readonly string[], threads: boolean): void
+  setWatch(threadIds: readonly string[], threads: boolean, rootIds?: readonly string[]): void
   /** Apply one raw client frame (the legacy endpoint socket's inbound feed). */
   onMessage(data: unknown): void
   /** Release the subscription; no further frames. */
   close(): void
 }
 
+/** Options of {@link createSidechatPushHub} beyond the context. */
+export interface SidechatPushHubOptions {
+  /**
+   * The census the threads channel's DATA mode computes (the
+   * `sidechat.threads` core). Absent — the bare legacy wiring — every
+   * `threads: true` subscription runs in legacy mode and the census is
+   * never consulted.
+   */
+  threadsCensus?: SidechatThreadsCensus
+}
+
 /**
  * Register the side-chat push feeds.
  * @param ctx - host plugin context (its `on` subscribes the append feed).
+ * @param options - the threads-census injection enabling the data mode.
  * @returns the hub plus a disposer unbinding both listeners.
  */
-export function createSidechatPushHub(ctx: Context): SidechatPushHub {
+export function createSidechatPushHub(ctx: Context, options: SidechatPushHubOptions = {}): SidechatPushHub {
+  const threadsCensus = options.threadsCensus
   const subscriptions = new Set<SidechatSubscriptionImpl>()
   const noSubscription = (): SidechatSubscription => {
     const noop = (): void => {}
     return { setWatch: noop, onMessage: noop, close: noop }
   }
-  const openSubscription = (options: SidechatSubscribeOptions): SidechatSubscription => {
-    const subscription = new SidechatSubscriptionImpl(options, () => { subscriptions.delete(subscription) })
+  const openSubscription = (subscribeOptions: SidechatSubscribeOptions): SidechatSubscription => {
+    const subscription = new SidechatSubscriptionImpl(subscribeOptions, threadsCensus, () => { subscriptions.delete(subscription) })
     subscriptions.add(subscription)
     return subscription
   }
@@ -197,20 +254,42 @@ export function createSidechatPushHub(ctx: Context): SidechatPushHub {
 class SidechatSubscriptionImpl {
   private readonly onFrame: (frame: SidechatPushFrame) => void
   private readonly onClosed: () => void
+  /** The data mode's census (absent = this hub was built legacy-only). */
+  private readonly census: SidechatThreadsCensus | undefined
   private readonly watched = new Set<string>()
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>()
   /** Whether this subscription also hears the GLOBAL thread-set channel. */
   private threads = false
+  /**
+   * The census roots in DATA mode (undefined = legacy mode). Data mode is
+   * `threads && roots !== undefined`: until the client reports roots the
+   * channel behaves exactly like the legacy invalidation channel.
+   */
+  private threadsRoots: readonly string[] | undefined
   /** The armed threads-coalescing timer (one per subscription, not per thread). */
   private threadsTimer: ReturnType<typeof setTimeout> | undefined
+  /** The rows this subscription last pushed (data mode's diff baseline;
+   *  undefined = nothing pushed yet, so the first computation always ships). */
+  private pushedRows: readonly SidechatGlobalThreadRow[] | undefined
+  private pushedDegraded = false
+  /** The data-mode pump: one census in flight at most, `dirty` collects the
+   *  triggers that landed mid-computation for exactly one follow-up run. */
+  private computing = false
+  private dirty = false
   private closed = false
 
   /**
    * @param options - the subscription's frame sink.
+   * @param census - the threads data mode's enumeration (may be absent).
    * @param onClosed - hub-side cleanup (idempotent).
    */
-  constructor(options: SidechatSubscribeOptions, onClosed: () => void) {
+  constructor(
+    options: SidechatSubscribeOptions,
+    census: SidechatThreadsCensus | undefined,
+    onClosed: () => void,
+  ) {
     this.onFrame = options.onFrame
+    this.census = census
     this.onClosed = onClosed
   }
 
@@ -232,15 +311,21 @@ class SidechatSubscriptionImpl {
 
   /**
    * Full replacement of the watch set. The threads channel is opt-in
-   * (absent flag = not subscribed — the backward-compatible shape).
-   * Unsubscribing drops the pending notice with its timer, like an
-   * unwatched thread does.
+   * (absent flag = not subscribed — the backward-compatible shape). The
+   * census roots arm the DATA mode; a watch WITHOUT them drops back to
+   * legacy (the pending notice dies with the mode, like an unwatched
+   * thread's notice does). A data-mode watch — first report or a rootIds
+   * update — starts the alignment computation at once (single-flight, so a
+   * burst of updates costs one follow-up run at most).
    */
-  setWatch(threadIds: readonly string[], threads: boolean): void {
+  setWatch(threadIds: readonly string[], threads: boolean, rootIds?: readonly string[]): void {
     if (this.closed) return
     this.watched.clear()
     for (const id of threadIds.slice(0, MAX_WATCHED)) this.watched.add(id)
     this.threads = threads
+    this.threadsRoots = threads && rootIds !== undefined
+      ? [...new Set(rootIds.filter(id => id !== ''))].slice(0, MAX_WATCHED)
+      : undefined
     if (!this.threads && this.threadsTimer !== undefined) {
       clearTimeout(this.threadsTimer)
       this.threadsTimer = undefined
@@ -251,6 +336,9 @@ class SidechatSubscriptionImpl {
       clearTimeout(timer)
       this.timers.delete(id)
     }
+    // Data-mode alignment: the current census is pushed WITHOUT waiting
+    // for a feed trigger (the client just told us what it wants to know).
+    if (this.threadsRoots !== undefined) this.requestThreadsCompute()
   }
 
   /**
@@ -268,18 +356,86 @@ class SidechatSubscriptionImpl {
   }
 
   /**
-   * Coalesce ONE notice for the GLOBAL thread set (first trigger's window
-   * wins, exactly like the per-thread channel). Sockets that never
-   * subscribed with `threads: true` stay silent — an old client must not
-   * start receiving frames it does not know.
+   * Coalesce ONE threads-channel trigger (first trigger's window wins,
+   * exactly like the per-thread channel). Sockets that never subscribed
+   * with `threads: true` stay silent — an old client must not start
+   * receiving frames it does not know. What the window expiry produces
+   * depends on the mode at expiry: legacy sends the data-free invalidation,
+   * data mode recomputes the census (the diff then decides whether the
+   * client hears anything at all).
    * @param delayMs - the threads coalescing window.
    */
   notifyThreads(delayMs: number): void {
     if (this.closed || !this.threads || this.threadsTimer !== undefined) return
     this.threadsTimer = setTimeout(() => {
       this.threadsTimer = undefined
+      if (this.threadsRoots !== undefined) {
+        // Data mode: the trigger only says WHEN to recompute.
+        this.requestThreadsCompute()
+        return
+      }
+      // Legacy mode (no roots reported — an old client): the data-free
+      // invalidation it knows how to answer.
       this.send({ scope: 'threads' })
     }, delayMs)
+  }
+
+  /**
+   * Start (or mark dirty) the data-mode census pump. At most ONE
+   * computation per subscription is ever in flight: a trigger landing
+   * mid-computation only sets the dirty flag, and the running pump runs
+   * exactly one follow-up with the then-current roots — a burst of feeds
+   * firing during a slow enumeration costs one recomputation, never a pile.
+   */
+  private requestThreadsCompute(): void {
+    if (this.closed || !this.threads || this.threadsRoots === undefined) return
+    if (this.computing) {
+      this.dirty = true
+      return
+    }
+    this.computing = true
+    void this.drainThreads()
+  }
+
+  /**
+   * The pump body: compute → diff → maybe push, repeating only while the
+   * dirty flag says the world moved under the last computation. Exits when
+   * the subscription died, left the threads channel or fell back to legacy.
+   */
+  private async drainThreads(): Promise<void> {
+    try {
+      for (;;) {
+        this.dirty = false
+        const roots = this.threadsRoots
+        if (this.closed || !this.threads || roots === undefined) return
+        let result: { rows: SidechatGlobalThreadRow[]; degraded: boolean }
+        try {
+          result = this.census !== undefined
+            ? await this.census(roots)
+            // No census injected (bare legacy wiring): a data-mode watch can
+            // only be answered honestly as "cannot compute".
+            : { rows: [], degraded: true }
+        } catch (error) {
+          // The census core degrades internally; a throw here is a wiring
+          // bug, logged and answered as fully degraded — a push channel
+          // must never die on its own data path.
+          console.error('[dsh-better-sidebar] sidechat threads census failed:', error)
+          result = { rows: [], degraded: true }
+        }
+        if (this.closed) return
+        // Push only on a REAL change against this subscription's last
+        // frame (order included): an unchanged census costs zero bytes on
+        // the wire — exactly the point of computing server-side.
+        if (!threadsRowsEqual(result.rows, this.pushedRows) || result.degraded !== this.pushedDegraded) {
+          this.pushedRows = result.rows
+          this.pushedDegraded = result.degraded
+          this.send({ scope: 'threads', rows: result.rows, degraded: result.degraded })
+        }
+        if (!this.dirty) return
+      }
+    } finally {
+      this.computing = false
+    }
   }
 
   /** Push one notice (silently dropped once the subscription is gone). */
@@ -297,6 +453,29 @@ class SidechatSubscriptionImpl {
     if (this.threadsTimer !== undefined) clearTimeout(this.threadsTimer)
     this.threadsTimer = undefined
     this.watched.clear()
+    this.threadsRoots = undefined
     this.onClosed()
   }
+}
+
+/**
+ * Shallow row diff of the threads channel: two censuses are "the same"
+ * only when every row matches on id/running/title/parentId/lastActivityAt,
+ * in order (the client replaces its overlay wholesale, so order is part of
+ * the frame's meaning). A never-pushed baseline (undefined) is never equal
+ * — the first computation always ships the snapshot.
+ */
+function threadsRowsEqual(
+  next: readonly SidechatGlobalThreadRow[],
+  prev: readonly SidechatGlobalThreadRow[] | undefined,
+): boolean {
+  if (prev === undefined || prev.length !== next.length) return false
+  return next.every((row, index) => {
+    const old = prev[index]!
+    return row.id === old.id
+      && row.running === old.running
+      && row.title === old.title
+      && row.parentId === old.parentId
+      && row.lastActivityAt === old.lastActivityAt
+  })
 }

@@ -642,57 +642,37 @@ export function SideChatView(props: {
   // The session-list store lags arbitrarily on subagent running/updatedAt
   // (DSH keeps no client-side event feed for hidden child sessions), so the
   // 「全局运行中 / 全局未读」 groups answer from THIS overlay: the host's
-  // `{ scope: 'threads' }` frames say WHEN to re-pull `sidechat.threads`,
-  // the route answers with the tree's own census, and the result replaces
-  // the overlay wholesale (a thread that settled or vanished drops out on
-  // the next pull instead of haunting the groups). The store stays the base
+  // threads-channel frames now CARRY the census (`{ scope: 'threads', rows,
+  // degraded }` — computed server-side from the roots this view reports via
+  // the same subscription's `watch` frame), and each frame replaces the
+  // overlay wholesale (a thread that settled or vanished drops out on the
+  // next push instead of haunting the groups). The store stays the base
   // (see globalRows) — the overlay only makes it fresher.
   //
-  // No polling anywhere: a burst of frames folds into ONE debounced pull,
-  // a degraded answer clears the overlay (the store-derived groups stand),
-  // and a failed pull just waits for the next frame or the reconnect
-  // alignment. Several surfaces (tabs + floating windows) each keep their
-  // own socket and pull; a module-level in-flight dedupe was considered and
-  // rejected — a shared promise must bind ONE abort signal, coupling one
-  // surface's unmount to another's request, and the pulls are debounced and
-  // tiny, so the simple per-surface pull stands.
+  // No HTTP on this path anywhere: the host computes AND diffs server-side,
+  // shipping only real changes, so an unchanged thread set costs zero bytes
+  // and zero requests — the old debounced `sidechat.threads` POST per
+  // surface (with its AbortController/timer bookkeeping) is gone. A
+  // degraded push clears the overlay (the store-derived groups stand); a
+  // lost socket heals through the re-opened subscription's snapshot push,
+  // never a timer.
   const [threadOverlay, setThreadOverlay] = useState<readonly SidechatGlobalThreadRow[]>([])
-  const listRef = useRef(list)
-  listRef.current = list
-  const threadsControllerRef = useRef<AbortController | null>(null)
-  const threadsTimerRef = useRef<number | undefined>(undefined)
+  const handleThreadsRows = useCallback((rows: readonly SidechatGlobalThreadRow[], degraded: boolean): void => {
+    setThreadOverlay(degraded ? [] : rows)
+  }, [])
 
-  /** Root sessions for the census: the client list's TOP-LEVEL sessions
-   *  (side threads hang off them as subagent children), capped to the same
-   *  64 the host fences. Computed at pull time from the freshest store. */
-  const pullThreads = useCallback(async (): Promise<void> => {
-    threadsControllerRef.current?.abort()
-    const controller = new AbortController()
-    threadsControllerRef.current = controller
-    const rootIds = Object.values(listRef.current.byId)
+  /** Root sessions for the census: this list's TOP-LEVEL sessions (side
+   *  threads hang off them as subagent children), capped to the same 64 the
+   *  host fences. Reported to the shared threads subscription's `watch`
+   *  frame whenever the CONTENT changes — never part of the subscription
+   *  key, so a growing session list re-arms the census instead of tearing
+   *  the wire. */
+  const threadRoots = useMemo(() => (
+    Object.values(list.byId)
       .filter(summary => summary.origin !== 'subagent')
       .map(summary => summary.id)
       .slice(0, 64)
-    try {
-      const result = await api.sidechatThreads(rootIds, controller.signal)
-      if (controller.signal.aborted) return
-      setThreadOverlay(result.degraded ? [] : result.rows)
-    } catch {
-      // Aborted by a newer pull, or the wire failed: keep the previous
-      // overlay — the next frame (or reconnect) re-pulls, never a timer.
-    }
-  }, [])
-
-  /** One debounced census pull per burst of `{ scope: 'threads' }` frames
-   *  (the window also folds the open-time alignment into the frames that
-   *  race it). Same scale as the transcript's own push debounce. */
-  const handleThreadsStale = useCallback((): void => {
-    if (threadsTimerRef.current !== undefined) window.clearTimeout(threadsTimerRef.current)
-    threadsTimerRef.current = window.setTimeout(() => {
-      threadsTimerRef.current = undefined
-      void pullThreads()
-    }, PUSH_DEBOUNCE_MS)
-  }, [pullThreads])
+  ), [list])
 
   /** The history popover's GLOBAL row feed: every side thread of EVERY
    *  workspace, minus what is on screen right now (this tab's bound thread —
@@ -951,15 +931,14 @@ export function SideChatView(props: {
   }, [fetchThread, fetchInfo])
   // A socket that dropped mid-watch reports its re-open: every frame the
   // outage swallowed is gone for good, so the bound thread re-pulls at once
-  // instead of waiting for the host's next staleness notice — and the GLOBAL
-  // thread census re-pulls through the same debounced path (its open-time
-  // alignment fired on the re-open too; the debounce folds the two).
+  // instead of waiting for the host's next staleness notice. The GLOBAL
+  // census needs no reconnect hook here — the re-opened subscription
+  // replays its `watch` and the host answers with a fresh snapshot push.
   const handleReconnect = useCallback((): void => {
-    handleThreadsStale()
     if (threadId === undefined) return
     void fetchThread(threadId)
     void fetchInfo(threadId)
-  }, [threadId, fetchThread, fetchInfo, handleThreadsStale])
+  }, [threadId, fetchThread, fetchInfo])
   const watchedThreads = useMemo(
     () => (threadId === undefined ? [] : [threadId]),
     [threadId],
@@ -968,13 +947,14 @@ export function SideChatView(props: {
     threadIds: watchedThreads,
     onInvalidate: handleInvalidate,
     onReconnect: handleReconnect,
-    // The history popover's global groups ride their own channel: threads
-    // frames arrive regardless of this tab's binding, and the open-time
-    // alignment gives even a freshly mounted tab the current census (before
-    // the channel existed a tab with no bound thread opened no socket — it
-    // still needs this feed, so `threads: true` keeps the socket alive).
+    // The history popover's global groups ride their own channel: census
+    // frames arrive regardless of this tab's binding, and the roots report
+    // below arms the server-side computation (before data push existed a
+    // tab with no bound thread opened no socket — it still needs this feed,
+    // so `threads: true` keeps the socket alive).
     threads: true,
-    onThreadsStale: handleThreadsStale,
+    threadRoots,
+    onThreadsRows: handleThreadsRows,
   })
 
   // The model catalog is deployment-scoped, so one read per mount serves every
@@ -991,9 +971,6 @@ export function SideChatView(props: {
     controllerRef.current?.abort()
     if (invalidateRef.current !== undefined) window.clearTimeout(invalidateRef.current)
     if (copiedIdTimerRef.current !== undefined) window.clearTimeout(copiedIdTimerRef.current)
-    // The threads census' own pull + debounce timer.
-    threadsControllerRef.current?.abort()
-    if (threadsTimerRef.current !== undefined) window.clearTimeout(threadsTimerRef.current)
   }, [])
 
   // When the wire recovers (disconnected → connected), pull immediately
