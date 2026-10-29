@@ -33,6 +33,16 @@
  * suspended in one call (wire `unsub`, registry kept) and restored on the
  * switch back (wire `sub` + `onReconnect` so consumers re-pull). Sidechat is
  * excluded by design: its thread subscriptions are cross-workspace.
+ *
+ * 工作区切换强制释放（workspace-release.ts）是更狠的一档:
+ * {@linkcode feedReleaseWorkspace} suspends the session's subscriptions on
+ * EVERY channel — sidechat included, the 30s exemption does not apply — plus
+ * the cross-workspace sidechat keys, which stay collected until the next
+ * {@linkcode feedRestoreSession} pulse restores them (a workspace switch has
+ * no session dimension to restore them under). The hub also publishes a tiny
+ * event stream ({@linkcode onFeedHubEvent}: socket open/close, one event per
+ * routed data frame) so the release module can drive the「恢复中」presence
+ * marks without the hub knowing anything about sessions' workspaces.
  * @module dsh-better-sidebar/feed-hub
  */
 import { hostWebSocketUrl } from './host-route-url.ts'
@@ -133,17 +143,58 @@ interface FeedEntry {
 /** The subscription registry, keyed by {@link subscriptionKey}. */
 const entries = new Map<string, FeedEntry>()
 
+/**
+ * The cross-workspace (sidechat) keys a 工作区切换 release suspended. They
+ * have no session dimension, so {@linkcode feedRestoreSession} cannot find
+ * them by session — the NEXT restore pulse (any session becoming active
+ * again) restores the whole set and clears it. A re-entrant join of one of
+ * these keys removes it (that join IS its restore).
+ */
+const suspendedCrossKeys = new Set<string>()
+
 let socket: WebSocket | null = null
 let retry: number | undefined
 let failures = 0
-/** The FIRST open is not a reconnect (nothing was missed); only an open that
- * follows a successful connection's close is, because that gap swallowed frames. */
-let connectedOnce = false
+/** True from the FIRST frame-carrying drop until the next open: an open that
+ * follows it is a RECONNECT (the gap swallowed frames), not the first open. */
 let dropped = false
 
 /** Build the registry key of one subscription (NUL-joined — no part can contain one). */
 function subscriptionKey(channel: FeedChannel, sessionId: string | undefined, args: object | undefined): string {
   return `${channel}\u0000${sessionId ?? ''}\u0000${JSON.stringify(args ?? null)}`
+}
+
+/** The hub's lifecycle events, for consumers that track reachability (the「恢复中」presence marks). */
+export type FeedHubEvent =
+  | { type: 'open' }
+  | { type: 'closed'; sessionIds: readonly string[] }
+  | { type: 'frame'; sessionId: string }
+
+const hubEventListeners = new Set<(event: FeedHubEvent) => void>()
+
+/**
+ * Subscribe to the hub's lifecycle events: the shared socket opened,
+ * it closed (naming the sessions that had live, non-suspended subscriptions —
+ * their frames stopped), or a data frame was routed (naming its session —
+ * proof that session's data is flowing again). Fan-out is contained: a
+ * throwing listener is logged, never allowed to starve the rest.
+ * @param listener - one event callback.
+ * @returns the disposer (idempotent).
+ */
+export function onFeedHubEvent(listener: (event: FeedHubEvent) => void): () => void {
+  hubEventListeners.add(listener)
+  return () => { hubEventListeners.delete(listener) }
+}
+
+/** Fan one hub event out to every listener (contained, like every fan-out here). */
+function emitHubEvent(event: FeedHubEvent): void {
+  for (const listener of [...hubEventListeners]) {
+    try {
+      listener(event)
+    } catch (error) {
+      console.error('[dsh-better-sidebar] feed hub event listener error:', error)
+    }
+  }
 }
 
 /** Jitter one backoff step into [1−JITTER, 1+JITTER] of itself. */
@@ -197,7 +248,7 @@ function ensureConnection(): void {
       failures = 0
       const recovered = dropped
       dropped = false
-      connectedOnce = true
+      emitHubEvent({ type: 'open' })
       // Re-announce every live subscription: the host's watch answers
       // (session phase/cwd seeds, git/fs-jobs snapshots) ride this replay.
       for (const entry of [...entries.values()]) announce(entry)
@@ -230,6 +281,14 @@ function ensureConnection(): void {
     }
     socket.onclose = () => {
       socket = null
+      // Name the sessions whose frames just stopped (live, non-suspended
+      // entries) BEFORE marking `dropped`: the presence consumer turns these
+      // into「恢复中…正在重新连接」marks, cleared by the next open/frame.
+      const liveSessions = new Set<string>()
+      for (const entry of [...entries.values()]) {
+        if (!entry.suspended && typeof entry.sessionId === 'string') liveSessions.add(entry.sessionId)
+      }
+      if (liveSessions.size > 0) emitHubEvent({ type: 'closed', sessionIds: [...liveSessions] })
       if (entries.size === 0) return
       for (const entry of [...entries.values()]) {
         if (!entry.suspended) dropped = true
@@ -266,7 +325,6 @@ function closeConnection(): void {
     retry = undefined
   }
   dropped = false
-  connectedOnce = false
   failures = 0
   socket?.close()
   socket = null
@@ -277,6 +335,7 @@ function closeConnection(): void {
  * (the session channel's project-scoped `history-seed`) fans out to every
  * entry of the channel — each consumer keeps its own claim filter. */
 function routeData(frame: FeedDataFrame): void {
+  if (typeof frame.sessionId === 'string') emitHubEvent({ type: 'frame', sessionId: frame.sessionId })
   for (const entry of [...entries.values()]) {
     if (entry.channel !== frame.channel || entry.suspended) continue
     if (typeof frame.sessionId === 'string' && entry.sessionId !== frame.sessionId) continue
@@ -338,8 +397,10 @@ export function feedSubscribe(options: FeedSubscribeOptions): FeedSubscription {
   } else if (entry.suspended) {
     // A re-entrant join of a released key restores it on the wire at once —
     // the component remounted inside the release window and must not wait
-    // for the session-level restore.
+    // for the session-level restore. A cross-workspace key joins its own
+    // restore here too (it leaves the suspended set).
     entry.suspended = false
+    suspendedCrossKeys.delete(subscriptionKey(entry.channel, entry.sessionId, entry.args))
     announceIt = true
   }
   entry.handles.add(subscriber)
@@ -371,6 +432,7 @@ export function feedSubscribe(options: FeedSubscribeOptions): FeedSubscription {
         entry.handles.add(subscriber)
         if (entry.suspended) {
           entry.suspended = false
+          suspendedCrossKeys.delete(nextKey)
           announce(entry)
         }
         return
@@ -411,6 +473,35 @@ export function feedReleaseSession(sessionId: string): void {
 }
 
 /**
+ * 工作区切换强制释放: suspend EVERY subscription of one session on EVERY
+ * channel — the 会话切走延时释放's channel filter and its 30s delay do not
+ * apply (the workspace is gone; nothing of it should hold memory or wire) —
+ * and with it every cross-workspace sidechat key (the threads channel carries
+ * no session, so the usual session-dimension release cannot reach it; the
+ * NEXT {@linkcode feedRestoreSession} pulse restores the whole set). Entries
+ * stay registered, so a still-mounted subscriber's later `close()` keeps the
+ * hub's bookkeeping exact; the frames stop immediately.
+ * @param sessionId - the session whose workspace was switched away from.
+ */
+export function feedReleaseWorkspace(sessionId: string): void {
+  for (const [key, entry] of [...entries]) {
+    if (entry.suspended) continue
+    if (entry.sessionId === sessionId) {
+      entry.suspended = true
+      sendControl(unsubFrame(entry))
+      continue
+    }
+    // Cross-workspace sidechat keys: released with the workspace (the
+    // sidechat exemption is a 会话切走 rule, not a 工作区切换 one).
+    if (entry.channel === 'sidechat' && entry.sessionId === undefined) {
+      entry.suspended = true
+      suspendedCrossKeys.add(key)
+      sendControl(unsubFrame(entry))
+    }
+  }
+}
+
+/**
  * Re-announce every suspended subscription of one session (the switch-back
  * half of the release): the wire `sub` re-seeds the host snapshots, and each
  * subscriber's `onReconnect` fires so one-shot consumers re-pull the frames
@@ -420,6 +511,26 @@ export function feedReleaseSession(sessionId: string): void {
 export function feedRestoreSession(sessionId: string): void {
   for (const entry of [...entries.values()]) {
     if (!entry.suspended || entry.sessionId !== sessionId) continue
+    entry.suspended = false
+    announce(entry)
+    for (const subscriber of [...entry.handles]) {
+      try {
+        subscriber.options.onReconnect?.()
+      } catch (error) {
+        console.error('[dsh-better-sidebar] feed subscriber error:', error)
+      }
+    }
+  }
+  // The cross-workspace set a 工作区切换 release collected: any restore pulse
+  // re-enables it (the sidechat keys have no session to be restored under, so
+  // the first activation after the switch is their restore point). Keys whose
+  // entries died while suspended (every subscriber unmounted) just leave.
+  if (suspendedCrossKeys.size === 0) return
+  const cross = [...suspendedCrossKeys]
+  suspendedCrossKeys.clear()
+  for (const key of cross) {
+    const entry = entries.get(key)
+    if (entry === undefined || !entry.suspended) continue
     entry.suspended = false
     announce(entry)
     for (const subscriber of [...entry.handles]) {
@@ -442,4 +553,6 @@ export function feedEntryCountForTests(): number {
 export function feedHubResetForTests(): void {
   closeConnection()
   entries.clear()
+  suspendedCrossKeys.clear()
+  hubEventListeners.clear()
 }

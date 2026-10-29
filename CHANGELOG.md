@@ -2,6 +2,14 @@
 
 > 本文档收录 dsh-better-sidebar 的完整发布历史（最新版摘要见 [README](README.md)；同步发布于 [GitHub Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)）。
 
+### v0.28.34
+
+- 🧹 **工作区切换即释放**（`src/client/feed-release.ts` + 新模块 `src/client/workspace-release.ts` + `src/client/feed-hub.ts`）：切换到不同工作区的会话时（新旧会话各一次 `session.cwd` 读取 + 每会话根缓存，尾部斜杠归一后字符串比对，本地路径与 `ssh://` 根一视同仁），旧工作区的侧边栏资源**立即**全部释放，不等「切走延时释放」的 30s 窗口——同一工作区内的普通会话切换行为完全不变（30s 延迟、sidechat 豁免原样保留；任一端 cwd 读取失败时保守走原延迟流程，绝不误判）。具体释放：① feed 单连接上旧会话**全部频道**的推送订阅（新增 `feedReleaseWorkspace`：会话维度订阅不限频道 + 跨会话的 sidechat 键一并挂起——sidechat 豁免是「切会话」规则，「切工作区」不豁免；挂起键集合由下一次任意 `feedRestoreSession` 脉冲统一恢复）；② 全部 keepMounted 标签体（编辑器、文件树、浏览器、历史、变更……）的**真实组件树立即卸载**，替换为「恢复中」占位（`NativeTabBody` 释放态直接渲染 stub——React 树卸载即释放其推送句柄与页面内存），tab 列表元数据（native records 与 localStorage 持久化）原样保留，切回原工作区原页面原样重开；③ 工作区维度内存缓存清空：文件树 levels 存储的内存镜像（`fsLevelsRelease`，磁盘副本保留、待写盘先落盘）、编辑器 file-op 流数据与游标（`opsStreamReleaseSession`）、悬停 blame 备忘（`forgetSessionBlame`）。
+- 🔄 **「恢复中」状态提醒**：被释放（或初次激活 / 推送通道断线重连中）的页面有两路可见提示——tab 芯片前导槽换转圈（复用自动刷新环同槽位、无布局位移，`restoreBadge` 文案），内容区顶部盖一条状态条（`role=status`，绝对定位不挤压页面布局）：释放后重开/初次激活显示「恢复中…正在重新加载」，断连重连期间显示「恢复中…正在重新连接」，直到该会话首帧数据（或 socket 重开放回+种子重放=订阅确认）才消失——用户能明确区分「断了」和「恢复中」。presence 标记由 feed-hub 新增的轻量事件流驱动（`onFeedHubEvent`：open / closed（点名有活跃订阅的会话）/ 每帧 routed），`workspace-release.ts` 维护 released/reloading/reconnecting 状态机，epoch 守卫沿用（连切多次时迟到的 cwd 答案不会误释放）。
+- 🌐 **国际化**：新增 locale key `restoreBadge`/`restoreReloading`/`restoreReconnecting`（zh/en），其余语言按 v0.28.27 策略走 zh/en 回退链。
+- 🧪 测试：新增 `tests/workspace-release.spec.ts`（feedReleaseWorkspace 挂起全部频道含 sidechat + 下次 restore 脉冲恢复、重入 join 自恢复、open/closed/frame 事件与 presence 状态机 released→reloading→live/reconnecting、释放即清三类工作区缓存、标签体 stub 渲染与恢复重载、切回根标记清理），共 14 例；`tests/feed-release.spec.ts` 扩展（跨工作区切换立即 `feedReleaseWorkspace` 且不 arm 30s 定时器、同工作区不触发、根缓存命中只读一次）。
+- **版本**：`SIDEBAR_SERVICE_VERSION` 与 package.json / dsh.plugin.json 一起升到 **0.28.34**。
+
 ### v0.28.32
 
 - 🪟 **工作区「更多」(…) 菜单新增「新窗口打开独立工作区」**（`src/client/workspace-link-menu.ts`）：注入从「分隔线 + 1 项」扩为「分隔线 + 2 项」——「复制独立工作区链接」（逻辑不变）之下新增第二项，点击拼与复制项相同的 `?ws=<workspaceId>` 独立链接，并在用户点击手势内同步 `window.open(url, '_blank', 'noopener')` 打开（不受弹窗拦截；`noopener` 断开 opener），随后复用锚按钮的原生 click 按核心 toggle 语义收起菜单；不写剪贴板、不弹 toast。两项均为 `role=menuitem` + aria-label 的原生 button（键盘可达性走核心菜单的上下键漫游，注入项天然在序），图标为同规格 14px 外链 SVG，样式仍全走 `--dsw-*` 令牌；核心改 aria 模板/行键 → 静默降级策略不变（缺两项，绝不坏页）。

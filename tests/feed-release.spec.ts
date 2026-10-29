@@ -11,7 +11,11 @@
  *  - the delay is read per switch, so a settings change re-arms with the
  *    new value;
  *  - a stale `session.cwd` answer (the user switched again while the read
- *    was in flight) must not arm a timer for the session that came back.
+ *    was in flight) must not arm a timer for the session that came back;
+ *  - a CROSS-WORKSPACE switch (old and new sessions resolve to different
+ *    roots) skips the 30s window entirely: the workspace release fires at
+ *    once, and no timer is armed (workspace-release.spec.ts covers the
+ *    release's own semantics — this spec pins the controller's decision).
  */
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -19,10 +23,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 /** The hub calls the controller drives (spied: the release/restore side). */
 const feedReleaseSession = vi.fn()
 const feedRestoreSession = vi.fn()
+/** The 工作区切换 immediate release (a cross-workspace switch only). */
+const feedReleaseWorkspace = vi.fn()
 
 vi.mock('../src/client/feed-hub.ts', () => ({
   feedReleaseSession: (...args: unknown[]) => feedReleaseSession(...(args as [])),
   feedRestoreSession: (...args: unknown[]) => feedRestoreSession(...(args as [])),
+  feedReleaseWorkspace: (...args: unknown[]) => feedReleaseWorkspace(...(args as [])),
+  onFeedHubEvent: () => (() => {}),
 }))
 
 /** The cwd answers: per-session, overridable per test. */
@@ -73,6 +81,7 @@ function setProjectDelay(store: ReturnType<typeof createSidebarStore>, cwd: stri
 beforeEach(() => {
   feedReleaseSession.mockClear()
   feedRestoreSession.mockClear()
+  feedReleaseWorkspace.mockClear()
   cwdAnswers.clear()
   cwdFailure = false
   vi.useFakeTimers()
@@ -186,6 +195,63 @@ describe('attachFeedRelease (the delay timer)', () => {
     // The stale answer for 'a' is discarded: its release never fires. (The
     // bounce b→a legitimately arms 'b' — the plain "old session" rule.)
     expect(feedReleaseSession).not.toHaveBeenCalledWith('a')
+    spy.mockRestore()
+    dispose()
+  })
+
+  it('a cross-workspace switch releases immediately and arms no 30s timer', async () => {
+    const store = createSidebarStore()
+    cwdAnswers.set('a', '/w1')
+    cwdAnswers.set('b', '/w2')
+    const dispose = attachFeedRelease(store)
+    store.setSession('a')
+    store.setSession('b')
+    // One microtask flush lets the two cwd reads land.
+    await vi.advanceTimersByTimeAsync(0)
+    // The old session's workspace released AT ONCE — no timer, no delay.
+    expect(feedReleaseWorkspace).toHaveBeenCalledWith('a')
+    expect(feedReleaseSession).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(feedReleaseSession).not.toHaveBeenCalled()
+    // Switching back re-enters through the normal restore pulse.
+    store.setSession('a')
+    expect(feedRestoreSession).toHaveBeenCalledWith('a')
+    dispose()
+  })
+
+  it('a same-workspace switch keeps the 30s delay flow (no workspace release)', async () => {
+    const store = createSidebarStore()
+    cwdAnswers.set('a', '/w')
+    cwdAnswers.set('b', '/w')
+    const dispose = attachFeedRelease(store)
+    store.setSession('a')
+    store.setSession('b')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(feedReleaseWorkspace).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(feedReleaseSession).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(feedReleaseSession).toHaveBeenCalledWith('a')
+    dispose()
+  })
+
+  it('the root cache skips re-reading a returning session', async () => {
+    const store = createSidebarStore()
+    cwdAnswers.set('a', '/w1')
+    cwdAnswers.set('b', '/w2')
+    const api = await import('../src/client/api.ts')
+    const spy = vi.spyOn(api.api, 'sessionCwd')
+    const dispose = attachFeedRelease(store)
+    store.setSession('a')
+    store.setSession('b')
+    await vi.advanceTimersByTimeAsync(0)
+    // a→b read BOTH roots (the workspace comparison needs the pair).
+    const afterFirst = spy.mock.calls.length
+    expect(afterFirst).toBeGreaterThanOrEqual(2)
+    store.setSession('a')
+    await vi.advanceTimersByTimeAsync(0)
+    // b→a: both roots are cached — not a single further read.
+    expect(spy.mock.calls.length).toBe(afterFirst)
     spy.mockRestore()
     dispose()
   })

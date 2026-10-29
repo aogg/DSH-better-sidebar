@@ -248,6 +248,23 @@ export function fsLevelsInvalidate(cwd: string): void {
 }
 
 /**
+ * Release one workspace's bucket from MEMORY only (the 工作区切换释放 path —
+ * see workspace-release.ts). The persisted copy SURVIVES: the tree's
+ * instant-paint head start on the switch back is exactly the kind of cheap
+ * metadata the release is supposed to keep, and a pending flush is written
+ * through first so nothing settles only in a mirror that is about to go.
+ * @param cwd - the workspace root whose in-memory bucket dies.
+ */
+export function fsLevelsRelease(cwd: string): void {
+  if (cwd === '') return
+  if (dirty.delete(cwd)) {
+    const bucket = memory.get(cwd)
+    if (bucket !== undefined) rawSet(bucketKey(cwd), JSON.stringify(bucket))
+  }
+  memory.delete(cwd)
+}
+
+/**
  * Flush any pending writes NOW (the throttled flush is a timer; tests and
  * page-hide paths want the storage state settled immediately).
  */

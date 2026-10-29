@@ -23,6 +23,10 @@
 
 /** The zh dictionary (also registered into the DSH locale registry under {@link LOCALE_NS}). */
 export const zh = {
+  // 「工作区切换释放 · 恢复中」（src/client/workspace-release.ts）。
+  restoreBadge: '恢复中',
+  restoreReloading: '恢复中…正在重新加载',
+  restoreReconnecting: '恢复中…正在重新连接',
   files: '文件',
   guideDescFiles: '浏览工作区文件树，点开即预览或编辑',
   guideDescGit: 'Git 变更与本轮文件改动，双视角合一',
@@ -933,6 +937,9 @@ export const zh = {
 
 /** The en dictionary (key-set-equal to zh, enforced by the type annotation). */
 export const en: Record<keyof typeof zh, string> = {
+  restoreBadge: 'Restoring',
+  restoreReloading: 'Restoring… reloading',
+  restoreReconnecting: 'Restoring… reconnecting',
   files: 'Files',
   guideDescFiles: 'Browse the workspace tree; click a file to preview or edit',
   guideDescGit: 'Git changes and this session\'s file edits, in one tab',

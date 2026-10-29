@@ -174,6 +174,36 @@ function streamOf(sessionId: string): Stream {
   return stream
 }
 
+/**
+ * Drop one session's stream DATA (the 工作区切换释放 path — see
+ * workspace-release.ts): the delivered touches, the retained event window
+ * and the cursor all go, and an in-flight pull is aborted so its answer can
+ * publish into a released session. A stream nobody holds is removed outright;
+ * one with surviving members (a body a stub has not unmounted yet) is reset
+ * in place — the next leader's pull re-baselines from seq 0, which is the
+ * honest state of a released workspace anyway. Notified deliberately NOT:
+ * the bodies this data fed are being torn down, and a fresh mount reads the
+ * empty state directly.
+ * @param sessionId - the released session whose stream dies.
+ */
+export function opsStreamReleaseSession(sessionId: string): void {
+  const stream = streams.get(sessionId)
+  if (stream === undefined) return
+  stream.pullAbort?.abort()
+  stream.pullInFlight = false
+  stream.pullAgain = false
+  stream.pullAbort = undefined
+  stream.events = []
+  stream.published.clear()
+  stream.seq = 0
+  stream.primed = false
+  stream.cwd = undefined
+  stream.state = EMPTY_STATE
+  if (stream.members.size === 0 && stream.leader === undefined && stream.listeners.size === 0) {
+    streams.delete(sessionId)
+  }
+}
+
 /** Publish one delta's settled write/edit ops to every member of the stream. */
 function publish(stream: Stream, ops: readonly FileOp[]): void {
   const revision = stream.state.revision + 1

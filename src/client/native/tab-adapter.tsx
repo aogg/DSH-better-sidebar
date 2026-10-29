@@ -31,6 +31,7 @@ import { RenderBoundary } from '../RenderBoundary.tsx'
 import { OrphanedTab } from '../OrphanedTab.tsx'
 import { referenceInChat } from '../reference-in-chat.ts'
 import { useSessionRoot } from '../use-session-root.ts'
+import { useWorkspaceReleaseState } from '../workspace-release.ts'
 import type { BetterSidebarService, NativePathTab } from '../service.ts'
 import { t } from '../locales.ts'
 import { isTabRefreshing, isUnread, toggleExpanded } from '../state.ts'
@@ -549,6 +550,31 @@ export function NativeTabBody(props: NativeBodyInjected & NativeBodyFrameworkPro
       return minted === null ? undefined : { title: minted.tab.title, meta: minted.tab.meta }
     },
   })
+  // 工作区切换释放 + 恢复中 (workspace-release.ts): a body whose SEAT session
+  // — or whose live cwd — sits in a released workspace stops rendering its
+  // real page entirely: the stub below unmounts the editor buffer / tree /
+  // browser / history / changes component (and with it every feed handle and
+  // per-page cache the page held), replacing it with the restoring
+  // placeholder. The record above deliberately SURVIVES (tab list metadata —
+  // title, path, meta, expansion sets), so switching back re-opens the same
+  // page. A live body shows the restoring BAR while its session is
+  // `reloading` (released and just re-activated, or first activation) or
+  // `reconnecting` (the feed socket is down) — the reader can tell「断了」
+  // from「正在恢复」.
+  const releaseState = useWorkspaceReleaseState(seatSessionId, cwd)
+  const restoringText = releaseState === 'reconnecting' ? t('restoreReconnecting') : t('restoreReloading')
+  if (releaseState === 'released') {
+    return createElement(
+      'div',
+      { className: css.nativeTabHost, 'data-dsh-native-tab-host': '' },
+      createElement(
+        'div',
+        { className: css.restoreStub, role: 'status' },
+        createElement('span', { className: css.restoreStubSpin, 'aria-hidden': 'true' }),
+        createElement('span', null, restoringText),
+      ),
+    )
+  }
   if (descriptor === undefined) {
     // The orphaned fallback sits in the SAME native host as a live body, so
     // it gets the same full-height box (its own root also relies on the
@@ -570,6 +596,17 @@ export function NativeTabBody(props: NativeBodyInjected & NativeBodyFrameworkPro
     createElement(
       'div',
       { className: css.nativeTabHost, 'data-dsh-native-tab-host': '' },
+      // The「恢复中」status bar: an overlay across the page's top while the
+      // session is restoring (see the releaseState note above). It sits ABOVE
+      // the page content (absolute, per `.restoreBar`) so no page layout
+      // depends on it; it disappears when the session's first data frame (or
+      // the socket's re-open replay) confirms the page is live again.
+      releaseState === 'live' ? null : createElement(
+        'div',
+        { className: css.restoreBar, role: 'status' },
+        createElement('span', { className: css.restoreSpin, 'aria-hidden': 'true' }),
+        createElement('span', null, restoringText),
+      ),
       createElement(descriptor.component, {
         ctx,
         store,
@@ -687,6 +724,13 @@ export function NativeTabTitle(props: NativeTitleInjected & NativeBodyFrameworkP
     () => isTabRefreshing(service.getSnapshot().state, record?.tab.id),
   )
   const showRefresh = refreshing && descriptorId === EDITOR_KIND && path !== undefined && path !== ''
+  // 「恢复中」on the chip: the seat session's presence mark (released /
+  // reloading / reconnecting — the live cwd is not resolved here, a chip
+  // never opens a session push of its own). Same leading slot as the auto
+  // reload ring: the ring replaces the glyph while the state runs, no layout
+  // shift; the auto reload ring wins when both apply.
+  const releaseState = useWorkspaceReleaseState(sessionId, undefined)
+  const showRestore = releaseState !== 'live' && !showRefresh
   // …and the chip is also what RETIRES the mark: this tab being visible means
   // the reader is looking at its page now. Guarded on BOTH flags, so an
   // inactive chip (the host draws every expanded tab's title) clears nothing
@@ -703,6 +747,8 @@ export function NativeTabTitle(props: NativeTitleInjected & NativeBodyFrameworkP
   // stays aria-hidden.
   const leading = showRefresh ? (
     <span className={css.chipRefreshSpin} role="img" aria-label={t('loading')} title={t('loading')} />
+  ) : showRestore ? (
+    <span className={css.chipRefreshSpin} role="img" aria-label={t('restoreBadge')} title={t('restoreBadge')} />
   ) : glyph === undefined || glyph === null ? null : (
     <span className={css.chipIcon} aria-hidden="true">{glyph}</span>
   )

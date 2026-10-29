@@ -260,6 +260,16 @@ export function forgetBlame(sessionId: string, path: string): void {
   }
 }
 
+/** Drop the memo of one session's WHOLE blame cache (the 工作区切换释放 path —
+ *  see workspace-release.ts): every line memo is keyed by the session first,
+ *  so one prefix sweep clears it. */
+export function forgetSessionBlame(sessionId: string): void {
+  const prefix = `${sessionId}\u0000`
+  for (const key of [...blameCache.keys()]) {
+    if (key.startsWith(prefix)) blameCache.delete(key)
+  }
+}
+
 /** Blame one line, or null when git has no answer (untracked file, no
  *  repository, command failure) — the tooltip then simply never shows. */
 export function loadBlameLine(scope: SessionScope, path: string, line: number): Promise<GitBlameLine | null> {
