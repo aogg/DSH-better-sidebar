@@ -185,6 +185,21 @@ export function mediaTypeForPath(path: string): string {
 }
 
 /**
+ * Validate one git-domain cwd / repository root the way {@link requireAbsolute}
+ * validates a local one — plus the `ssh://<alias>/<path>` spelling a remote
+ * workspace session carries (a dsh-ssh-workspace mount; node's own notion of
+ * absolute cannot see it). Local paths keep requireAbsolute's exact shape
+ * (resolve + the same error); a remote spelling passes through lexically
+ * trimmed, never `resolve()`d — that would fold the scheme onto the host's
+ * own filesystem. Narrowly scoped to the git routes' session cwd and selected
+ * repository: the fs tree keeps requiring locally-absolute paths.
+ */
+function requireGitPath(path: string): string {
+  if (git.isRemoteWorkspaceCwd(path)) return path.replace(/\/+$/, '')
+  return requireAbsolute(path)
+}
+
+/**
  * Resolve a session's authoritative working directory. The attached session
  * header wins; while the session is still hydrating from persistence (the
  * web client attaches the current conversation a moment after page load, so
@@ -205,7 +220,7 @@ async function sessionCwdOf(ctx: Context, sessionId: string, clientCwd?: string)
   if (headerCwd !== undefined && headerCwd !== '') return headerCwd
   if (clientCwd !== undefined && clientCwd !== '') {
     try {
-      return requireAbsolute(clientCwd)
+      return requireGitPath(clientCwd)
     } catch {
       throw new SidebarError('bad-request', `invalid working directory "${clientCwd}"`)
     }
@@ -216,7 +231,7 @@ async function sessionCwdOf(ctx: Context, sessionId: string, clientCwd?: string)
     const metaCwd = persisted.header.cwd
     if (metaCwd !== undefined && metaCwd !== '') {
       try {
-        return requireAbsolute(metaCwd)
+        return requireGitPath(metaCwd)
       } catch {
         throw new SidebarError('bad-request', `invalid working directory "${metaCwd}"`)
       }
@@ -229,7 +244,7 @@ async function sessionCwdOf(ctx: Context, sessionId: string, clientCwd?: string)
 function selectedRepoOf(payload: unknown): string | undefined {
   const record = payload as { repoRoot?: unknown }
   if (record.repoRoot === undefined) return undefined
-  return requireAbsolute(requireString(payload, 'repoRoot'))
+  return requireGitPath(requireString(payload, 'repoRoot'))
 }
 
 /**
@@ -277,6 +292,17 @@ function requireLineNumber(payload: unknown, key: string): number {
  * layer that can stat — never in a purely lexical one.
  */
 async function resolveGitPath(cwd: string, raw: string, selected?: string): Promise<string> {
+  // A remote workspace resolves LEXICALLY: node cannot stat the remote paths
+  // (no existence-gated probes, no local `join` — it would fold the `ssh://`
+  // scheme into a meaningless host path), so a session-relative raw joins the
+  // session cwd's own spelling and an absolute/remote one passes through. The
+  // workspace-dir-prefix compatibility is a local chat-link shape and does
+  // not apply; git.ts lowers the `ssh://` result to the remote-native
+  // pathspec at the spawn boundary.
+  if (git.isRemoteWorkspaceCwd(cwd)) {
+    if (git.isRemoteWorkspaceCwd(raw) || isAbsolute(raw)) return requireGitPath(raw)
+    return requireGitPath(`${cwd.replace(/\/+$/, '')}/${raw}`)
+  }
   if (isAbsolute(raw)) {
     // Absolute: verbatim, unless the target is a client-prejoined
     // `<cwd>/basename(cwd)/…` spelling that misses while the stripped one
@@ -473,9 +499,30 @@ async function streamCommitMessage(
  * back to itself, where the git command fails exactly as it did before.
  */
 async function resolveStatusPath(cwd: string, raw: string, selected?: string): Promise<string> {
+  // A remote workspace resolves LEXICALLY (the session cwd is an `ssh://`
+  // spelling): the relative row joins the repository root's own spelling —
+  // git.ts lowers the result to the remote-native pathspec at the spawn
+  // boundary — and an already-absolute (native or remote) raw passes through.
+  if (git.isRemoteWorkspaceCwd(cwd)) {
+    if (git.isRemoteWorkspaceCwd(raw) || isAbsolute(raw)) return requireGitPath(raw)
+    const root = await git.repoRoot(cwd, selected).catch(() => cwd)
+    return requireGitPath(git.isRemoteWorkspaceCwd(root) ? `${root.replace(/\/+$/, '')}/${raw}` : raw)
+  }
   if (isAbsolute(raw)) return requireAbsolute(resolveSessionPath(cwd, raw))
   const root = await git.repoRoot(cwd, selected).catch(() => cwd)
   return requireAbsolute(join(root, raw))
+}
+
+/**
+ * Resolve a git-domain path that later reaches the FILESYSTEM seam
+ * (`ensureWorkspacePath`) or a git pathspec: on a remote workspace the
+ * resolver's `ssh://` result is already absolute in its own namespace and
+ * lexically clean — the local normalizer would fold the scheme (it joins a
+ * non-absolute-looking spelling onto the host fs) — so it passes through
+ * untouched; local results keep the exact resolution they always had.
+ */
+function resolveGitTarget(cwd: string, resolved: string): Promise<string> {
+  return git.isRemoteWorkspaceCwd(resolved) ? Promise.resolve(resolved) : ensureWorkspacePath(cwd, resolved)
 }
 
 /** How many leading bytes a binary read returns for client-side detect sniffing. */
@@ -918,7 +965,7 @@ function buildApi(
       // child-repo path is relative to the selected repoRoot, not the session
       // cwd; thread it so the path resolves inside the authorized workspace.
       const selected = selectedRepoOf(payload)
-      const path = await ensureWorkspacePath(cwd, await resolveGitPath(cwd, requireString(payload, 'path'), selected))
+      const path = await resolveGitTarget(cwd, await resolveGitPath(cwd, requireString(payload, 'path'), selected))
       return await readText(path)
     },
     // One byte window of a large text file, for the read-only paged preview.
@@ -928,7 +975,7 @@ function buildApi(
     'fs.readPage': async (payload) => {
       const { cwd } = await cwdOf(payload)
       const selected = selectedRepoOf(payload)
-      const path = await ensureWorkspacePath(cwd, await resolveGitPath(cwd, requireString(payload, 'path'), selected))
+      const path = await resolveGitTarget(cwd, await resolveGitPath(cwd, requireString(payload, 'path'), selected))
       const record = payload as { offset?: unknown } | null
       const offset = typeof record?.offset === 'number' && Number.isFinite(record.offset) && record.offset >= 0
         ? Math.floor(record.offset)
@@ -1061,7 +1108,7 @@ function buildApi(
     'git.diff-head': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
       const repoRoot = selectedRepoOf(payload)
-      const path = await ensureWorkspacePath(cwd, await resolveGitPath(cwd, requireString(payload, 'path'), repoRoot))
+      const path = await resolveGitTarget(cwd, await resolveGitPath(cwd, requireString(payload, 'path'), repoRoot))
       return { diff: await git.diffHead(cwd, path, repoRoot) }
     },
     'git.stage': async (payload) => {
@@ -1246,7 +1293,7 @@ function buildApi(
     'git.blame': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
       const repoRoot = selectedRepoOf(payload)
-      const path = await ensureWorkspacePath(cwd, await resolveGitPath(cwd, requireString(payload, 'path'), repoRoot))
+      const path = await resolveGitTarget(cwd, await resolveGitPath(cwd, requireString(payload, 'path'), repoRoot))
       const startLine = requireLineNumber(payload, 'startLine')
       const endLine = requireLineNumber(payload, 'endLine')
       if (endLine < startLine) throw new SidebarError('bad-request', '"endLine" must not precede "startLine"')
@@ -1757,6 +1804,14 @@ async function importLegacyPrefs(
  * {@link resolveSidebarConfig}.
  */
 export function apply(ctx: Context, config?: SidebarConfig): void {
+  // The remote-git channel: git.ts routes `ssh://`-cwd commands through the
+  // host `subprocess` service, which dsh-ssh-workspace patches to run them ON
+  // the remote host. The resolver is lazy on purpose — it is CALLED inside
+  // every runGit, never at install time — so plugin mount order (this bundle
+  // loading before the ssh plugin patches the service) cannot matter, and a
+  // host without the plugin just answers git routes with the typed
+  // remote-unavailable error.
+  git.installSubprocessResolver(() => ctx.get('subprocess'))
   const resolved = resolveSidebarConfig(config)
   // The web runtime's bind-derived trust list (boot-sampled LAN literals
   // plus --trusted-host authorities) — the authoritative source the /api

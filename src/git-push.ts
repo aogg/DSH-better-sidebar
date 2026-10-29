@@ -65,6 +65,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import type { WebSocket } from 'ws'
 import { invalidateGitCache } from './git-cache.ts'
+import { isRemoteWorkspaceCwd } from './git.ts'
 import { resolveTarget } from './path-security.ts'
 
 /** How long a burst of filesystem events is folded into a single notice. */
@@ -483,14 +484,26 @@ class GitSubscription {
       return
     }
     const next = new Map<string, string>()
-    for (const original of list) {
-      try {
-        // Resolution (not trust): relative spellings join the session cwd,
-        // the result is lexically normalized — the git routes' own rule.
-        const key = resolveTarget(cwd, original)
-        if (!next.has(key)) next.set(key, original)
-      } catch (error) {
-        this.hub.warn(`cannot resolve git watch path "${original}"`, error)
+    // A remote (ssh://) workspace session skips watching ENTIRELY: the hub's
+    // handles are node `fs.watch` calls on local paths, which can never see a
+    // remote checkout, and the session's own spellings are not local paths
+    // `resolveTarget` can normalize (each frame would die as a warning). An
+    // empty `next` still runs the release loop below, so a session that moved
+    // from a local to a remote cwd drops its watches cleanly. The watched
+    // surfaces degrade to their mutation/reconnect re-pulls and manual
+    // refreshes — a deliberate skip, not a failure, so it stays silent.
+    if (isRemoteWorkspaceCwd(cwd)) {
+      // fall through with an empty `next`
+    } else {
+      for (const original of list) {
+        try {
+          // Resolution (not trust): relative spellings join the session cwd,
+          // the result is lexically normalized — the git routes' own rule.
+          const key = resolveTarget(cwd, original)
+          if (!next.has(key)) next.set(key, original)
+        } catch (error) {
+          this.hub.warn(`cannot resolve git watch path "${original}"`, error)
+        }
       }
     }
     for (const [key, original] of next) {

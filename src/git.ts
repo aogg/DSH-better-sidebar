@@ -11,6 +11,19 @@
  * Commits use the user's git global identity untouched (never sets
  * user.name/user.email).
  *
+ * REMOTE (ssh://) workspaces: a session whose cwd is the `ssh://<alias>/<path>`
+ * spelling of a dsh-ssh-workspace mount cannot spawn a local `git -C <cwd>`
+ * (the local runtime has no such directory). When the host's `subprocess`
+ * service has been taken over by that plugin (the resolver injected from
+ * index.ts), specs with an `ssh://` cwd run ON THE REMOTE HOST instead: the
+ * bridge `cd`s into the remote path itself, so the remote argv carries no
+ * `-C`; every other argument, the machine-readable `-c` pins and the timeout
+ * semantics are byte-for-byte the local contract. Git's answers (top levels,
+ * worktree lists) are remote-NATIVE paths — every value the panel sends back
+ * as a cwd is re-spelled to `ssh://` at this module's egress (see
+ * {@link remoteRootSpelling}), and client-supplied `ssh://` pathspecs are
+ * lowered back to native (see {@link remoteNativePathOf}).
+ *
  * Two status shapes exist, and the difference is deliberate: {@link status}
  * answers the WHOLE checkout (the first paint, and the calibration read after
  * an event that could move any path), while {@link statusPaths} answers only a
@@ -357,11 +370,163 @@ export function parseLogNameStatus(output: string): GitLogEntry[] {
   return rows
 }
 
+/** Whether `cwd` is the `ssh://<alias>/<remote-path>` spelling of a remote
+ *  workspace (dsh-ssh-workspace mount). Cheap prefix test, no parsing. */
+export function isRemoteWorkspaceCwd(cwd: string): boolean {
+  return cwd.startsWith('ssh://')
+}
+
+/** Lazily-resolved host `subprocess` service (patched by dsh-ssh-workspace to
+ *  route `ssh://` specs to the remote host). Injected from index.ts via
+ *  {@link installSubprocessResolver}; the indirection keeps git.ts free of
+ *  cordis types and decouples it from the plugin mount order — the resolver
+ *  is only ever CALLED inside {@link runGit}, never at import time. */
+let subprocessResolver: (() => unknown) | undefined
+
+/** Install the subprocess-service resolver (index.ts apply) — or `undefined`
+ *  to detach (tests). */
+export function installSubprocessResolver(resolver: (() => unknown) | undefined): void {
+  subprocessResolver = resolver
+}
+
+/** The remote-subprocess spec this module sends (the dsh-ssh-workspace bridge
+ *  contract, narrowed to the fields git needs). `stdio` accepts ONLY the
+ *  `{maxBytes}` collectors / `{data}` payload shapes — `'pipe'` throws there. */
+interface RemoteSpawnSpec {
+  argv: string[]
+  cwd: string
+  /** Minimal set: re-exported into the remote shell one by one (never the
+   *  whole process.env — a leak and an over-long command line). */
+  env: Record<string, string>
+  /** SIGTERM → SIGKILL grace (bounded, >0). */
+  graceMs: number
+  /** Aborted ⇒ the bridge hard-kills the remote command (the timeout path). */
+  signal: AbortSignal
+  stdio: {
+    stdout: { maxBytes: number }
+    stderr: { maxBytes: number }
+    stdin?: { data: string }
+  }
+}
+
+/** One collected stream (a byte-tail window, sealed at exit). */
+interface RemoteStreamTail {
+  finalize(): { text: string; truncated: boolean }
+}
+
+/** The live remote handle: exit facts settle `done`; `done` REJECTS only on
+ *  infrastructure failure (connection drop, rejected spec, missing binary). */
+interface RemoteSpawnHandle {
+  collected: { stdout?: RemoteStreamTail; stderr?: RemoteStreamTail }
+  done: Promise<{ exitCode: number | null; signal: string | null }>
+}
+
+interface RemoteSpawnService {
+  spawn(spec: RemoteSpawnSpec): unknown
+}
+
+/** Remote stdout budget: a whole-repo round-diff patch must fit whole (past
+ *  it the tail window silently drops the HEAD of the output — the honest
+ *  degradation is a huge diff losing its oldest bytes, never a hang). */
+const REMOTE_STDOUT_MAX_BYTES = 16 * 1024 * 1024
+/** Remote stderr budget: git diagnostics are small; 1 MiB is generous. */
+const REMOTE_STDERR_MAX_BYTES = 1024 * 1024
+/** Remote SIGTERM → SIGKILL grace (the bridge walks the ladder itself). */
+const REMOTE_KILL_GRACE_MS = 2_000
+
+/** Lower one `ssh://`-spelled workspace path back to the remote-NATIVE path
+ *  git (running on that host) understands: `ssh://alias/home/u/p` →
+ *  `/home/u/p`; the Windows-drive form `ssh://win/D:/code` → `D:/code` (git
+ *  for Windows spells drive roots without the leading slash the URI keeps).
+ *  Any other input (local paths, relative rows) is answered `undefined` so
+ *  callers pass their value through untouched. */
+export function remoteNativePathOf(spelling: string): string | undefined {
+  const match = /^ssh:\/\/[^/]+(\/[\s\S]*)$/.exec(spelling)
+  const rest = match?.[1]
+  if (rest === undefined) return undefined
+  const drive = /^\/([A-Za-z]:\/[\s\S]*)$/.exec(rest)
+  return drive !== null ? drive[1]! : rest
+}
+
+/** The operand git should see for one caller-carried path: an `ssh://`-spelled
+ *  absolute (a row/target this module's own egress lifted) lowers to the
+ *  remote-native pathspec; every other value — relative rows, revs, native
+ *  paths — passes through untouched, locally byte-for-byte as always. */
+function nativeOperand(value: string): string {
+  return remoteNativePathOf(value) ?? value
+}
+
+/** The repo-root-relative pathspec one requested path becomes on a REMOTE
+ *  worktree — the lexical twin of the local `resolve`/`relative` pair, which
+ *  would fold the `ssh://` spelling onto the host's own filesystem. An
+ *  `ssh://`-spelled request is accepted only under the answering root (its
+ *  tail becomes the pathspec; the root itself spells the full-read `.`, and
+ *  the native twin answers an echoed native absolute the same way); a bare
+ *  relative row is already repo-root-relative, because remote git runs AT the
+ *  root (the bridge's `cd`). Anything else — another workspace's spelling, a
+ *  path escaping the root — has no status here and answers `undefined`. */
+function remoteRelativePathspec(root: string, raw: string): string | undefined {
+  const base = root.replace(/\/+$/, '')
+  let rest: string
+  if (isRemoteWorkspaceCwd(raw)) {
+    const path = raw.replace(/\/+$/, '')
+    if (path === base) return ''
+    if (!path.startsWith(`${base}/`)) return undefined
+    rest = path.slice(base.length + 1)
+  } else if (isAbsolute(raw)) {
+    const nativeRoot = remoteNativePathOf(base)
+    if (nativeRoot === undefined) return undefined
+    const normalized = raw.replaceAll('\\', '/')
+    if (normalized === nativeRoot) return ''
+    if (!normalized.startsWith(`${nativeRoot}/`)) return undefined
+    rest = normalized.slice(nativeRoot.length + 1)
+  } else {
+    rest = raw
+  }
+  // Lexical fold of the `.`/`..` segments (the local branch's `resolve()`
+  // twin): a path escaping the root has no status here, exactly like the
+  // local `../`-prefix drop.
+  const segments: string[] = []
+  for (const segment of rest.split(/[\\/]+/)) {
+    if (segment === '' || segment === '.') continue
+    if (segment === '..') {
+      if (segments.length === 0) return undefined
+      segments.pop()
+      continue
+    }
+    segments.push(segment)
+  }
+  return segments.join('/')
+}
+
+/** Lift one remote-NATIVE path git printed (a top level, a worktree root) to
+ *  the `ssh://` spelling of the workspace it was answered in — the only form
+ *  the panel may send back as a cwd for {@link runGit} to route remotely.
+ *  `sshCwd` contributes the `ssh://<alias>/` authority; `nativeRoot` is
+ *  normalized to forward slashes (and the Windows drive's leading slash is
+ *  not re-added). Malformed input answers `undefined`; callers degrade. */
+export function remoteRootSpelling(sshCwd: string, nativeRoot: string): string | undefined {
+  const match = /^ssh:\/\/([^/]+)\/[\s\S]*$/.exec(sshCwd)
+  if (match === null) return undefined
+  const root = nativeRoot.trim().replaceAll('\\', '/').replace(/^\/+/, '').replace(/\/+$/, '')
+  if (root === '') return undefined
+  return `ssh://${match[1]}/${root}`
+}
+
 /** Run one git command; resolves with stdout, rejects with GitCommandError.
  *  `input` (optional) is written to the child's stdin and the pipe closed —
  *  the `--stdin` readers (`check-ignore`) need it; every other command keeps
- *  the plain no-stdin spawn it always had. */
+ *  the plain no-stdin spawn it always had. An `ssh://` cwd routes through the
+ *  remote bridge (see the module comment); local paths keep the exact
+ *  spawn they always had. */
 export function runGit(cwd: string, args: string[], timeoutMs = 30_000, input?: string): Promise<string> {
+  return isRemoteWorkspaceCwd(cwd)
+    ? runGitRemote(cwd, args, timeoutMs, input)
+    : runGitLocal(cwd, args, timeoutMs, input)
+}
+
+/** The local half of {@link runGit}: `git -C <cwd> …` as one child process. */
+function runGitLocal(cwd: string, args: string[], timeoutMs: number, input?: string): Promise<string> {
   // `core.quotePath=false`: emit paths verbatim instead of C-quoting them
   // (git's default turns a CJK/space path into an octal-escaped, quoted
   // string, and every diff surface renders that string as the file name).
@@ -401,6 +566,89 @@ export function runGit(cwd: string, args: string[], timeoutMs = 30_000, input?: 
         reject(new GitCommandError(stderr.trim() || `git exited with ${String(code)}`, 'git-error', args.join(' ')))
       }
     })
+  })
+}
+
+/** The remote half of {@link runGit}: the same command through the
+ *  dsh-ssh-workspace bridge, ON the `cwd`-named host. The remote argv carries
+ *  NO `-C` (the bridge `cd`s into the remote cwd itself) — everything else is
+ *  the local contract: the `-c` pins, the timeout message, the stderr-as-error
+ *  rejection. Infra failures (no plugin, dead connection, non-git binary)
+ *  surface as `cannot run git: …`, the local spawn-error vocabulary. */
+function runGitRemote(cwd: string, args: string[], timeoutMs: number, input?: string): Promise<string> {
+  return new Promise<string>((resolvePromise, reject) => {
+    // The resolver runs INSIDE the executor: a missing service must reject the
+    // promise (runGit's contract is a Promise, never a synchronous throw —
+    // chained callers like the git cache's HEAD probe call `.then()` directly
+    // and would otherwise see a TypeError instead of the typed error).
+    const service = subprocessResolver?.() as RemoteSpawnService | undefined
+    if (service === undefined || typeof service.spawn !== 'function') {
+      reject(new GitCommandError(
+        '远程工作区的 git 需要宿主安装并启用 dsh-ssh-workspace 插件（remote git requires the dsh-ssh-workspace plugin on the host）',
+        'git-remote-unavailable',
+        args.join(' '),
+      ))
+      return
+    }
+    // The timeout aborts the spec's signal: the bridge answers with a hard
+    // remote kill (SIGTERM ladder collapsed), while the local contract's
+    // rejection message goes out immediately — same shape, same words.
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      controller.abort()
+      reject(new GitCommandError(`git ${args[0] ?? ''} timed out after ${timeoutMs}ms`, 'git-error', args.join(' ')))
+    }, timeoutMs)
+    let handle: RemoteSpawnHandle
+    try {
+      const spawned = service.spawn({
+        argv: ['git', '--no-pager', '-c', 'color.ui=false', '-c', 'core.quotePath=false', ...args],
+        cwd,
+        env: { GIT_OPTIONAL_LOCKS: '0' },
+        graceMs: REMOTE_KILL_GRACE_MS,
+        signal: controller.signal,
+        stdio: {
+          stdout: { maxBytes: REMOTE_STDOUT_MAX_BYTES },
+          stderr: { maxBytes: REMOTE_STDERR_MAX_BYTES },
+          ...(input === undefined ? {} : { stdin: { data: input } }),
+        },
+      }) as Partial<RemoteSpawnHandle> | undefined
+      if (spawned === undefined || spawned.done === null || typeof spawned.done?.then !== 'function') {
+        throw new Error('the remote subprocess bridge returned no handle')
+      }
+      handle = spawned as RemoteSpawnHandle
+    } catch (error) {
+      clearTimeout(timer)
+      reject(new GitCommandError(
+        `cannot run git: ${error instanceof Error ? error.message : String(error)}`,
+        'git-error',
+        args.join(' '),
+      ))
+      return
+    }
+    void handle.done.then(
+      (exit) => {
+        clearTimeout(timer)
+        const stdout = handle.collected.stdout?.finalize().text ?? ''
+        if (exit.exitCode === 0) {
+          resolvePromise(stdout)
+          return
+        }
+        const stderr = handle.collected.stderr?.finalize().text ?? ''
+        reject(new GitCommandError(
+          stderr.trim() || `git exited with ${String(exit.exitCode)}`,
+          'git-error',
+          args.join(' '),
+        ))
+      },
+      (error: unknown) => {
+        clearTimeout(timer)
+        reject(new GitCommandError(
+          `cannot run git: ${error instanceof Error ? error.message : String(error)}`,
+          'git-error',
+          args.join(' '),
+        ))
+      },
+    )
   })
 }
 
@@ -499,7 +747,7 @@ export async function blame(
   try {
     const root = await repoRoot(cwd, selected)
     const output = await runGit(root, [
-      'blame', '--porcelain', '-L', `${String(startLine)},${String(endLine)}`, '--', path,
+      'blame', '--porcelain', '-L', `${String(startLine)},${String(endLine)}`, '--', nativeOperand(path),
     ])
     return parseBlamePorcelain(output)
   } catch {
@@ -566,17 +814,30 @@ export function repoRoots(cwd: string): Promise<string[]> {
 
 async function discoverRepoRoots(cwd: string): Promise<string[]> {
   try {
-    return [await directRepoRoot(cwd)]
+    const root = await directRepoRoot(cwd)
+    // A remote answer is a remote-NATIVE path; the panel only ever speaks
+    // `ssh://` back, so lift it before it becomes a cwd again.
+    return [remoteRootSpelling(cwd, root) ?? root]
   } catch {
+    // Container fallback: probe child directories. Remote workspaces walk
+    // the same shape — the child cwd is spelled lexically (no local `join`,
+    // which would fold an `ssh://` base into a meaningless local path on a
+    // host without the fs bridge), and a remote readdir (when the fs bridge
+    // is live) lists it; without the bridge the read fails and the answer
+    // degrades to "no repositories" as any unreachable directory would.
     const entries = await readdir(cwd, { withFileTypes: true }).catch(() => [])
     const roots: string[] = []
     for (const entry of entries
       .filter(entry => entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules')
       .sort((left, right) => left.name.localeCompare(right.name))
       .slice(0, DISCOVERY_LIMIT)) {
+      const child = isRemoteWorkspaceCwd(cwd)
+        ? `${cwd.replace(/\/+$/, '')}/${entry.name}`
+        : join(cwd, entry.name)
       try {
-        const root = await directRepoRoot(join(cwd, entry.name))
-        if (!roots.some(existing => pathIdentity(existing) === pathIdentity(root))) roots.push(root)
+        const root = await directRepoRoot(child)
+        const lifted = remoteRootSpelling(cwd, root) ?? root
+        if (!roots.some(existing => pathIdentity(existing) === pathIdentity(lifted))) roots.push(lifted)
       } catch {
         // Ordinary child directory; keep discovering sibling repositories.
       }
@@ -752,16 +1013,25 @@ export async function statusPaths(
   // status here; the root itself is pathspec '.' (the full-read shape).
   const pathspecs: string[] = []
   const seen = new Set<string>()
+  // A remote worktree derives its pathspecs LEXICALLY (see
+  // {@link remoteRelativePathspec}); local ones keep the resolve/relative pair.
+  const remote = isRemoteWorkspaceCwd(root)
   for (const raw of paths) {
     let rel: string
-    try {
-      rel = relative(root, resolve(cwd, raw)).split('\\').join('/')
-    } catch {
-      continue
+    if (remote) {
+      const derived = remoteRelativePathspec(root, raw)
+      if (derived === undefined) continue
+      rel = derived
+    } else {
+      try {
+        rel = relative(root, resolve(cwd, raw)).split('\\').join('/')
+      } catch {
+        continue
+      }
+      // A path outside the root has no status here; on Windows a different
+      // drive comes back ABSOLUTE from `relative` rather than `../`-prefixed.
+      if (rel === '..' || rel.startsWith('../') || isAbsolute(rel)) continue
     }
-    // A path outside the root has no status here; on Windows a different
-    // drive comes back ABSOLUTE from `relative` rather than `../`-prefixed.
-    if (rel === '..' || rel.startsWith('../') || isAbsolute(rel)) continue
     const pathspec = rel === '' ? '.' : rel
     if (seen.has(pathspec)) continue
     seen.add(pathspec)
@@ -802,8 +1072,15 @@ export async function statusPaths(
   }
 }
 
-/** Platform-aware identity used only for comparing absolute checkout roots. */
+/** Platform-aware identity used only for comparing absolute checkout roots.
+ *  An `ssh://` spelling is compared LEXICALLY (the local `resolve` would fold
+ *  the scheme into a meaningless local path; the bridge's own canonical form
+ *  is what this module egresses), local paths keep the platform rule. */
 function pathIdentity(path: string): string {
+  if (isRemoteWorkspaceCwd(path)) {
+    const normalized = path.replaceAll('\\', '/').replace(/\/+$/, '')
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+  }
   const absolute = resolve(path).replace(/[\\/]+$/, '')
   return process.platform === 'win32' ? absolute.toLowerCase() : absolute
 }
@@ -814,8 +1091,11 @@ function pathIdentity(path: string): string {
 let worktreeListSupportsZ: boolean | undefined
 
 /** Raw usable checkout records, shared by inventory and target validation.
- * Prunable records point at missing paths and are deliberately excluded from
- * both the selector and the command-target allowlist. */
+ *  Prunable records point at missing paths and are deliberately excluded from
+ *  both the selector and the command-target allowlist. Worktree roots are
+ *  lifted to the `ssh://` spelling of the answering workspace on remote reads
+ *  — the client echoes them back as the `worktree` argument, and only the
+ *  `ssh://` form routes a later git call to the right host. */
 async function listedWorktrees(cwd: string): Promise<GitWorktreeRecord[]> {
   let raw: string
   if (worktreeListSupportsZ === false) {
@@ -829,7 +1109,9 @@ async function listedWorktrees(cwd: string): Promise<GitWorktreeRecord[]> {
       raw = await runGit(cwd, ['worktree', 'list', '--porcelain'])
     }
   }
-  return parseWorktreeList(raw).filter(entry => !entry.prunable)
+  return parseWorktreeList(raw)
+    .filter(entry => !entry.prunable)
+    .map(entry => ({ ...entry, path: remoteRootSpelling(cwd, entry.path) ?? entry.path }))
 }
 
 /**
@@ -885,7 +1167,7 @@ export async function diff(cwd: string, path: string | undefined, staged: boolea
   const root = await repoRoot(cwd, selected)
   const args = ['diff', '--no-ext-diff', '--no-color', '-U3']
   if (staged) args.push('--cached')
-  if (path !== undefined) args.push('--', path)
+  if (path !== undefined) args.push('--', nativeOperand(path))
   return runGit(root, args)
 }
 
@@ -901,7 +1183,7 @@ export async function diff(cwd: string, path: string | undefined, staged: boolea
  */
 export async function diffHead(cwd: string, path: string | undefined, selected?: string): Promise<string> {
   const root = await repoRoot(cwd, selected)
-  const tail = path !== undefined ? ['--', path] : []
+  const tail = path !== undefined ? ['--', nativeOperand(path)] : []
   try {
     return await runGit(root, ['diff', '--no-ext-diff', '--no-color', '-U3', 'HEAD', ...tail])
   } catch {
@@ -931,12 +1213,12 @@ export async function diffRange(cwd: string, rev: string, selected?: string): Pr
 
 /** Stage paths (all when path is undefined). */
 export async function stage(cwd: string, path: string | undefined, selected?: string): Promise<void> {
-  await runGit(await repoRoot(cwd, selected), ['add', '-A', ...(path !== undefined ? ['--', path] : [])])
+  await runGit(await repoRoot(cwd, selected), ['add', '-A', ...(path !== undefined ? ['--', nativeOperand(path)] : [])])
 }
 
 /** Unstage paths (all when path is undefined). */
 export async function unstage(cwd: string, path: string | undefined, selected?: string): Promise<void> {
-  await runGit(await repoRoot(cwd, selected), ['reset', '-q', ...(path !== undefined ? ['--', path] : [])])
+  await runGit(await repoRoot(cwd, selected), ['reset', '-q', ...(path !== undefined ? ['--', nativeOperand(path)] : [])])
 }
 
 /** Commit the staged changes with a message (global identity untouched). */
@@ -1004,7 +1286,7 @@ export async function log(
   const path = opts?.path
   if (path !== undefined && path !== '') {
     if (opts?.follow === true) args.push('--follow')
-    args.push('--end-of-options', '--', path)
+    args.push('--end-of-options', '--', nativeOperand(path))
   }
   const raw = await runGit(await repoRoot(cwd, selected), args)
   return files ? parseLogNameStatus(raw) : parseLogLines(raw)
@@ -1044,13 +1326,13 @@ export async function show(cwd: string, rev: string, path: string, selected?: st
 export async function commitDiff(cwd: string, hash: string, selected?: string, opts?: { path?: string }): Promise<string> {
   const args = ['show', '--no-ext-diff', '--no-color', '--format=', '-m', '--first-parent', '--end-of-options', hash]
   const path = opts?.path
-  if (path !== undefined && path !== '') args.push('--', path)
+  if (path !== undefined && path !== '') args.push('--', nativeOperand(path))
   return runGit(await repoRoot(cwd, selected), args)
 }
 
 /** Discard the worktree changes of one path (`git checkout -- <path>`; the index is untouched). */
 export async function discard(cwd: string, path: string, selected?: string): Promise<void> {
-  await runGit(await repoRoot(cwd, selected), ['checkout', '--', path])
+  await runGit(await repoRoot(cwd, selected), ['checkout', '--', nativeOperand(path)])
 }
 
 /** Revert one commit onto the current branch with an auto-generated message.
