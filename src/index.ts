@@ -1876,10 +1876,20 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
     // The plugin ships its own Side card settings section, so the native
     // auto-form is opted out — otherwise Settings would render the same ~30
     // preference fields twice. The policy does not affect reads or writes.
-    ctx.effect(
-      () => sctx.settings.configure({ auto: false }, ctx.fiber),
-      'dsh-better-sidebar: settings page policy',
-    )
+    // Boot-early mounts can fire this callback while this plugin's fiber is
+    // not ACTIVE yet, where `ctx.effect` throws CordisError ("cannot create
+    // effect on inactive context") and would abort the whole `apply`. The
+    // policy only suppresses the duplicate native auto-form, so a skip
+    // degrades without touching the sidebar's own features — hence caught
+    // and warned, not rethrown.
+    try {
+      ctx.effect(
+        () => sctx.settings.configure({ auto: false }, ctx.fiber),
+        'dsh-better-sidebar: settings page policy',
+      )
+    } catch (error) {
+      ctx.logger?.warn?.('dsh-better-sidebar: settings page policy skipped (context not ready)', error)
+    }
     const viewOf = (): { value?: unknown; revision?: number } => {
       const descriptor = sctx.settings.describe({ redactSecrets: true }).find(candidate => candidate.ns === ns)
       return descriptor === undefined
