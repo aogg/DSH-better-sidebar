@@ -907,4 +907,9 @@ export const ru: Record<string, string> = {
   sshLoadFailed: 'Не удалось загрузить',
   sshRetry: 'Повторить',
   sshRefresh: 'Обновить',
+  // The editor gutter context menu (editor-gutter-menu.ts / editor-git-blame.ts).
+  editorMenuAnnotate: 'Аннотировать с помощью Git Blame',
+  editorMenuWordWrap: 'Перенос строк',
+  editorBlameUnavailable: 'Git blame недоступен: этот файл не находится в Git-репозитории или ещё не имеет коммитов.',
+  editorBlamePending: 'Не закоммичено',
 }

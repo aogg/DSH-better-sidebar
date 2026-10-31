@@ -911,4 +911,9 @@ export const pl: Record<string, string> = {
   sshLoadFailed: 'Nie udało się wczytać',
   sshRetry: 'Ponów',
   sshRefresh: 'Odśwież',
+  // The editor gutter context menu (editor-gutter-menu.ts / editor-git-blame.ts).
+  editorMenuAnnotate: 'Adnotuj z Git Blame',
+  editorMenuWordWrap: 'Automatyczne zawijanie wierszy',
+  editorBlameUnavailable: 'Nie można pobrać Git blame: ten plik nie jest w repozytorium Git lub nie ma jeszcze commitów.',
+  editorBlamePending: 'Niezatwierdzone',
 }

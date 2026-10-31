@@ -1,8 +1,9 @@
 /**
- * The code/markdown file viewer: a CodeMirror 6 editor with line wrapping,
- * syntax highlighting (extension-keyed language), a dirty dot and Ctrl/Cmd+S
- * save, and a preview/edit toggle for markdown files. Registered as the
- * `code` (catch-all) and `markdown` built-in viewers; the editor tab host
+ * The code/markdown file viewer: a CodeMirror 6 editor with switchable line
+ * wrapping (the gutter menu's 「自动换行」), syntax highlighting
+ * (extension-keyed language), a dirty dot and Ctrl/Cmd+S save, and a
+ * preview/edit toggle for markdown files. Registered as the `code`
+ * (catch-all) and `markdown` built-in viewers; the editor tab host
  * fetches the content through the fsRead strategy and passes it in props,
  * so this component never fetches or dispatches — it only edits.
  *
@@ -16,11 +17,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
-import { EditorState } from '@codemirror/state'
+import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView as CodeMirrorView, keymap, lineNumbers } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { openSearchPanel } from '@codemirror/search'
-import { IconCheckOutlineRegular, IconSearchOutlineRegular, MarkdownDelegateProvider, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconCheckOutlineRegular, IconSearchOutlineRegular, MarkdownDelegateProvider, MarkdownText, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import { markdownTextProps } from './markdown-labels.tsx'
 import {
   applyGitLineKinds,
@@ -28,8 +29,18 @@ import {
   useEditorGitGutter,
   type GitGutterHost,
 } from './editor-git-gutter.ts'
+import { applyGitBlameAnnotations, CmBlameAnnotationsCompartment } from './editor-git-blame.ts'
+import { editorGutterContextMenu } from './editor-gutter-menu.ts'
+import {
+  EDITOR_BLOB_BLAME_ANNOTATIONS,
+  EDITOR_BLOB_LINE_WRAP,
+  EDITOR_SETTINGS_BLOB_ID,
+  editorBlameAnnotationsOf,
+  editorLineWrapOf,
+} from './editor-toggle-prefs.ts'
+import { updatePluginSettings } from './plugin-settings.ts'
 import { EditorMinimap } from './EditorMinimap.tsx'
-import { api, htmlUrl, SidebarApiError } from './api.ts'
+import { api, htmlUrl, SidebarApiError, type GitBlameLine } from './api.ts'
 import { hostTransportBase } from './desktop-env.ts'
 import { markdownPreviewSource } from './markdown-frontmatter.ts'
 import { rewriteLocalImageUrls } from './markdown-images.ts'
@@ -97,6 +108,12 @@ export function TextEditor(props: FileViewerProps) {
   /** The uncommitted-change gutter compartment (issue #212; reconfigured on a
    *  setting flip instead of rebuilding the view). */
   const gitCompRef = useRef<CmGitGutterCompartment | null>(null)
+  /** The word-wrap compartment (the gutter menu's 「自动换行」 switch;
+   *  reconfigured in place instead of rebuilding the view). */
+  const wrapCompRef = useRef<Compartment | null>(null)
+  /** The git-blame annotation column compartment (the gutter menu's
+   *  「使用Git追溯注解」 switch; reconfigured in place as well). */
+  const blameCompRef = useRef<CmBlameAnnotationsCompartment | null>(null)
   /** The minimap's sync slot (see EditorMinimap): the strip registers its
    *  rebind+redraw here on mount, and this component calls it once a view
    *  exists and after every document change. Null-safe — the strip is not
@@ -160,15 +177,63 @@ export function TextEditor(props: FileViewerProps) {
     useCallback(() => props.store.getSnapshot().prefs.editorMinimap !== false, [props.store]),
     useCallback(() => props.store.getSnapshot().prefs.editorMinimap !== false, [props.store]),
   )
+  /**
+   * The gutter context-menu's two view toggles, read through the same
+   * external-store seam (their writes land in `pluginSettings['editor']` via
+   * updatePluginSettings, which replaces the store's prefs — the subscription
+   * re-renders this tab, and every OTHER open editor tab picks the new value
+   * up too, so the toggles behave editor-globally like PhpStorm's).
+   * 「自动换行」 defaults to ON (absent key = the wrapping the editor has
+   * always done); 「使用Git追溯注解」 defaults to OFF (the column is opt-in).
+   */
+  const wordWrapOn = useSyncExternalStore(
+    useCallback((callback: () => void) => props.store.subscribe(callback), [props.store]),
+    useCallback(() => editorLineWrapOf(props.store.getSnapshot().prefs), [props.store]),
+    useCallback(() => editorLineWrapOf(props.store.getSnapshot().prefs), [props.store]),
+  )
+  const blameAnnotateOn = useSyncExternalStore(
+    useCallback((callback: () => void) => props.store.subscribe(callback), [props.store]),
+    useCallback(() => editorBlameAnnotationsOf(props.store.getSnapshot().prefs), [props.store]),
+    useCallback(() => editorBlameAnnotationsOf(props.store.getSnapshot().prefs), [props.store]),
+  )
+  /** Whether the annotation column rides THIS view: it extends the git
+   *  gutter's surface (same scope/path machinery, same tooltip), so it only
+   *  applies where that gutter does, and only when its own toggle is on. */
+  const blameColumnOn = blameAnnotateOn && gitGutterEnabled
   /** Bumped by every save: the uncommitted diff moved while the file's git
    *  status entry (which only tracks its XY code) did not. */
   const [gitRevision, setGitRevision] = useState(0)
   /** The view-side identity of the gutter's git source (stable across the
-   *  scope object's per-render identity churn). */
+   *  scope object's per-render identity churn). While the annotation column
+   *  is showing the hover tooltip carries the commit's FULL info, so the
+   *  flag rides the host the gutter extensions read. */
   const gitHost = useMemo<GitGutterHost>(
-    () => ({ scope: { sessionId: scope.sessionId, cwd: scope.cwd, repoRoot: scope.repoRoot }, path }),
-    [scope.sessionId, scope.cwd, scope.repoRoot, path],
+    () => ({
+      scope: { sessionId: scope.sessionId, cwd: scope.cwd, repoRoot: scope.repoRoot },
+      path,
+      ...(blameColumnOn ? { fullInfo: true } : {}),
+    }),
+    [scope.sessionId, scope.cwd, scope.repoRoot, path, blameColumnOn],
   )
+  /**
+   * One failed annotate attempt surfaces once, in the editor banner's own
+   * style (git blame answers empty for a file outside any repository, an
+   * untracked file, or a failed git call): the toggle flips itself back off
+   * and the message says why the column cannot show.
+   */
+  const [blameNotice, setBlameNotice] = useState(false)
+  /**
+   * The line-number gutter's context menu: null = closed, otherwise the
+   * viewport coordinates the pointer right-clicked at (the Menu anchors a
+   * zero-width DOMRect there, portaled like every other free-position menu).
+   */
+  const [gutterMenu, setGutterMenu] = useState<{ x: number; y: number } | null>(null)
+  /** Merge one key of the editor descriptor's settings blob and persist it
+   *  (the serialized queue in plugin-settings.ts; the store's prefs are
+   *  replaced by the write result, which re-renders the subscribers). */
+  const writeEditorBlobPref = (key: string, value: boolean): void => {
+    updatePluginSettings(props.store, EDITOR_SETTINGS_BLOB_ID, (blob) => ({ ...blob, [key]: value }))
+  }
   const gitKinds = useEditorGitGutter({
     enabled: gitGutterEnabled,
     // A parked native tab stays MOUNTED (`keepMounted`), so the tab's own
@@ -273,16 +338,29 @@ export function TextEditor(props: FileViewerProps) {
     searchPhrasesRef.current = searchPhrases
     const gitComp = new CmGitGutterCompartment()
     gitCompRef.current = gitComp
+    const wrapComp = new Compartment()
+    wrapCompRef.current = wrapComp
+    const blameComp = new CmBlameAnnotationsCompartment()
+    blameCompRef.current = blameComp
     const state = EditorState.create({
       doc: content,
       extensions: [
-        CodeMirrorView.lineWrapping,
+        // Word wrap is a preference now (the gutter menu's 「自动换行」):
+        // the compartment flips it in place; absent key = wrapped, the
+        // wrapping this editor has always done.
+        wrapComp.of(wordWrapOn ? CodeMirrorView.lineWrapping : []),
         // The change bar sits BEFORE the line numbers (VS Code's own order):
         // a thin colored bar at the far left, the number tinted beside it.
         // The compartment carries all of it (hover blame included), so the
         // setting can flip it in place below.
         gitComp.of(gitGutterEnabled ? gitHost : null),
         lineNumbers(),
+        // The git-blame annotation column (PhpStorm's Annotate view) sits
+        // RIGHT of the line numbers; its own compartment flips it in place.
+        blameComp.of(blameColumnOn),
+        // Right-clicking the line numbers opens the plugin's own gutter
+        // menu (the two toggles above) instead of the browser's menu.
+        editorGutterContextMenu((x, y) => { setGutterMenu({ x, y }) }),
         history(),
         EditorState.tabSize.of(2),
         CodeMirrorView.contentAttributes.of({ spellcheck: 'false' }),
@@ -373,6 +451,8 @@ export function TextEditor(props: FileViewerProps) {
       themeCompRef.current = null
       searchPhrasesRef.current = null
       gitCompRef.current = null
+      wrapCompRef.current = null
+      blameCompRef.current = null
     }
     // The keymap's save() reads live refs; scope/path are stable for a
     // tab's lifetime, and the dark flip is handled by the reconfigure
@@ -537,6 +617,67 @@ export function TextEditor(props: FileViewerProps) {
     if (view === null) return
     applyGitLineKinds(view, gitKinds)
   }, [gitKinds, gitGutterEnabled, content, path])
+
+  // Word wrap follows the gutter menu's toggle in place: the compartment
+  // swap installs (or removes) `lineWrapping` without rebuilding the view —
+  // the document, history, scroll and keymaps survive.
+  useEffect(() => {
+    const view = viewRef.current
+    const wrapComp = wrapCompRef.current
+    if (view === null || wrapComp === null) return
+    view.dispatch({ effects: wrapComp.reconfigure(wordWrapOn ? CodeMirrorView.lineWrapping : []) })
+  }, [wordWrapOn])
+
+  // The git-blame annotation column follows its toggle in place, exactly
+  // like the wrap flip above.
+  useEffect(() => {
+    const view = viewRef.current
+    const blameComp = blameCompRef.current
+    if (view === null || blameComp === null) return
+    view.dispatch({ effects: blameComp.reconfigure(blameColumnOn) })
+  }, [blameColumnOn])
+
+  // The annotation column's data: ONE `git.blame` range request per (file,
+  // save revision) while the column is showing — the whole column from one
+  // git process, fetched only because the user turned the view on, never on
+  // file open. An empty answer means git has no blame to give (the file is
+  // not in a repository, is untracked, or the command failed): the toggle
+  // reverts so a dead preference never persists, and the banner explains.
+  useEffect(() => {
+    if (!blameColumnOn) return
+    const view = viewRef.current
+    if (view === null) return
+    let cancelled = false
+    const lineCount = view.state.doc.lines
+    api.gitBlame(gitHost.scope, path, 1, lineCount).then(
+      (result) => {
+        if (cancelled) return
+        const live = viewRef.current
+        if (live === null) return
+        const rows = new Map<number, GitBlameLine>()
+        for (const row of result.lines) rows.set(row.line, row)
+        if (rows.size === 0) {
+          writeEditorBlobPref(EDITOR_BLOB_BLAME_ANNOTATIONS, false)
+          setBlameNotice(true)
+          return
+        }
+        setBlameNotice(false)
+        applyGitBlameAnnotations(live, rows)
+      },
+      () => {
+        if (cancelled) return
+        writeEditorBlobPref(EDITOR_BLOB_BLAME_ANNOTATIONS, false)
+        setBlameNotice(true)
+      },
+    )
+    return () => { cancelled = true }
+    // `content` re-runs this after the view was rebuilt for a new file /
+    // reload; `gitRevision` re-reads the blame after a save (the saved bytes
+    // are what git can attribute — the typed-ahead lines stay attributed to
+    // their pre-save commits until then, the same contract the uncommitted
+    // gutter's memo follows).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blameColumnOn, gitHost, content, gitRevision])
 
   // The editor may have been display:none while previewing; re-measure when
   // it becomes visible again (CodeMirror sizes itself on reveal). A mode
@@ -903,6 +1044,18 @@ export function TextEditor(props: FileViewerProps) {
               </button>
             </div>
           )}
+          {blameNotice && (
+            <div className={css.editorBanner}>
+              {t('editorBlameUnavailable')}
+              <button
+                type="button"
+                className={css.editorBannerAction}
+                onClick={() => { setBlameNotice(false) }}
+              >
+                {t('close')}
+              </button>
+            </div>
+          )}
           {/* The editor pane is a flex ROW: the CodeMirror surface plus the
               minimap strip (flex item, not an overlay — it costs layout
               width, like VS Code's). The row carries the preview hidden
@@ -1028,6 +1181,35 @@ export function TextEditor(props: FileViewerProps) {
         </button>,
         document.body,
       )}
+      {/* The line-number gutter's context menu (opened by the
+          editorGutterContextMenu extension): the two view toggles with their
+          checked state (the Menu's trailing check), portaled and
+          free-positioned at the pointer — the same shape the changes tab's
+          row menus use. 「使用Git追溯注解」 rides only where the git gutter
+          does (the `code` / `jsonl` viewers); 「自动换行」 rides every
+          CodeMirror surface this component draws. */}
+      <Menu
+        open={gutterMenu !== null}
+        onClose={() => { setGutterMenu(null) }}
+        items={[
+          ...(gitGutterEnabled ? [{ id: 'blame', label: t('editorMenuAnnotate') }] : []),
+          { id: 'wrap', label: t('editorMenuWordWrap') },
+        ]}
+        selectedIds={[
+          ...(blameColumnOn ? ['blame'] : []),
+          ...(wordWrapOn ? ['wrap'] : []),
+        ]}
+        onSelect={(id) => {
+          setGutterMenu(null)
+          if (id === 'blame') writeEditorBlobPref(EDITOR_BLOB_BLAME_ANNOTATIONS, !blameAnnotateOn)
+          else if (id === 'wrap') writeEditorBlobPref(EDITOR_BLOB_LINE_WRAP, !wordWrapOn)
+        }}
+        portal
+        compact
+        align="start"
+        getAnchorRect={() => (gutterMenu === null ? null : new DOMRect(gutterMenu.x, gutterMenu.y, 0, 0))}
+        anchor={<span />}
+      />
     </>
   )
 }

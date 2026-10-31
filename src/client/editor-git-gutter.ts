@@ -31,8 +31,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { RangeSet, Compartment, StateEffect, StateField, type EditorState, type Extension } from '@codemirror/state'
 import { EditorView, GutterMarker, gutter, gutterLineClass, hoverTooltip, type Tooltip } from '@codemirror/view'
 import { api, type GitBlameLine, type SessionScope } from './api.ts'
+import { isUncommittedHash } from './editor-git-blame.ts'
 import { parseUnifiedDiff, unifiedSegments } from './diff/rows.ts'
-import { relativeTime } from './locales.ts'
+import { formatStampFull, relativeTime, t } from './locales.ts'
 import { useGitStatus } from './ui/git-status.ts'
 import css from './sidebar.module.css'
 
@@ -197,6 +198,13 @@ const gitGutterTheme = EditorView.theme({
 export interface GitGutterHost {
   scope: SessionScope
   path: string
+  /**
+   * Whether the blame ANNOTATION column (editor-git-blame.ts) is showing:
+   * while it is, the hover tooltip carries the commit's FULL info (complete
+   * hash, author, absolute + relative time, summary) — the same plain-text
+   * surface, one row richer. Absent keeps the stock two-row tooltip.
+   */
+  fullInfo?: boolean
 }
 
 /** Build the gutter extensions for one view (empty = the feature is off). */
@@ -210,7 +218,7 @@ export function gitGutterExtensions(host: GitGutterHost | null): Extension[] {
         pos: line.from,
         end: line.to,
         above: true,
-        create: () => ({ dom: blameTooltipDom(entry) }),
+        create: () => ({ dom: host.fullInfo === true ? blameTooltipFullDom(entry) : blameTooltipDom(entry) }),
       }
     })
   }
@@ -292,6 +300,40 @@ function blameTooltipDom(entry: GitBlameLine): HTMLElement {
   const head = document.createElement('div')
   head.className = css.editorBlameHead ?? ''
   head.textContent = [entry.author, relativeTime(entry.date)].filter(part => part !== '').join(' · ')
+  dom.append(head)
+  if (entry.summary !== '') {
+    const summary = document.createElement('div')
+    summary.className = css.editorBlameSummary ?? ''
+    summary.textContent = entry.summary
+    dom.append(summary)
+  }
+  return dom
+}
+
+/**
+ * The tooltip body the blame ANNOTATION column's hover shows: the same plain
+ * text, with the commit's full identity added — the complete hash on its own
+ * row, the absolute stamp beside the relative one, and (still) the summary.
+ * A not-yet-committed line has no commit to name: the head says so in the
+ * UI's own words and the hash row is skipped.
+ */
+export function blameTooltipFullDom(entry: GitBlameLine): HTMLElement {
+  const dom = document.createElement('div')
+  dom.className = css.editorBlame ?? ''
+  const uncommitted = isUncommittedHash(entry.hash)
+  if (!uncommitted) {
+    const hash = document.createElement('div')
+    hash.className = css.editorBlameHash ?? ''
+    hash.textContent = entry.hash
+    dom.append(hash)
+  }
+  const parsed = Date.parse(entry.date)
+  const when = Number.isFinite(parsed) ? `${formatStampFull(parsed)} (${relativeTime(entry.date)})` : entry.date
+  const head = document.createElement('div')
+  head.className = css.editorBlameHead ?? ''
+  head.textContent = [uncommitted ? t('editorBlamePending') : entry.author, when]
+    .filter(part => part !== '')
+    .join(' · ')
   dom.append(head)
   if (entry.summary !== '') {
     const summary = document.createElement('div')

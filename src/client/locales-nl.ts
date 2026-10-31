@@ -907,4 +907,9 @@ export const nl: Record<string, string> = {
   sshLoadFailed: 'Laden mislukt',
   sshRetry: 'Opnieuw proberen',
   sshRefresh: 'Vernieuwen',
+  // The editor gutter context menu (editor-gutter-menu.ts / editor-git-blame.ts).
+  editorMenuAnnotate: 'Annoteren met Git Blame',
+  editorMenuWordWrap: 'Automatische terugloop',
+  editorBlameUnavailable: 'Git blame niet beschikbaar: dit bestand staat niet in een Git-repository of heeft nog geen commits.',
+  editorBlamePending: 'Niet gecommit',
 }

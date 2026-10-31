@@ -909,4 +909,9 @@ export const hi: Record<string, string> = {
   sshLoadFailed: 'लोड विफल',
   sshRetry: 'पुनः प्रयास',
   sshRefresh: 'रिफ्रेश',
+  // The editor gutter context menu (editor-gutter-menu.ts / editor-git-blame.ts).
+  editorMenuAnnotate: 'Git Blame से एनोटेट करें',
+  editorMenuWordWrap: 'ऑटो वर्ड रैप',
+  editorBlameUnavailable: 'Git blame उपलब्ध नहीं है: यह फ़ाइल किसी Git रिपॉज़िटरी में नहीं है, या इसके कोई कमिट नहीं हैं।',
+  editorBlamePending: 'अनकमिटेड',
 }

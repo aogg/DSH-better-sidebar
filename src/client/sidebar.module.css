@@ -1800,6 +1800,45 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
   overflow-wrap: anywhere;
 }
 
+/* The full-info tooltip the blame annotation column's hover shows: same
+   plain-text surface, one monospace row with the complete hash on top. */
+.editorBlameHash {
+  color: var(--dsw-alias-label-secondary);
+  font-family: var(--ds-font-family-code);
+  word-break: break-all;
+}
+
+/* ── Git-blame annotation column (PhpStorm's Annotate view) ─────────────────
+   The line-number gutter's right-hand neighbor: one restrained text cell per
+   line (short hash · author · day) in the gutter's own tertiary ink — the
+   same no-badge/no-animation philosophy as the change gutter above. Hovering
+   a cell opens the full-info blame tooltip; clicking one copies the commit
+   hash (the pointer cursor is the only affordance). The column keeps a fixed
+   band (min/max) so arriving data never shifts the code sideways, and
+   not-yet-committed lines read as 「未提交」 in the dimmer ink. */
+.editorBlameGutter {
+  min-width: 84px;
+  max-width: 128px;
+}
+
+.editorBlameCell {
+  height: 100%;
+  display: flex;
+  align-items: flex-start;
+  overflow: hidden;
+  font: var(--dsw-font-xxxs-11);
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  user-select: none;
+  cursor: pointer;
+}
+
+.editorBlameCellPending {
+  color: var(--dsw-alias-label-tertiary);
+  cursor: default;
+}
+
 /* Live sandbox status row (HTML preview / browser tab): GREEN while the
    sandbox is on (with the one-tap temporary unlock), RED while it is off
    (global setting or temporary unlock) — the red state is the persistent

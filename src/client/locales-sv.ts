@@ -892,4 +892,9 @@ export const sv: Record<string, string> = {
   sshLoadFailed: 'Inläsningen misslyckades',
   sshRetry: 'Försök igen',
   sshRefresh: 'Uppdatera',
+  // The editor gutter context menu (editor-gutter-menu.ts / editor-git-blame.ts).
+  editorMenuAnnotate: 'Annotera med Git Blame',
+  editorMenuWordWrap: 'Automatisk radbrytning',
+  editorBlameUnavailable: 'Git blame är inte tillgängligt: filen finns inte i ett Git-repo eller har inga commits ännu.',
+  editorBlamePending: 'Ej committad',
 }

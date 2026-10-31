@@ -907,4 +907,9 @@ export const id: Record<string, string> = {
   sshLoadFailed: 'Gagal memuat',
   sshRetry: 'Coba lagi',
   sshRefresh: 'Segarkan',
+  // The editor gutter context menu (editor-gutter-menu.ts / editor-git-blame.ts).
+  editorMenuAnnotate: 'Anotasi dengan Git Blame',
+  editorMenuWordWrap: 'Word Wrap Otomatis',
+  editorBlameUnavailable: 'Git blame tidak tersedia: berkas ini tidak berada dalam repositori Git atau belum memiliki commit.',
+  editorBlamePending: 'Belum di-commit',
 }

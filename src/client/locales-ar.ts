@@ -910,4 +910,9 @@ export const ar: Record<string, string> = {
   sshLoadFailed: 'فشل التحميل',
   sshRetry: 'إعادة المحاولة',
   sshRefresh: 'تحديث',
+  // The editor gutter context menu (editor-gutter-menu.ts / editor-git-blame.ts).
+  editorMenuAnnotate: 'التعليق باستخدام Git Blame',
+  editorMenuWordWrap: 'التفاف الأسطر تلقائيًا',
+  editorBlameUnavailable: 'تعذّر الحصول على Git blame: هذا الملف ليس داخل مستودع Git، أو لا توجد له التزامات بعد.',
+  editorBlamePending: 'غير مُرسَل',
 }

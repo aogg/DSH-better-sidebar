@@ -924,4 +924,9 @@ export const zhTW: Record<string, string> = {
   sshLoadFailed: '讀取失敗',
   sshRetry: '重試',
   sshRefresh: '重新整理',
+  // The editor gutter context menu (editor-gutter-menu.ts / editor-git-blame.ts).
+  editorMenuAnnotate: '使用Git追溯註解',
+  editorMenuWordWrap: '自動換行',
+  editorBlameUnavailable: '無法取得Git追溯註解：目前檔案不在 Git 儲存庫中，或還沒有可追溯的提交。',
+  editorBlamePending: '未提交',
 }

@@ -909,4 +909,9 @@ export const th: Record<string, string> = {
   sshLoadFailed: 'โหลดไม่สำเร็จ',
   sshRetry: 'ลองอีกครั้ง',
   sshRefresh: 'รีเฟรช',
+  // The editor gutter context menu (editor-gutter-menu.ts / editor-git-blame.ts).
+  editorMenuAnnotate: 'ใส่คำอธิบายด้วย Git Blame',
+  editorMenuWordWrap: 'ตัดบรรทัดอัตโนมัติ',
+  editorBlameUnavailable: 'ดึงข้อมูล Git blame ไม่ได้: ไฟล์นี้ไม่ได้อยู่ในที่เก็บ Git หรือยังไม่มีคอมมิต',
+  editorBlamePending: 'ยังไม่คอมมิต',
 }

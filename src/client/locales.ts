@@ -958,6 +958,12 @@ export const zh = {
   feedReleaseDelayUnit: '秒',
   feedReleaseDelayProjectTitle: '切走释放延时（本项目）',
   feedReleaseDelayProjectDesc: '只对本工作区生效，覆盖全局值；0 = 本项目不释放。',
+  // 编辑器行号右键菜单（editor-gutter-menu.ts / editor-git-blame.ts）。
+  // zh 是文案源头；en 必须同步，其余语言按 locales.spec.ts 的 key 检查回退 en。
+  editorMenuAnnotate: '使用Git追溯注解',
+  editorMenuWordWrap: '自动换行',
+  editorBlameUnavailable: '无法获取Git追溯注解：当前文件不在 Git 仓库中，或还没有可追溯的提交。',
+  editorBlamePending: '未提交',
 }
 
 /** The en dictionary (key-set-equal to zh, enforced by the type annotation). */
@@ -1892,6 +1898,11 @@ export const en: Record<keyof typeof zh, string> = {
   feedReleaseDelayUnit: 's',
   feedReleaseDelayProjectTitle: 'Release delay (this project)',
   feedReleaseDelayProjectDesc: 'Applies to this workspace only and overrides the global value; 0 = never release here.',
+  // The editor gutter context menu (editor-gutter-menu.ts / editor-git-blame.ts).
+  editorMenuAnnotate: 'Annotate with Git Blame',
+  editorMenuWordWrap: 'Word Wrap',
+  editorBlameUnavailable: 'Git blame is unavailable: this file is not in a Git repository, or it has no commits to trace yet.',
+  editorBlamePending: 'Uncommitted',
 }
 
 /**

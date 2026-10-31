@@ -895,4 +895,9 @@ export const de: Record<string, string> = {
   sshLoadFailed: 'Laden fehlgeschlagen',
   sshRetry: 'Erneut versuchen',
   sshRefresh: 'Aktualisieren',
+  // The editor gutter context menu (editor-gutter-menu.ts / editor-git-blame.ts).
+  editorMenuAnnotate: 'Mit Git-Blame annotieren',
+  editorMenuWordWrap: 'Zeilenumbruch',
+  editorBlameUnavailable: 'Git-Blame nicht verfügbar: Diese Datei liegt nicht in einem Git-Repository oder hat noch keine Commits.',
+  editorBlamePending: 'Nicht committet',
 }

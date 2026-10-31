@@ -901,4 +901,9 @@ export const ko: Record<string, string> = {
   sshLoadFailed: '불러오기 실패',
   sshRetry: '재시도',
   sshRefresh: '새로 고침',
+  // The editor gutter context menu (editor-gutter-menu.ts / editor-git-blame.ts).
+  editorMenuAnnotate: 'Git Blame 주석 표시',
+  editorMenuWordWrap: '자동 줄 바꿈',
+  editorBlameUnavailable: 'Git blame을 가져올 수 없습니다: 이 파일은 Git 저장소에 없거나 아직 커밋 기록이 없습니다.',
+  editorBlamePending: '커밋 안 됨',
 }

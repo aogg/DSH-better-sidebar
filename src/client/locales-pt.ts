@@ -892,4 +892,9 @@ export const pt: Record<string, string> = {
   sshLoadFailed: 'Falha ao carregar',
   sshRetry: 'Tentar novamente',
   sshRefresh: 'Atualizar',
+  // The editor gutter context menu (editor-gutter-menu.ts / editor-git-blame.ts).
+  editorMenuAnnotate: 'Anotar com Git Blame',
+  editorMenuWordWrap: 'Quebra automática de linha',
+  editorBlameUnavailable: 'Git blame indisponível: este arquivo não está em um repositório Git ou ainda não tem commits.',
+  editorBlamePending: 'Não confirmado',
 }

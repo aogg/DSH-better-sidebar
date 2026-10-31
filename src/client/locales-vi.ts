@@ -909,4 +909,9 @@ export const vi: Record<string, string> = {
   sshLoadFailed: 'Tải thất bại',
   sshRetry: 'Thử lại',
   sshRefresh: 'Làm mới',
+  // The editor gutter context menu (editor-gutter-menu.ts / editor-git-blame.ts).
+  editorMenuAnnotate: 'Chú thích bằng Git Blame',
+  editorMenuWordWrap: 'Tự động xuống dòng',
+  editorBlameUnavailable: 'Không lấy được Git blame: tệp này không nằm trong kho Git hoặc chưa có commit nào.',
+  editorBlamePending: 'Chưa commit',
 }

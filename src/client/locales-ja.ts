@@ -909,4 +909,9 @@ export const ja: Record<string, string> = {
   sshLoadFailed: '読み込み失敗',
   sshRetry: '再試行',
   sshRefresh: '更新',
+  // The editor gutter context menu (editor-gutter-menu.ts / editor-git-blame.ts).
+  editorMenuAnnotate: 'Git Blame で注釈',
+  editorMenuWordWrap: '自動折り返し',
+  editorBlameUnavailable: 'Git Blame を取得できません：このファイルは Git リポジトリにないか、コミット履歴がまだありません。',
+  editorBlamePending: '未コミット',
 }

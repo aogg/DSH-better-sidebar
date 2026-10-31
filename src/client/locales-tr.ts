@@ -909,4 +909,9 @@ export const tr: Record<string, string> = {
   sshLoadFailed: 'Yükleme başarısız',
   sshRetry: 'Yeniden dene',
   sshRefresh: 'Yenile',
+  // The editor gutter context menu (editor-gutter-menu.ts / editor-git-blame.ts).
+  editorMenuAnnotate: 'Git Blame ile Açıkla',
+  editorMenuWordWrap: 'Otomatik Satır Kaydırma',
+  editorBlameUnavailable: "Git blame alınamadı: bu dosya bir Git deposunda değil veya henüz hiç commit'i yok.",
+  editorBlamePending: 'Commit edilmedi',
 }
