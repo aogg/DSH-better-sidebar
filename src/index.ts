@@ -96,6 +96,8 @@ import { decodeTextAs, decodeTextBytes, isWideEncoding, lastLineBreakEnd, type T
 import { MAX_EDITABLE_BYTES, PAGE_BYTES, WRITE_BODY_GUARD_BYTES } from './editor-limits.ts'
 import { homedir as osHomedir, hostname as osHostname, tmpdir as osTmpdir, userInfo as osUserInfo } from 'node:os'
 import { scanScriptsByRules } from './commands-scan.ts'
+// 「执行历史」的纯折叠逻辑（框架自由；测试环境直接导入同一实现）。
+import { extractExecCommandRows } from './command-history-extract.ts'
 
 export { Config }
 export type { SidebarConfig, ResolvedSidebarConfig }
@@ -1643,6 +1645,31 @@ function buildApi(
       }
       const scans = await scanScriptsByRules(cwd, rules)
       return { scans }
+    },
+    // 「执行历史」tab：本次会话（当前 sessionId 的日志）里执行过的命令类
+    // 工具调用（bash/pwsh/exec_command/write_stdin/terminal_* 前缀），连同
+    // 结果文本 / workdir / env（仅当调用参数带 env——宿主日志不逐条记录
+    // env）。折叠逻辑在 command-history-extract.ts（框架自由）。事件源与
+    // changes.ops 的单日志路径同款：活会话先 snapshotEvents()，未水化的会话
+    // 退 readPersistedSessionCached 冷读；都不可得（会话不存在/从未持久化）
+    // 回空列表而不是报错——历史面板的空态必须永远可渲染。
+    'commands.execHistory': async (payload) => {
+      const sessionId = requireString(payload, 'sessionId')
+      let events: readonly SidebarSessionEvent[] | undefined = ctx.sessions.get(sessionId)?.snapshotEvents()
+      if (events === undefined) {
+        const persistence = ctx.get('sessionPersistence')
+        if (persistence !== undefined) {
+          try {
+            // 冷读走同一份会话缓存：已完成会话的日志解析一次，之后每次都是
+            // 一次 stat（或 TTL 命中）。活会话永远到不了这一行。
+            events = (await readPersistedSessionCached(persistence, sessionId)).events
+          } catch {
+            // 冷读不可得（会话从未持久化）：空列表是诚实的答案，不是错误。
+          }
+        }
+      }
+      if (events === undefined) return { rows: [], truncated: false }
+      return extractExecCommandRows(events)
     },
     // Side Chat: create a side-thread child seeded with the parent's full
     // log up to now, deliver follow-ups (cold-resuming when the thread's

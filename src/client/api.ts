@@ -28,6 +28,7 @@ import type {
 } from '../context-types.ts'
 import type { WorkflowRunView } from '../workflow-runs.ts'
 import type { HistorySendRecord } from '../prompt-history-extract.ts'
+import type { ExecCommandRow } from '../command-history-extract.ts'
 import type { HistoryAnnotationOpInput, HistoryAnnotations } from '../prompt-history-store.ts'
 import type {
   ContentSearchMatchOptions,
@@ -909,6 +910,14 @@ export const api = {
       scopePayload(scope, { rules: [...rules] }),
       signal,
     ),
+  /**
+   * 「执行历史」：本会话（当前 sessionId 的日志）里执行过的命令类工具调用
+   * （bash/pwsh/exec_command/write_stdin/terminal_* 前缀），新→旧平铺，每行
+   * 尽量带回结果文本 / workdir / env（仅当调用参数带 env；没有即「未记录」）。
+   * 会话不存在/从未持久化时服务端回空列表（不报错），面板空态永远可渲染。
+   */
+  commandsExecHistory: (sessionId: string) =>
+    call<{ rows: ExecCommandRow[]; truncated: boolean }>('commands.execHistory', { sessionId }),
 }
 
 /** Absolute URL of the media route for one path (images only). */

@@ -225,8 +225,14 @@ function announcedCalls(content: unknown): { callId: string; name: string; args:
   return found
 }
 
-/** The callId of one `tool/result` event under both logged shapes. */
-function resultCallId(data: Record<string, unknown>): string | undefined {
+/**
+ * The callId of one `tool/result` event under both logged shapes: 0.1.7's
+ * tool-role envelope carries `data.callId` / `message.toolCallId`, 0.1.6's
+ * user-role message nests it at `message.source.callId`. Exported for the
+ * command-execution-history extractor, which pairs calls to results the same
+ * way (single source of truth — never copy this logic).
+ */
+export function resultCallId(data: Record<string, unknown>): string | undefined {
   const message = data.message as { source?: { callId?: unknown }; toolCallId?: unknown } | undefined
   for (const candidate of [data.callId, message?.source?.callId, message?.toolCallId, data.toolCallId]) {
     if (typeof candidate === 'string' && candidate !== '') return candidate

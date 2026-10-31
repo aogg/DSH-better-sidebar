@@ -238,8 +238,10 @@ export function hasDanglingToolCall(events: readonly SidechatLogEvent[], turnSta
  * on a user-role message, 0.1.7's first-class tool-role message carries them
  * at the message's own top level. Historical logs keep the old shape forever,
  * so both are read. Undefined when the message carries no block array.
+ * Exported for the command-execution-history extractor (single source of
+ * truth — never copy this logic).
  */
-function resultBlocks(content: unknown): readonly unknown[] | undefined {
+export function resultBlocks(content: unknown): readonly unknown[] | undefined {
   if (!Array.isArray(content)) return undefined
   for (const block of content) {
     if (block === null || typeof block !== 'object') continue
@@ -252,8 +254,9 @@ function resultBlocks(content: unknown): readonly unknown[] | undefined {
 }
 
 /** The plain text of one tool/result message (its text blocks, under either
- *  of the two shapes {@link resultBlocks} reads). */
-function toolResultText(data: Record<string, unknown>): string {
+ *  of the two shapes {@link resultBlocks} reads). Exported for the
+ *  command-execution-history extractor — never copy this logic. */
+export function toolResultText(data: Record<string, unknown>): string {
   const message = data.message as { content?: unknown } | undefined
   const blocks = resultBlocks(message?.content)
   if (blocks === undefined) return ''

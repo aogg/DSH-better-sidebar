@@ -82,6 +82,7 @@ import {
   saveCmdVarValues,
   tempScriptRelPath,
 } from './commands-open.ts'
+import { CommandHistoryView } from './CommandHistoryView.tsx'
 import css from './commands.module.css'
 
 /** openTab 服务里本页真正用到的最小面（minimal mock 友好）。 */
@@ -225,6 +226,9 @@ export function CommandsPageView(props: {
     parseScriptRules((pluginSettings[COMMANDS_SETTINGS_ID] as Record<string, unknown> | undefined)?.rules),
     parseScriptRules(workspaceBlobOf(pluginSettings, cwd)?.[COMMANDS_PROJECT_RULES_KEY]),
   ), [pluginSettings, cwd])
+
+  // ── 页内 tab（「命令」/「执行历史」；本地态，不持久化） ────────────────
+  const [activeTab, setActiveTab] = useState<'commands' | 'history'>('commands')
 
   // ── 表单/删除态 ─────────────────────────────────────────────────────
   const [editing, setEditing] = useState<Editing | undefined>(undefined)
@@ -933,6 +937,32 @@ export function CommandsPageView(props: {
           </button>
         </span>
       </div>
+      {/* 页内双 tab 行（segmented 同形制；本地态，不持久化）：「命令」是既有
+          全部内容，「执行历史」是 CommandHistoryView。 */}
+      <div className={css.segmented} role="tablist" aria-label={t('commandsPage')} data-dsh-cmd-tabs="">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'commands'}
+          className={[css.segButton, activeTab === 'commands' ? css.segButtonActive : ''].filter(Boolean).join(' ')}
+          onClick={() => { setActiveTab('commands') }}
+        >
+          {t('commandsPage')}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'history'}
+          className={[css.segButton, activeTab === 'history' ? css.segButtonActive : ''].filter(Boolean).join(' ')}
+          onClick={() => { setActiveTab('history') }}
+        >
+          {t('commandsHistoryTab')}
+        </button>
+      </div>
+      {activeTab === 'history' ? (
+        <CommandHistoryView ctx={ctx} store={store} scope={scope} />
+      ) : (
+        <>
       {commandRows.length === 0 && ruleRows.length === 0 && (
         <div className={css.empty}>{t('commandsEmpty')}</div>
       )}
@@ -1169,6 +1199,8 @@ export function CommandsPageView(props: {
 
       {!canRun && <div className={css.hint}>{t('commandsRunUnavailable')}</div>}
       {!workspaceAvailable && <div className={css.hint}>{t('commandsScopeWorkspaceUnavailable')}</div>}
+        </>
+      )}
 
       {activeRequest !== undefined && (
         <div className={css.modalBackdrop} data-dsh-cmd-modal="">
