@@ -2,6 +2,19 @@
 
 > 本文档收录 dsh-better-sidebar 的完整发布历史（最新版摘要见 [README](README.md)；同步发布于 [GitHub Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)）。
 
+### v0.28.35
+
+- 🗂️ **「独立工作区」一级菜单 + 自绘子菜单**（`src/client/workspace-link-menu.ts`）：工作区行「更多」(…) 菜单里原来的「复制独立工作区链接」「新窗口打开独立工作区」两项平铺收进一个一级项「独立工作区」（14px 层叠窗口图标 + 尾部箭头 + `aria-haspopup="menu"`）。子菜单为自绘嵌套 `div[role=menu]`（核心子菜单同款配方 `bottom:-4px` / `left:calc(100%+10px)`），首层是「复制链接」「新窗口打开」（逻辑与 0.28.31/32 的两项一致：`?ws=<id>` + 剪贴板/toast、点击手势内 `window.open(_blank,'noopener')`，随后都经锚按钮原生 click 收起菜单）；hover 开（对齐核心 onMouseOver 语义）+ 点击兜底，Escape / 菜单外 pointerdown 收起；子菜单挂在父菜单容器内，父菜单随官方 onClose 卸载时天然随迁；贴右缘/上缘翻转复用 menu-flip 的 `data-dsh-sidebar-submenu` body 属性令牌（layout.css 规则只在属性存在时生效，宿主自有菜单不受染）。
+- 📍 **注入落点修复（对齐 dsh-ao-local 的成熟做法）**：注入容器从 `menu.firstElementChild` 改为 `menu.querySelector('[class*="_viewport"]') ?? menu`——运行宿主的核心版本若菜单 DOM 多一层包装，firstElementChild 不再是 viewport，注入项会落在菜单卡片外（用户看到「另一块浮层」）；按类名片段匹配才是稳定落点。注入增高后补上同款**视口夹取**：`rect.bottom` 超出视口 12px 边距就把 `menu.style.top` 上移（夹取失败只记 warn，官方 scrollable 的 max-height 兜底），菜单不再被注入项推出屏幕。
+- 👥 **新增「独立工作区组」**：多个工作区收进一个组，**一条链接整组打开**。
+  - **存储**：DSH 设置服务 `dsh-better-sidebar` 命名空间的 `pluginSettings.workspaceGroups`（`Array<{id,name,workspaceIds}>`，组 id 为短随机唯一值）——`pluginSettings` 子树对新键免校验（顶层未声明字段会被 dsh-settings 拒，先例见 docs/plans/2026-10-15-project-settings-tabs-design.md），跨浏览器跟随宿主存储；读写走既有 `api.settingsGet` / `api.settingsUpdate` 串行写队列，坏值按空数组兜底，写失败只记 error、界面按本地草稿继续。
+  - **链接契约升级（向后兼容）**：`?ws=` 值升级 scope 语义——裸 workspaceId = 单工作区（存量链接不变）；`g:<groupId>` = 独立工作区组（组 id 即唯一值）。打开时解析：按组 id 反查组清单，专注视图显示**组内全部工作区及其会话**（显示多少 = 组内 N 个工作区）；组不存在 / 组为空 / 与当前快照交集为空 → 退全量 + toast「专注链接已过期」（对齐既有过期链接契约）；组数据读取失败按「未就绪」不过滤不误报。专注横幅显示组名与数量（「专注：组A（3 个工作区）」）。
+  - **子菜单组动作**：「加入到组 ▸」（组清单勾选切换归属，末条「＋ 新建组…」行内输入建组并勾上）；所属组各一条 ▸（**新窗口打开全组** = `window.open` 同一条 `?ws=g:<id>`，一窗整组；**复制全组链接** = 复制同一条；**从该组移出**）；「管理独立工作区组…」打开管理面板。规划中的「每工作区各开一窗 + 弹窗拦截兜底」整套废弃不做。
+  - **管理面板**（跟随 open-with-settings / AnchoredPopover 既有模式的自绘 DOM 卡，锚下方 6px、放不下翻上方、左右夹回）：组新建 / 行内重命名 / 删除；成员 chip 增删（候选 = `workspaces.list` 快照）；每组「新窗口打开全组」「复制全组链接」「复制全部单工作区链接」（多行裸链接兜底格式）；失效 id（工作区已删）标灰划线可清。
+- 🌐 **国际化**：新增 locale key（`workspaceMenuLabel`/`workspaceMenuCopyLink`/`workspaceMenuOpenWindow`/`workspaceMenuAddToGroup`/`workspaceMenuNewGroup`/`workspaceMenuManageGroups`/`workspaceGroupActions`/`workspaceGroupOpenAll`/`workspaceGroupCopyLink`/`workspaceGroupLeave`/`workspaceGroupLinkCopied`/`workspaceGroupsCopiedAll`/`focusBannerGroupLabel`/`focusGroupUnavailable` 及管理面板 12 键）覆盖 locales.ts 的 zh/en，其余语言走 zh/en 回退链。**旧键处置**：`workspaceCopyLink` / `workspaceOpenStandalone` 随两项平铺废除，由 `workspaceMenuCopyLink` / `workspaceMenuOpenWindow` 取代。
+- 🧪 测试：`tests/workspace-link-menu.spec.tsx` 扩展（注入容器落在 `_viewport` 内、无 viewport 旧宿主退菜单本体、一级项 + 子菜单结构、旧两项不再平铺、hover/点击开合 + flip 令牌、Escape/外点收起、组行/加入到组勾选/新建组/组动作 g: 链接/移出、管理面板建组改名删除 chip 失效标灰与两种复制格式、视口夹取、降级契约回归），共 24 例；新增 `tests/workspace-groups.spec.ts`（parseFocusScope 三态、组解析→交集集合、空组/交集空退全量、坏值兜底与增删改幂等、两种复制格式），共 18 例。
+- **版本**：`SIDEBAR_SERVICE_VERSION` 与 package.json / dsh.plugin.json 一起升到 **0.28.35**。
+
 ### v0.28.34
 
 - 🧹 **工作区切换即释放**（`src/client/feed-release.ts` + 新模块 `src/client/workspace-release.ts` + `src/client/feed-hub.ts`）：切换到不同工作区的会话时（新旧会话各一次 `session.cwd` 读取 + 每会话根缓存，尾部斜杠归一后字符串比对，本地路径与 `ssh://` 根一视同仁），旧工作区的侧边栏资源**立即**全部释放，不等「切走延时释放」的 30s 窗口——同一工作区内的普通会话切换行为完全不变（30s 延迟、sidechat 豁免原样保留；任一端 cwd 读取失败时保守走原延迟流程，绝不误判）。具体释放：① feed 单连接上旧会话**全部频道**的推送订阅（新增 `feedReleaseWorkspace`：会话维度订阅不限频道 + 跨会话的 sidechat 键一并挂起——sidechat 豁免是「切会话」规则，「切工作区」不豁免；挂起键集合由下一次任意 `feedRestoreSession` 脉冲统一恢复）；② 全部 keepMounted 标签体（编辑器、文件树、浏览器、历史、变更……）的**真实组件树立即卸载**，替换为「恢复中」占位（`NativeTabBody` 释放态直接渲染 stub——React 树卸载即释放其推送句柄与页面内存），tab 列表元数据（native records 与 localStorage 持久化）原样保留，切回原工作区原页面原样重开；③ 工作区维度内存缓存清空：文件树 levels 存储的内存镜像（`fsLevelsRelease`，磁盘副本保留、待写盘先落盘）、编辑器 file-op 流数据与游标（`opsStreamReleaseSession`）、悬停 blame 备忘（`forgetSessionBlame`）。

@@ -59,7 +59,8 @@ describe('focusMembership', () => {
   it('collects the focus workspace sessions plus the extra keep set (current session)', () => {
     const membership = focusMembership(items, 'w1', ['s9'])
     expect(membership).not.toBeNull()
-    expect(membership!.workspaceId).toBe('w1')
+    // membership 持有工作区 id 集合（单工作区 = 单元素集；组 scope = 组内 id 集）。
+    expect(membership!.workspaceIds).toEqual(new Set(['w1']))
     expect([...membership!.memberSessionIds].sort()).toEqual(['s1', 's2', 's9'])
   })
 

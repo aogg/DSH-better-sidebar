@@ -284,21 +284,24 @@ export function apply(ctx: Context): void {
     () => attachFeedRelease(sidebarStore),
     'dsh-better-sidebar: feed subscription release timer',
   )
-  // 工作区行「更多」菜单的「独立工作区链接」两项（复制 / 新窗口打开）：
-  // 核心的工作区菜单是硬编码数组（rename/delete），没有工作区级菜单 slot，
-  // 故走 DOM 注入先例（捕获锚按钮 aria-label → portal 菜单挂载时追加
-  // 分隔线+两项 → 复制 ?ws= 链接 + toast / window.open 新窗口打开）。
-  // 核心改模板/行键时静默降级为原菜单（见 workspace-link-menu.ts）。
+  // 工作区行「更多」菜单的「独立工作区」一级项 + 自绘子菜单：核心的工作区
+  // 菜单是硬编码数组（rename/delete），没有工作区级菜单 slot，故走 DOM 注入
+  // 先例——注入落点取菜单的 `_viewport`（与 ao-local 同查询）+ 注入后视口
+  // 夹取；子菜单收「复制链接 / 新窗口打开 / 加入到组 / 所属组动作 / 管理
+  // 独立工作区组」（组数据走侧边栏 prefs 的 pluginSettings.workspaceGroups，
+  // 见 workspace-groups.ts）。核心改模板/行键时静默降级为原菜单（见
+  // workspace-link-menu.ts）。
   ctx.effect(
-    () => registerWorkspaceLinkMenu(ctx),
-    'dsh-better-sidebar: workspace copy-link menu item',
+    () => registerWorkspaceLinkMenu(ctx, sidebarStore),
+    'dsh-better-sidebar: standalone workspace menu',
   )
-  // 单工作区专注模式（URL 带 ?ws=<workspaceId> 时）：把左侧工作区树过滤成
-  // 只剩该工作区（工作区头/会话行/展开按钮三层），树上方注入「退出专注」
-  // 横幅（清参数就地恢复）。未带参数零启动零影响（见 workspace-focus-dom.ts）。
+  // 单工作区/组专注模式（URL 带 ?ws=<id> 或 ?ws=g:<groupId> 时）：把左侧
+  // 工作区树过滤成只剩专注范围（工作区头/会话行/展开按钮三层），树上方注入
+  // 专注横幅（组 scope 显示组名与数量；清参数就地恢复）。未带参数零启动零
+  // 影响（见 workspace-focus-dom.ts）。
   ctx.effect(
     () => registerWorkspaceFocus(ctx),
-    'dsh-better-sidebar: single-workspace focus mode',
+    'dsh-better-sidebar: workspace focus mode',
   )
   // The right sidebar's open-width ratio: applies the configured width once per
   // host expansion (a hidden → tracked transition) and writes the dragged width

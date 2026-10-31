@@ -106,10 +106,10 @@ describe('the LRU sweep', () => {
       vi.advanceTimersByTime(1) // distinct write timestamps
     }
     // The two oldest slots are gone, the rest survive.
-    expect(readGitStatusSnapshot(keys[0])).toBeNull()
-    expect(readGitStatusSnapshot(keys[1])).toBeNull()
+    expect(readGitStatusSnapshot(keys[0]!)).toBeNull()
+    expect(readGitStatusSnapshot(keys[1]!)).toBeNull()
     for (let index = 2; index < keys.length; index += 1) {
-      expect(readGitStatusSnapshot(keys[index])).not.toBeNull()
+      expect(readGitStatusSnapshot(keys[index]!)).not.toBeNull()
     }
   })
 

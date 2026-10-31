@@ -193,13 +193,16 @@ describe('「远程工作区」状态页', () => {
       expect(text).toContain(t('sshLoadFailed')) // 404 的原因也亮出来
       expect(rendered.container.querySelector('[data-dsh-ssh-error]')).toBeNull()
       // 描述符可用性门控：不可用为 false，恢复 2xx 后翻 true。
+      // （available 的三个形参该回调一概不读——状态由网关单例供给；给最小
+      // 形状占位即可，不必铸真实 ctx/state。）
       const descriptor = createSshWorkspaceTabDescriptor()
       expect(descriptor.id).toBe(SSH_WORKSPACE_TAB_TYPE)
       expect(descriptor.order).toBe(42)
-      expect(descriptor.available()).toBe(false)
+      const availableArgs = [{}, { sessionId: 's1' }, {}] as unknown as Parameters<NonNullable<typeof descriptor.available>>
+      expect(descriptor.available?.(...availableArgs)).toBe(false)
       stubFetchOk(overviewPayload())
       await act(async () => { await getSshWorkspaceGateway().refresh() })
-      expect(descriptor.available()).toBe(true)
+      expect(descriptor.available?.(...availableArgs)).toBe(true)
     } finally {
       rendered.unmount()
     }

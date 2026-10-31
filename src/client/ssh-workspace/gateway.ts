@@ -145,7 +145,8 @@ export class UnavailableSshWorkspaceGateway implements SshWorkspaceGateway {
     return () => {}
   }
 
-  async probe(): Promise<SshWorkspaceGatewayState> {
+  async probe(_options?: { force?: boolean }): Promise<SshWorkspaceGatewayState> {
+    // 与真实网关同一签名（force 等选项收下即弃）：调用方无须按实现分叉。
     return this.frozen
   }
 
